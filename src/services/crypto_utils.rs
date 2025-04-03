@@ -1,7 +1,7 @@
 use bip39::{Mnemonic, Language};
 use rand::Rng;
 use sha2::{Sha512, Digest};
-use ed25519_dalek::{SigningKey, VerifyingKey as EdPublicKey};
+use ed25519_dalek::{SigningKey, Signature, VerifyingKey as EdPublicKey, Signer, Verifier};
 ///use x25519_dalek::PublicKey as X25519PublicKey;
 use std::convert::TryInto;
 use rand_core::OsRng;
@@ -80,4 +80,14 @@ pub fn perform_diffie_hellman(
     their_public: &X25519PublicKey,
 ) -> [u8; 32] {
     our_secret.diffie_hellman(their_public).to_bytes()
+}
+
+/// Signs a message with an Ed25519 signing key.
+pub fn sign_ed25519(signing_key: &SigningKey, message: &[u8]) -> Signature {
+    signing_key.sign(message)
+}
+
+/// Verifies an Ed25519 signature.
+pub fn verify_ed25519(public_key: &EdPublicKey, message: &[u8], signature: &Signature) -> bool {
+    public_key.verify(message, signature).is_ok()
 }

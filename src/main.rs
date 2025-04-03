@@ -3,7 +3,9 @@ use voucher_lib::services::crypto_utils::{
     derive_ed25519_keypair,
     generate_ephemeral_x25519_keypair,
     perform_diffie_hellman,
-    ed25519_pub_to_x25519
+    ed25519_pub_to_x25519,
+    sign_ed25519,
+    verify_ed25519
 };
 use bip39::Language;
 use hex;
@@ -47,6 +49,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Verifizieren dass die Secrets übereinstimmen
     assert_eq!(alice_shared, bob_shared);
     println!("\nSuccess! Shared secrets match.");
+
+    // Ed25519 Signatur-Beispiel
+    println!("\nTesting Ed25519 signatures...");
+    let message = b"Voucher system test message";
+    
+    // Nachricht signieren
+    let signature = sign_ed25519(&ed_priv, message);
+    println!("\nMessage: {}", String::from_utf8_lossy(message));
+    println!("Signature: {}", hex::encode(signature.to_bytes()));
+    println!("Public key: {}", hex::encode(ed_pub.to_bytes()));
+    
+    // Signatur verifizieren
+    let is_valid = verify_ed25519(&ed_pub, message, &signature);
+    println!("Signature valid? {}", is_valid);
+    
+    // Test mit manipulierter Nachricht
+    let tampered_message = b"Voucher system test messagE";
+    let is_valid_tampered = verify_ed25519(&ed_pub, tampered_message, &signature);
+    println!("Tampered message valid? {}", is_valid_tampered);
 
     Ok(())
 }
