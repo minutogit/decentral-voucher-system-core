@@ -9,7 +9,8 @@ use voucher_lib::services::crypto_utils::{
     perform_diffie_hellman,
     ed25519_pub_to_x25519,
     sign_ed25519,
-    verify_ed25519
+    verify_ed25519,
+    create_user_id
 };
 use bip39::Language;
 use hex;
@@ -28,6 +29,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ed_pub, ed_priv) = derive_ed25519_keypair(&mnemonic);
     println!("Ed25519 Public Key: {}", hex::encode(ed_pub.to_bytes()));
     println!("Ed25519 Private Key: {}", hex::encode(ed_priv.to_bytes()));
+
+    // User ID generieren und ausgeben
+    println!("\nGenerating User IDs...");
+
+    // 1. Ohne Prefix
+    let user_id_no_prefix = create_user_id(&ed_pub, None).unwrap();
+    println!("User ID (no prefix):   {}", user_id_no_prefix);
+
+    // 2. Mit Prefix "ID"
+    let prefix = "ID";
+    let user_id_with_prefix = create_user_id(&ed_pub, Some(prefix)).unwrap();
+    println!("User ID (prefix '{}'): {}", prefix, user_id_with_prefix);
+
 
     // Ed25519 zu X25519 konvertieren
     println!("\nConverting to X25519...");
