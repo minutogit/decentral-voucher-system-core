@@ -10,7 +10,8 @@ use voucher_lib::services::crypto_utils::{
     ed25519_pub_to_x25519,
     sign_ed25519,
     verify_ed25519,
-    create_user_id
+    create_user_id,
+    validate_user_id
 };
 use bip39::Language;
 use hex;
@@ -42,6 +43,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let user_id_with_prefix = create_user_id(&ed_pub, Some(prefix)).unwrap();
     println!("User ID (prefix '{}'): {}", prefix, user_id_with_prefix);
 
+    // Prüfe die Checksumme der generierten user_id
+    let is_valid = validate_user_id(&user_id_with_prefix);
+    println!("Checksum validation for user_id: {}", is_valid);
 
     // Ed25519 zu X25519 konvertieren
     println!("\nConverting to X25519...");

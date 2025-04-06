@@ -172,4 +172,46 @@ pub fn create_user_id(public_key: &EdPublicKey, user_prefix: Option<&str>) -> Re
 }
 
 
+pub fn validate_user_id(user_id: &str) -> bool {
+    // Mindestlänge: 1 (Präfixlänge) + 1 (Base58 Key) + 3 (Checksum) + 1 (Suffix) = 6
+    if user_id.len() < 6 {
+        return false;
+    }
 
+    // Letztes Zeichen ist die Präfixlänge
+    let (rest, prefix_len_char) = user_id.split_at(user_id.len() - 1);
+    let prefix_len = match prefix_len_char.chars().next() {
+        Some('0') => 0,
+        Some('1') => 1,
+        Some('2') => 2,
+        _ => return false,
+    };
+
+    // Check total length consistency
+    if rest.len() != user_id.len() - 1 {
+        return false;
+    }
+
+    // Zerlege in Präfix + Base58 Key + Checksum
+    let (prefix, rest_with_checksum) = rest.split_at(prefix_len);
+    
+    // Checksumme sind die letzten 3 Zeichen
+    if rest_with_checksum.len() < 3 {
+        return false;
+    }
+    let (base58_key, checksum_stored) = rest_with_checksum.split_at(rest_with_checksum.len() - 3);
+
+    // Checksumme neu berechnen
+    let data_to_hash = format!("{}{}", prefix, base58_key);
+    let mut hasher = Sha256::new();
+    hasher.update(data_to_hash.as_bytes());
+    let hash = bs58::encode(hasher.finalize()).into_string();
+
+    let checksum_actual = if hash.len() >= 3 {
+        &hash[hash.len() - 3..]
+    } else {
+        &hash
+    };
+
+    checksum_stored == checksum_actual
+}
