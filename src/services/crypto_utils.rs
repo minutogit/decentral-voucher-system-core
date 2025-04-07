@@ -1,4 +1,3 @@
-use bip39::{Mnemonic, Language};
 use rand::Rng;
 use sha2::{Sha256, Digest};
 use ed25519_dalek::{SigningKey, Signature, VerifyingKey as EdPublicKey, Signer, Verifier};
@@ -7,6 +6,10 @@ use rand_core::OsRng;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 use std::fmt; // Für das Error-Handling
 use ed25519_dalek::SignatureError;
+use bip39::{Mnemonic, Language};
+use hmac::{Hmac, Mac};
+use pbkdf2::pbkdf2;
+use sha2::Sha512;
 
 /// Generates a mnemonic phrase of a specified word count and language.
 ///
@@ -36,22 +39,40 @@ pub fn generate_mnemonic(word_count: usize, language: Language) -> Result<String
     Ok(mnemonic.to_string())
 }
 
-// Für Ed25519 (Signatur)
-pub fn derive_ed25519_keypair(mnemonic: &str) -> (EdPublicKey, SigningKey) {
-    // For simplicity, we'll just generate a key from the first 32 bytes of the mnemonic
-    let mut key_bytes = [0u8; 32];
+
+pub fn derive_ed25519_keypair(
+    mnemonic_phrase: &str,
+    passphrase: Option<&str>,
+) -> (EdPublicKey, SigningKey) {
+    // Mnemonic validieren
+    let mnemonic = Mnemonic::parse_in_normalized(Language::English, mnemonic_phrase)
+        .expect("Invalid BIP-39 mnemonic phrase");
     
-    // Use a simple deterministic algorithm based on the mnemonic
-    for (i, c) in mnemonic.bytes().enumerate() {
-        if i < 32 {
-            key_bytes[i] = c;
-        }
-    }
+    let passphrase = passphrase.unwrap_or("");
+    let salt = format!("mnemonic{}", passphrase);
+    let mut seed = [0u8; 64];
+    
+    pbkdf2::<Hmac<Sha512>>(
+        &mnemonic.to_entropy(),
+        salt.as_bytes(),
+        2048,
+        &mut seed
+    ).expect("PBKDF2 failed");
+    
+    // 2. Schlüsselableitung wie zuvor
+    let mut hmac = Hmac::<Sha512>::new_from_slice(b"ed25519-seed")
+        .expect("HMAC key error");
+    hmac.update(&seed);
+    let derived_seed = hmac.finalize().into_bytes();
+    
+    let mut key_bytes = [0u8; 32];
+    key_bytes.copy_from_slice(&derived_seed[..32]);
     
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let public_key = signing_key.verifying_key();
     (public_key, signing_key)
 }
+
 
 ///wird benötigt öffentlichen schlüssel des empfängers in Diffie-Hellman format zu bringen.
 /// Converts an Ed25519 public key to an X25519 public key
