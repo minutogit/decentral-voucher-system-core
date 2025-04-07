@@ -11,7 +11,8 @@ use voucher_lib::services::crypto_utils::{
     sign_ed25519,
     verify_ed25519,
     create_user_id,
-    validate_user_id
+    validate_user_id,
+    get_pubkey_from_user_id
 };
 use bip39::Language;
 use hex;
@@ -90,6 +91,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tampered_message = b"Voucher system test messagE";
     let is_valid_tampered = verify_ed25519(&ed_pub, tampered_message, &signature);
     println!("Tampered message valid? {}", is_valid_tampered);
+
+    // Signaturprüfung mit wiederhergestelltem Schlüssel von der user_id
+    println!("\nTesting signature verification with key recovered from User ID...");
+    println!("Using User ID: {}", user_id_with_prefix);
+
+    // Konvertiere User ID zurück in Public Key
+    let recovered_ed_pub = get_pubkey_from_user_id(&user_id_with_prefix)?;
+
+    println!("Recovered public key: {}", hex::encode(recovered_ed_pub.to_bytes()));
+
+    // Vergleiche wiederhergestellten Schlüssel mit Original (Bytes)
+    assert_eq!(ed_pub.to_bytes(), recovered_ed_pub.to_bytes(), "Original and recovered keys DO NOT match!");
+    println!("Recovered key matches original key.");
+
+    // Signatur mit dem *wiederhergestellten* Public Key verifizieren
+    let is_valid_recovered = verify_ed25519(&recovered_ed_pub, message, &signature);
+    println!("Signature valid (using RECOVERED key)? {}", is_valid_recovered);
+    assert!(is_valid_recovered);
 
     Ok(())
 }

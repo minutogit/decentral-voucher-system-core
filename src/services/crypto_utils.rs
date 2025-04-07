@@ -6,7 +6,7 @@ use std::convert::TryInto;
 use rand_core::OsRng;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 use std::fmt; // Für das Error-Handling
-
+use ed25519_dalek::SignatureError;
 
 /// Generates a mnemonic phrase of a specified word count and language.
 ///
@@ -214,4 +214,85 @@ pub fn validate_user_id(user_id: &str) -> bool {
     };
 
     checksum_stored == checksum_actual
+}
+
+// Define custom error type
+#[derive(Debug)]
+pub enum GetPubkeyError {
+    ValidationFailed,
+    DecodingFailed(bs58::decode::Error),
+    InvalidLength(usize),
+    ConversionFailed(SignatureError),
+}
+
+impl std::fmt::Display for GetPubkeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GetPubkeyError::ValidationFailed => 
+                write!(f, "Invalid user ID format or checksum"),
+            GetPubkeyError::DecodingFailed(e) => 
+                write!(f, "Base58 decoding failed: {}", e),
+            GetPubkeyError::InvalidLength(len) => 
+                write!(f, "Decoded public key has invalid length (expected 32, got {})", len),
+            GetPubkeyError::ConversionFailed(e) => 
+                write!(f, "Public key conversion failed: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for GetPubkeyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            GetPubkeyError::DecodingFailed(e) => Some(e),
+            GetPubkeyError::ConversionFailed(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+/// Extracts the Ed25519 public key from a user ID string.
+///
+/// Uses `validate_user_id` for format and checksum checks.
+///
+/// # Arguments
+///
+/// * `user_id` - The user ID string created by `create_user_id`.
+///
+/// # Returns
+///
+/// A `Result` containing the `EdPublicKey` or a `GetPubkeyError`.
+pub fn get_pubkey_from_user_id(user_id: &str) -> Result<EdPublicKey, GetPubkeyError> {
+    // 1. Validate format and checksum using the existing function
+    if !validate_user_id(user_id) {
+        return Err(GetPubkeyError::ValidationFailed);
+    }
+
+    // 2. Extract components (we know the structure is valid now)
+    let prefix_len_char = user_id.chars().last().unwrap(); // Safe due to validate_user_id
+    let prefix_len = match prefix_len_char {
+        '0' => 0,
+        '1' => 1,
+        '2' => 2,
+        _ => unreachable!(), // Should be caught by validate_user_id
+    };
+
+    let content_len = user_id.len() - 1;
+    let checksum_len = 3;
+    let checksum_start_index = content_len.saturating_sub(checksum_len);
+    let base58_key = &user_id[prefix_len..checksum_start_index];
+
+    // 3. Decode Base58 Public Key
+    let key_bytes_vec = bs58::decode(base58_key)
+        .into_vec()
+        .map_err(GetPubkeyError::DecodingFailed)?;
+
+    // 4. Check Decoded Key Length & Convert to Array
+    let actual_len = key_bytes_vec.len();
+    let key_bytes_array: [u8; 32] = key_bytes_vec
+        .try_into()
+        .map_err(|_| GetPubkeyError::InvalidLength(actual_len))?;
+
+    // 5. Create EdPublicKey from bytes
+    EdPublicKey::try_from(&key_bytes_array as &[u8])
+        .map_err(GetPubkeyError::ConversionFailed)
 }
