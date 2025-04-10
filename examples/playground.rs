@@ -12,7 +12,8 @@ use voucher_lib::services::crypto_utils::{
     verify_ed25519,
     create_user_id,
     validate_user_id,
-    get_pubkey_from_user_id
+    get_pubkey_from_user_id,
+    get_hash
 };
 use bip39::Language;
 use hex;
@@ -21,6 +22,10 @@ use hex;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting program...");
     
+    let input = "text for hashtest";
+    let hash = get_hash(input);
+    println!("Base58 hash: {}", hash);
+
     // Mnemonic generieren
     println!("\nGenerating mnemonic...");
     let mnemonic = generate_mnemonic(24, Language::English)?;

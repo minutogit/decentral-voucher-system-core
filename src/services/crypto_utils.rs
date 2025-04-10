@@ -56,6 +56,23 @@ pub fn generate_mnemonic(word_count: usize, language: Language) -> Result<String
     Ok(mnemonic.to_string())
 }
 
+/// Computes a SHA3-256 hash of the input and returns it as a base58-encoded string.
+///
+/// # Arguments
+///
+/// * `input` - The data to hash. Accepts anything that can be referenced as a byte slice.
+///
+/// # Returns
+///
+/// A base58-encoded SHA3-256 hash string.
+pub fn get_hash(input: impl AsRef<[u8]>) -> String {
+    use sha3::Digest;
+    let mut hasher = sha3::Sha3_256::new();
+    hasher.update(input.as_ref());
+    let hash_bytes = hasher.finalize();
+    bs58::encode(hash_bytes).into_string()
+}
+
 
 /// Derives an Ed25519 keypair from a mnemonic phrase and an optional passphrase.
 ///
