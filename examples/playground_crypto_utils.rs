@@ -1,5 +1,5 @@
-//playground.rs
-// run with: cargo run --example playground
+//playground_crypto_utils.rs
+// run with: cargo run --example playground_crypto_utils
 // more playgrounds 
 
 use voucher_lib::services::crypto_utils::{

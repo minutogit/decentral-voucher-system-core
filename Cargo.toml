@@ -19,6 +19,7 @@ bs58 = "0.5"
 hmac = "0.12"
 pbkdf2 = "0.12"
 hkdf = "0.12"
+chrono = "0.4"
 
 [lib]
 name = "voucher_lib"
@@ -27,7 +28,12 @@ path = "src/lib.rs"
 [dev-dependencies]
 rand = "0.8"
 voucher_lib = { version = "0.1.0", path = "." }
+regex = "1" 
 
 [[example]]
-name = "playground"
-path = "examples/playground.rs"
+name = "playground_crypto_utils"
+path = "examples/playground_crypto_utils.rs"
+
+[[example]]
+name = "playground_utils"
+path = "examples/playground_utils.rs"

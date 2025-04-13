@@ -1,3 +1,6 @@
+// cargo test --test test_crypto_utils
+
+
 #[cfg(test)]
 mod tests {
     use voucher_lib::services::crypto_utils::{
