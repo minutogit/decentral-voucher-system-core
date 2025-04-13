@@ -18,7 +18,7 @@ Examples are typically located in the `examples/` directory of a Rust project.
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/minutogit/voucher_lib.git
+    git clone https://github.com/minutogit/decentral-voucher-system-core.git
     cd voucher_lib
     ```
 2.  **Run an example using Cargo:**
