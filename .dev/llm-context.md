@@ -88,7 +88,19 @@ Ein Gutschein ist im Wesentlichen eine Textdatei (repräsentiert als JSON), die 
   },
   "guarantor_signatures": [ // Ein Array von Signaturen der Bürgen.
     {
-      "guarantor_id": "STRING",         // Eindeutige ID des Bürgen.
+      "guarantor_id": "STRING",         // Eindeutige ID des Bürgen (aus Public Key).
+      "first_name": "STRING",
+      "last_name": "STRING",
+      "organization": "STRING",
+      "community": "STRING",
+      "address": {
+        // Vollständiges Adressobjekt, optional
+      },
+      "gender": "STRING", // ISO 5218
+      "email": "STRING",
+      "phone": "STRING",
+      "coordinates": "STRING",
+      "url": "STRING",
       "signature": "STRING",            // Die digitale Signatur des Bürgen.
       "signature_time": "YYYY-MM-DDTHH:MM:SS.SSSSSSZ" // Zeitpunkt der Bürgen-Signatur.
     }
@@ -119,7 +131,7 @@ Ein Gutschein ist im Wesentlichen eine Textdatei (repräsentiert als JSON), die 
 
 ### Transaktionskette
 Jede Transaktion wird an die Gutschein-Datei angehängt und enthält:
-* `previous_hash`: Verknüpfung zur vorhergehenden Transaktion (oder zum `voucher_id`-Hash bei der ersten Transaktion).
+* `previous_hash`: Verknüpfung zur vorhergehenden Transaktion. (damit eine Signierte Transaktionskette entsteht)
 * `transaction_id`: Hash der gesamten Transaktionsdaten.
 * `recipient_id`: Öffentlicher Schlüssel des Empfängers.
 * `sender_id`: Öffentlicher Schlüssel des Senders.
@@ -141,8 +153,31 @@ Jede Transaktion wird an die Gutschein-Datei angehängt und enthält:
 * **Keine Layer 2 Implementierung:** Die Logik für die "Transaction Verification Layer" (Server-basiertes Double-Spending-Matching) und die "User Trust Verification Layer" (Reputationsmanagement) wird in dieser Core-Bibliothek *nicht* implementiert. Die Datenstrukturen für Transaktionsketten sollen jedoch eine spätere Anbindung an solche Systeme ermöglichen.
 
 ## 6. Aktueller Projektstrukturbaum
-
-├── Cargo.lock├── Cargo.toml├── examples│   ├── playground_crypto_utils.rs│   └── playground_utils.rs├── output.txt├── README.md├── src│   ├── examples│   ├── lib.rs│   ├── main.rs│   ├── models│   ├── services│   │   ├── crypto_utils.rs│   │   ├── mod.rs│   │   └── utils.rs│   └── utilities├── tests│   ├── test_crypto_utils.rs│   └── test_utils.rs└── todo.txt
+```
+├── Cargo.lock
+├── Cargo.toml
+├── examples
+│   ├── playground_crypto_utils.rs
+│   ├── playground_utils.rs
+│   └── playground_voucher_lifecycle.rs
+├── src
+│   ├── lib.rs
+│   ├── main.rs
+│   ├── models
+│   │   ├── mod.rs
+│   │   ├── voucher.rs
+│   │   └── voucher_standard_definition.rs
+│   └── services
+│       ├── crypto_utils.rs
+│       ├── mod.rs
+│       ├── utils.rs
+│       ├── voucher_manager.rs
+│       └── voucher_validation.rs
+└── tests
+    ├── test_crypto_utils.rs
+    ├── test_utils.rs
+    └── test_voucher_lifecycle.rs
+```
 ## 7. Implementierte Kernfunktionen
 
 Basierend auf den bereitgestellten Dateien (`utils.rs`, `crypto_utils.rs`):
@@ -166,6 +201,8 @@ Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierun
     * Berechnet einen SHA3-256-Hash der Eingabe und gibt ihn als Base58-kodierten String zurück.
 * `pub fn derive_ed25519_keypair(mnemonic_phrase: &str, passphrase: Option<&str>) -> (EdPublicKey, SigningKey)`
     * Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase und einem optionalen Passphrase ab.
+* `pub fn generate_ed25519_keypair_for_tests(seed: Option<&str>) -> (EdPublicKey, SigningKey)`
+    * **Nur für Tests:** Erzeugt ein zufälliges oder (mit Seed) deterministisches Ed25519-Schlüsselpaar.
 * `pub fn ed25519_pub_to_x25519(ed_pub: &EdPublicKey) -> X25519PublicKey`
     * Konvertiert einen Ed25519 Public Key in einen X25519 Public Key für den Diffie-Hellman-Schlüsselaustausch.
 * `pub fn generate_ephemeral_x25519_keypair() -> (X25519PublicKey, EphemeralSecret)`
@@ -187,5 +224,23 @@ Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierun
 * `pub fn get_pubkey_from_user_id(user_id: &str) -> Result<EdPublicKey, GetPubkeyError>`
     * Extrahiert den Ed25519 Public Key aus einer User ID-Zeichenkette.
 
+### `services::voucher_manager` Modul
+Dieses Modul stellt die Kernlogik für die Erstellung und Verarbeitung von Gutscheinen bereit.
+
+* `pub fn create_voucher(data: NewVoucherData, creator_signing_key: &SigningKey) -> Result<Voucher, VoucherManagerError>`
+    * Erstellt ein neues, signiertes `Voucher`-Struct basierend auf den übergebenen `NewVoucherData`.
+* `pub fn to_json(voucher: &Voucher) -> Result<String, VoucherManagerError>`
+    * Serialisiert ein `Voucher`-Struct in einen JSON-String.
+* `pub fn from_json(json_str: &str) -> Result<Voucher, VoucherManagerError>`
+    * Deserialisiert einen JSON-String in ein `Voucher`-Struct.
+* `pub fn load_standard_definition(json_str: &str) -> Result<VoucherStandardDefinition, VoucherManagerError>`
+    * Deserialisiert einen JSON-String in ein `VoucherStandardDefinition`-Struct, um Regelwerke zu laden.
+
+### `services::voucher_validation` Modul
+Dieses Modul enthält die Logik zur Validierung eines `Voucher`-Objekts gegen die Regeln seines Standards.
+
+* `pub fn validate_voucher_against_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError>`
+    * Führt eine umfassende Prüfung des Gutscheins durch, inklusive: Überprüfung erforderlicher Felder, Konsistenz mit dem Standard (z.B. Nennwert-Einheit), und die kryptographische Verifizierung aller Signaturen (Ersteller, Transaktionen, Bürgen).
+
 ### Beispiel-Playgrounds
-Die Dateien `playground_utils.rs` und `playground_crypto_utils.rs` sind Beispiele, die die Nutzung der oben genannten Funktionen demonstrieren. Ihre Funktionen selbst sind nicht Teil der öffentlichen API der `voucher_core`-Bibliothek.
+Die Dateien `playground_utils.rs`, `playground_crypto_utils.rs` und `playground_voucher_lifecycle.rs` sind Beispiele, die die Nutzung der Kernfunktionen demonstrieren. Ihre Funktionen selbst sind nicht Teil der öffentlichen API der `voucher_lib`-Bibliothek.
