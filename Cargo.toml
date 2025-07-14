@@ -39,3 +39,7 @@ path = "examples/playground_crypto_utils.rs"
 [[example]]
 name = "playground_utils"
 path = "examples/playground_utils.rs"
+
+[[example]]
+name = "playground_voucher_lifecycle"
+path = "examples/playground_voucher_lifecycle.rs"
