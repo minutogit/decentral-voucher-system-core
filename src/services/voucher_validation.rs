@@ -130,8 +130,12 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
     // 2. Rekonstruiere die Daten, die signiert wurden.
     // Dafür erstellen wir eine Kopie des Gutscheins und leeren das Signaturfeld.
     let mut voucher_to_verify = voucher.clone();
+    // Die Signatur des Erstellers deckt nur den initialen Zustand ab.
+    // Später hinzugefügte Signaturen (Bürgen, etc.) müssen für die Prüfung entfernt werden.
     let signature_b58 = voucher_to_verify.creator.signature.clone();
     voucher_to_verify.creator.signature = "".to_string();
+    voucher_to_verify.guarantor_signatures.clear();
+    voucher_to_verify.additional_signatures.clear();
 
     let voucher_json = serde_json::to_string(&voucher_to_verify)
         .map_err(ValidationError::Serialization)?;

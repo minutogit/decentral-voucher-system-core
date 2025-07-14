@@ -142,16 +142,21 @@ fn test_full_creation_and_validation_cycle() {
     let mut voucher = create_voucher(voucher_data, &signing_key).unwrap();
     assert!(!voucher.voucher_id.is_empty());
     assert!(!voucher.creator.signature.is_empty());
-
+ 
     // 3. Simulation des Bürgenprozesses
-    // Ein neu erstellter Minuto-Gutschein ist noch nicht gültig, da die Bürgen fehlen.
-    // Wir fügen hier zwei Dummy-Bürgen hinzu, um den Testfall zu erfüllen.
-    // HINWEIS: Die Signaturen hier sind Dummys. Die kryptographische Prüfung dieser
-    // Signaturen ist implementiert, aber für diesen Testfall deaktiviert, indem wir
-    // einen immer erfolgreichen Verifizierer verwenden müssten. Hier konzentrieren wir uns
-    // auf die Anforderungsprüfung (Anzahl, Geschlecht).
+    // Wir erzeugen echte Schlüsselpaare und Signaturen für zwei Bürgen.
+    // Annahme: Die Bürgen signieren den Hash der `voucher_id`.
+    let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g1"));
+    let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g2"));
+    let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
+    let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
+ 
+    let message_to_sign = crypto_utils::get_hash(&voucher.voucher_id);
+    let g1_signature = crypto_utils::sign_ed25519(&g1_priv, message_to_sign.as_bytes());
+    let g2_signature = crypto_utils::sign_ed25519(&g2_priv, message_to_sign.as_bytes());
+ 
     voucher.guarantor_signatures.push(GuarantorSignature {
-        guarantor_id: "IDts4sdH5qa3wWFd3aGkXp3c4um2veFrv2dJzJ9g8s3h93f4".to_string(),
+        guarantor_id: g1_id,
         first_name: "Hans".to_string(),
         last_name: "Guarantor".to_string(),
         organization: None,
@@ -162,11 +167,11 @@ fn test_full_creation_and_validation_cycle() {
         phone: None,
         coordinates: None,
         url: None,
-        signature: "dummy_signature_hans".to_string(),
+        signature: bs58::encode(g1_signature.to_bytes()).into_string(),
         signature_time: "2025-07-15T10:00:00Z".to_string(),
     });
     voucher.guarantor_signatures.push(GuarantorSignature {
-        guarantor_id: "IDtsJ9g8s3h93f4sdH5qa3wWFd3aGkXp3c4um2veFrv2dJz".to_string(),
+        guarantor_id: g2_id,
         first_name: "Gabi".to_string(),
         last_name: "Guarantor".to_string(),
         organization: None,
@@ -177,10 +182,10 @@ fn test_full_creation_and_validation_cycle() {
         phone: None,
         coordinates: None,
         url: None,
-        signature: "dummy_signature_gabi".to_string(),
+        signature: bs58::encode(g2_signature.to_bytes()).into_string(),
         signature_time: "2025-07-15T10:01:00Z".to_string(),
     });
-
+ 
     // 4. Validierung (Positivfall mit Bürgen)
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
     assert!(
