@@ -6,9 +6,7 @@ use voucher_lib::{
     validate_voucher_against_standard, Address, Collateral, Creator, NewVoucherData,
     NominalValue, ValidationError, Voucher, VoucherStandard, VoucherStandardDefinition,
 };
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use ed25519_dalek::SigningKey;
 
 // --- HELPER-FUNKTIONEN UND TESTDATEN ---
 
@@ -69,13 +67,9 @@ const SILVER_STANDARD_JSON: &str = r#"{
 
 /// Erstellt einen neuen Signierschlüssel und eine Creator-Struktur für Tests.
 fn setup_creator() -> (SigningKey, Creator) {
-    let mut csprng = OsRng {};
-    // Generiere 32 zufällige Bytes und erstelle den Schlüssel daraus.
-    // Dies ist eine robuste Alternative zu `SigningKey::generate`.
-    let mut key_bytes: [u8; 32] = [0; 32];
-    csprng.fill_bytes(&mut key_bytes);
-    let signing_key = SigningKey::from_bytes(&key_bytes);
-    let public_key: VerifyingKey = (&signing_key).into();
+    // Erzeuge ein zufälliges Schlüsselpaar für den Test. Für deterministische Tests
+    // könnte hier ein Seed übergeben werden, z.B. Some("mein_test_seed").
+    let (public_key, signing_key) = crypto_utils::generate_ed25519_keypair_for_tests(None);
     let user_id = crypto_utils::create_user_id(&public_key, Some("ts")).unwrap();
 
     let creator = Creator {

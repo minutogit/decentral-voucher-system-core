@@ -1,5 +1,6 @@
 // Zufallszahlengenerierung
 use rand::Rng;
+use rand::RngCore;
 use rand_core::OsRng;
 
 // Kryptografische Hashes (SHA-2)
@@ -122,6 +123,47 @@ pub fn derive_ed25519_keypair(
     let signing_key = SigningKey::from_bytes(&stretched_key);
     let public_key = signing_key.verifying_key();
     (public_key, signing_key)
+}
+
+/// Erzeugt ein zufälliges oder deterministisches Ed25519-Schlüsselpaar für Testzwecke.
+///
+/// # Warnung
+/// **Diese Funktion ist NICHT für den produktiven Einsatz geeignet!**
+/// Der deterministische Pfad verwendet eine sehr geringe Anzahl von PBKDF2-Iterationen
+/// und einen statischen Salt, was ihn kryptographisch unsicher macht. Er dient
+/// ausschließlich dazu, in Tests reproduzierbare Schlüsselpaare zu erzeugen.
+///
+/// # Arguments
+/// * `seed` - Ein optionaler String.
+///   - `None`: Erzeugt ein vollständig zufälliges, neues Schlüsselpaar.
+///   - `Some(seed_str)`: Erzeugt ein deterministisches Schlüsselpaar aus dem Seed-String.
+///
+/// # Returns
+/// Ein Tupel, das den öffentlichen und den privaten Ed25519-Schlüssel enthält.
+pub fn generate_ed25519_keypair_for_tests(seed: Option<&str>) -> (EdPublicKey, SigningKey) {
+    if let Some(seed_str) = seed {
+        // Deterministischer, aber UNSICHERER Pfad für reproduzierbare Tests
+        let mut key_bytes = [0u8; 32];
+        pbkdf2::<Hmac<Sha512>>(
+            seed_str.as_bytes(),
+            b"insecure-test-salt",
+            100, // Sehr wenige Iterationen, nur für schnelle Tests!
+            &mut key_bytes,
+        )
+        .expect("PBKDF2 for testing failed");
+
+        let signing_key = SigningKey::from_bytes(&key_bytes);
+        let public_key = signing_key.verifying_key();
+        (public_key, signing_key)
+    } else {
+        // Sicherer, zufälliger Pfad für allgemeine Tests
+        let mut csprng = OsRng {};
+        let mut key_bytes: [u8; 32] = [0; 32];
+        csprng.fill_bytes(&mut key_bytes);
+        let signing_key = SigningKey::from_bytes(&key_bytes);
+        let public_key = signing_key.verifying_key();
+        (public_key, signing_key)
+    }
 }
 
 
