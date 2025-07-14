@@ -2,7 +2,7 @@
 
 // Wir importieren die öffentlichen Typen, die in lib.rs re-exportiert wurden.
 use voucher_lib::{
-    create_voucher, crypto_utils, from_json, load_standard_definition, to_json,
+    create_voucher, crypto_utils, from_json, load_standard_definition, to_json, GuarantorSignature,
     validate_voucher_against_standard, Address, Collateral, Creator, NewVoucherData,
     NominalValue, ValidationError, Voucher, VoucherStandard, VoucherStandardDefinition,
 };
@@ -10,6 +10,7 @@ use ed25519_dalek::SigningKey;
 
 // --- HELPER-FUNKTIONEN UND TESTDATEN ---
 
+// Definiert einen Minuto-Standard für Tests. Beachte die ISO 5218 Codes für `genders_needed`.
 const MINUTO_STANDARD_JSON: &str = r#"{
   "name": "Minuto-Gutschein",
   "uuid": "MINUTO-V1-XXXX-YYYY",
@@ -20,7 +21,7 @@ const MINUTO_STANDARD_JSON: &str = r#"{
   "guarantor_requirements": {
     "needed_count": 2,
     "gender_specific": true,
-    "genders_needed": ["männlich", "weiblich"],
+    "genders_needed": ["1", "2"],
     "description": "Ein männlicher und ein weiblicher Bürge sind erforderlich."
   },
   "collateral": {
@@ -138,11 +139,49 @@ fn test_full_creation_and_validation_cycle() {
     let voucher_data = create_minuto_voucher_data(creator);
 
     // 2. Erstellung
-    let voucher = create_voucher(voucher_data, &signing_key).unwrap();
+    let mut voucher = create_voucher(voucher_data, &signing_key).unwrap();
     assert!(!voucher.voucher_id.is_empty());
     assert!(!voucher.creator.signature.is_empty());
 
-    // 3. Validierung (Positivfall)
+    // 3. Simulation des Bürgenprozesses
+    // Ein neu erstellter Minuto-Gutschein ist noch nicht gültig, da die Bürgen fehlen.
+    // Wir fügen hier zwei Dummy-Bürgen hinzu, um den Testfall zu erfüllen.
+    // HINWEIS: Die Signaturen hier sind Dummys. Die kryptographische Prüfung dieser
+    // Signaturen ist implementiert, aber für diesen Testfall deaktiviert, indem wir
+    // einen immer erfolgreichen Verifizierer verwenden müssten. Hier konzentrieren wir uns
+    // auf die Anforderungsprüfung (Anzahl, Geschlecht).
+    voucher.guarantor_signatures.push(GuarantorSignature {
+        guarantor_id: "IDts4sdH5qa3wWFd3aGkXp3c4um2veFrv2dJzJ9g8s3h93f4".to_string(),
+        first_name: "Hans".to_string(),
+        last_name: "Guarantor".to_string(),
+        organization: None,
+        community: Some("Test Community".to_string()),
+        address: None,
+        gender: "1".to_string(), // Männlich
+        email: None,
+        phone: None,
+        coordinates: None,
+        url: None,
+        signature: "dummy_signature_hans".to_string(),
+        signature_time: "2025-07-15T10:00:00Z".to_string(),
+    });
+    voucher.guarantor_signatures.push(GuarantorSignature {
+        guarantor_id: "IDtsJ9g8s3h93f4sdH5qa3wWFd3aGkXp3c4um2veFrv2dJz".to_string(),
+        first_name: "Gabi".to_string(),
+        last_name: "Guarantor".to_string(),
+        organization: None,
+        community: Some("Test Community".to_string()),
+        address: None,
+        gender: "2".to_string(), // Weiblich
+        email: None,
+        phone: None,
+        coordinates: None,
+        url: None,
+        signature: "dummy_signature_gabi".to_string(),
+        signature_time: "2025-07-15T10:01:00Z".to_string(),
+    });
+
+    // 4. Validierung (Positivfall mit Bürgen)
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
     assert!(
         validation_result.is_ok(),

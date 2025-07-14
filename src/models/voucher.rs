@@ -5,7 +5,7 @@
 //! und verwenden `serde` für die Serialisierung und Deserialisierung.
 
 use serde::{Serialize, Deserialize};
-
+use crate::models::voucher::Address;
 /// Definiert den Standard, zu dem ein Gutschein gehört.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct VoucherStandard {
@@ -108,6 +108,33 @@ pub struct Creator {
 pub struct GuarantorSignature {
     /// Eindeutige ID des Bürgen.
     pub guarantor_id: String,
+    /// Vorname des Bürgen.
+    pub first_name: String,
+    /// Nachname des Bürgen.
+    pub last_name: String,
+    /// Organisation des Bürgen (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+    /// Community des Bürgen (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community: Option<String>,
+    /// Adresse des Bürgen (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<Address>,
+    /// Geschlecht des Bürgen nach ISO 5218.
+    pub gender: String,
+    /// E-Mail des Bürgen (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// Telefonnummer des Bürgen (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+    /// Geografische Koordinaten des Bürgen (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinates: Option<String>,
+    /// URL des Bürgen (optional, von mir hinzugefügt für Konsistenz).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     /// Die digitale Signatur des Bürgen.
     pub signature: String,
     /// Zeitpunkt der Bürgen-Signatur im ISO 8601-Format.

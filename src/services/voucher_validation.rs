@@ -27,6 +27,8 @@ pub enum ValidationError {
     InvalidCreatorId(GetPubkeyError),
     /// Die Bürgenanforderungen des Standards werden nicht erfüllt.
     GuarantorRequirementsNotMet(String),
+    /// Eine Signatur eines Bürgen ist ungültig.
+    InvalidGuarantorSignature(String),
     /// Eine Transaktionssignatur ist ungültig.
     InvalidTransactionSignature(String),
     /// Die User ID eines Senders in einer Transaktion ist ungültig.
@@ -50,6 +52,7 @@ impl fmt::Display for ValidationError {
             Self::InvalidCreatorSignature => write!(f, "Creator signature is invalid"),
             Self::InvalidCreatorId(e) => write!(f, "Invalid creator ID: {}", e),
             Self::GuarantorRequirementsNotMet(reason) => write!(f, "Guarantor requirements not met: {}", reason),
+            Self::InvalidGuarantorSignature(id) => write!(f, "Invalid signature for guarantor {}", id),
             Self::InvalidTransactionSignature(t_id) => write!(f, "Invalid signature for transaction {}", t_id),
             Self::InvalidTransactionSenderId(id) => write!(f, "Invalid sender ID in transaction: {}", id),
             Self::Serialization(e) => write!(f, "JSON serialization error during validation: {}", e),
@@ -153,17 +156,58 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
 /// Verifiziert die Signaturen der Bürgen gegen die Anforderungen des Standards.
 fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
     let required_count = standard.guarantor_requirements.needed_count as usize;
-    if voucher.guarantor_signatures.len() < required_count {
+    let actual_count = voucher.guarantor_signatures.len();
+
+    // 1. Prüfe die Anzahl der Bürgen
+    if actual_count < required_count {
         return Err(ValidationError::GuarantorRequirementsNotMet(format!(
             "Expected at least {} guarantors, but found {}",
             required_count,
-            voucher.guarantor_signatures.len()
+            actual_count
         )));
     }
 
-    // TODO: Implementiere die Verifizierung der einzelnen Bürgen-Signaturen.
-    // TODO: Implementiere die Überprüfung der geschlechtsspezifischen Anforderungen,
-    // sobald die notwendigen Daten im Gutscheinmodell verfügbar sind.
+    // 2. Prüfe jede Bürgen-Signatur kryptographisch
+    // Annahme: Der Bürge signiert den Hash der `voucher_id`, um die Existenz und
+    // den initialen Zustand des Gutscheins zu bestätigen.
+    let message_to_verify = get_hash(&voucher.voucher_id);
+    for guarantor_signature in &voucher.guarantor_signatures {
+        let public_key = get_pubkey_from_user_id(&guarantor_signature.guarantor_id)
+            .map_err(|_| ValidationError::InvalidGuarantorSignature(guarantor_signature.guarantor_id.clone()))?;
+
+        let signature_bytes = bs58::decode(&guarantor_signature.signature)
+            .into_vec()
+            .map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
+        let signature = Signature::from_slice(&signature_bytes)
+            .map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
+
+        if !verify_ed25519(&public_key, message_to_verify.as_bytes(), &signature) {
+            return Err(ValidationError::InvalidGuarantorSignature(
+                guarantor_signature.guarantor_id.clone(),
+            ));
+        }
+    }
+
+    // 3. Prüfe geschlechtsspezifische Anforderungen, falls vorhanden
+    if standard.guarantor_requirements.gender_specific {
+        // Erstelle eine Kopie der benötigten Geschlechter, um gefundene zu entfernen.
+        let mut needed_genders = standard.guarantor_requirements.genders_needed.to_vec();
+
+        for guarantor_signature in &voucher.guarantor_signatures {
+            // Finde das Geschlecht des aktuellen Bürgen in der Liste der benötigten
+            if let Some(pos) = needed_genders.iter().position(|g| g == &guarantor_signature.gender) {
+                // Wenn gefunden, entferne es, da diese Anforderung erfüllt ist.
+                needed_genders.remove(pos);
+            }
+        }
+
+        if !needed_genders.is_empty() {
+            return Err(ValidationError::GuarantorRequirementsNotMet(format!(
+                "Missing required genders: {:?}",
+                needed_genders
+            )));
+        }
+    }
 
     Ok(())
 }
