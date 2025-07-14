@@ -5,7 +5,7 @@
 //! und verwenden `serde` für die Serialisierung und Deserialisierung.
 
 use serde::{Serialize, Deserialize};
-use crate::models::voucher::Address;
+
 /// Definiert den Standard, zu dem ein Gutschein gehört.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct VoucherStandard {
