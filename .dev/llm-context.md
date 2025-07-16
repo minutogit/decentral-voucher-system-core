@@ -34,7 +34,7 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 ## 5. Kernkonzepte aus dem Paper (Zusammenfassung)
 Gutschein-Struktur: Das universelle Gutschein-Container-Format
 Ein Gutschein ist im Wesentlichen eine Textdatei (repräsentiert als JSON), die alle möglichen Informationen enthält, die ein Gutschein jemals haben könnte. Jede einzelne Gutscheininstitution wird in diesem einheitlichen JSON-Schema abgebildet. Die spezifischen Regeln und Eigenschaften eines Gutscheintyps (wie "Minuto-Gutschein" oder "Silber-Umlauf-Gutschein") werden in separaten Standard-Definitionen (voucher_standard_definitions) festgelegt, die der voucher_core-Bibliothek zur Laufzeit geladen werden.
-
+Diese Definitionen werden typischerweise als externe JSON-Dateien (z.B. aus einem `voucher_standards/`-Verzeichnis) bereitgestellt und zur Laufzeit geparst.
 ```
 {
   "voucher_standard": {
@@ -171,6 +171,9 @@ Die "Kette" besteht aktuell aus einer geordneten Liste von Transaktionen im `tra
 │       ├── utils.rs
 │       ├── voucher_manager.rs
 │       └── voucher_validation.rs
+├── voucher_standards
+│   ├── minuto_standard.json
+│   └── silver_standard.json
 └── tests
     ├── test_crypto_utils.rs
     ├── test_utils.rs

@@ -1,0 +1,27 @@
+{
+  "name": "Silber-Umlauf-Gutschein",
+  "uuid": "SILVER-PAYMENT-V1-XXXX-YYYY",
+  "description": "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von X Unzen Silber.",
+  "nominal_value_unit": "Unzen",
+  "is_divisible": true,
+  "primary_redemption_type": "goods_or_services",
+  "guarantor_requirements": {
+    "needed_count": 0,
+    "gender_specific": false,
+    "genders_needed": [],
+    "description": "Keine Bürgen erforderlich."
+  },
+  "collateral": {
+    "type": "Physisches Edelmetall",
+    "unit": "Unzen",
+    "amount": "entspricht dem Nennwert des Gutscheins",
+    "description": "Der Gutschein ist durch die entsprechende Menge an physischem Silber besichert.",
+    "redeem_condition": "Nur in Notfällen einlösbar, wenn der Aussteller die versprochene Leistung nicht erbringen kann."
+  },
+  "required_voucher_fields": [
+    "voucher_id",
+    "creation_date",
+    "creator.signature"
+  ],
+  "allowed_transaction_types": ["init", "split", "redeem"]
+}
