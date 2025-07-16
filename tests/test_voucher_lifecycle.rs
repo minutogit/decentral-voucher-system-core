@@ -31,7 +31,7 @@
 use voucher_lib::{
     create_voucher, crypto_utils, from_json, load_standard_definition, to_canonical_json, to_json,
     validate_voucher_against_standard, Address, Collateral, Creator, GuarantorSignature,
-    NewVoucherData, NominalValue, ValidationError, Voucher, VoucherStandard, VoucherStandardDefinition,
+    NewVoucherData, NominalValue, ValidationError, Voucher, VoucherStandardDefinition,
 };
 use ed25519_dalek::SigningKey;
 
@@ -73,30 +73,27 @@ fn setup_creator() -> (SigningKey, Creator) {
 /// Erstellt die Basisdaten für einen Minuto-Gutschein.
 fn create_minuto_voucher_data(creator: Creator) -> NewVoucherData {
     NewVoucherData {
-        voucher_standard: VoucherStandard {
-            name: "Minuto-Gutschein".to_string(),
-            uuid: "MINUTO-V1-XXXX-YYYY".to_string(),
-        },
         description: "Ein Test-Minuto".to_string(),
-        divisible: true,
         years_valid: 1,
         non_redeemable_test_voucher: true,
         nominal_value: NominalValue {
-            unit: "Minuten".to_string(),
+            // Einheit und Abkürzung werden später vom Standard überschrieben.
+            // Die Angabe hier ist nur ein Platzhalter.
+            unit: "".to_string(),
             amount: "60".to_string(),
-            abbreviation: "m".to_string(),
+            abbreviation: "".to_string(),
             description: "Qualitative Leistung".to_string(),
         },
         collateral: Collateral {
-            type_: "Community-Besicherung".to_string(),
+            // Typ, Beschreibung und Einlösebedingung werden vom Standard überschrieben.
+            type_: "".to_string(),
             unit: "".to_string(),
             amount: "".to_string(),
             abbreviation: "".to_string(),
-            description: "Besichert durch das Vertrauen der Community.".to_string(),
-            redeem_condition: "Keine direkte physische Einlösung.".to_string(),
+            description: "".to_string(),
+            redeem_condition: "".to_string(),
         },
         creator,
-        needed_guarantors: 2,
     }
 }
 
@@ -150,7 +147,7 @@ fn test_full_creation_and_validation_cycle() {
     let voucher_data = create_minuto_voucher_data(creator);
 
     // 2. Erstellung
-    let mut voucher = create_voucher(voucher_data, &signing_key).unwrap();
+    let mut voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
     assert!(!voucher.voucher_id.is_empty());
     assert!(!voucher.creator.signature.is_empty());
 
@@ -187,9 +184,12 @@ fn test_full_creation_and_validation_cycle() {
 #[test]
 fn test_serialization_deserialization() {
     // 1. Erstelle einen Gutschein
+    let standard_json =
+        std::fs::read_to_string("voucher_standards/minuto_standard.json").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_json).unwrap();
     let (signing_key, creator) = setup_creator();
     let voucher_data = create_minuto_voucher_data(creator);
-    let original_voucher = create_voucher(voucher_data, &signing_key).unwrap();
+    let original_voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
 
     // 2. Serialisiere zu JSON
     let json_string = to_json(&original_voucher).unwrap();
@@ -209,7 +209,7 @@ fn test_validation_fails_on_invalid_signature() {
     let standard: VoucherStandardDefinition = load_standard_definition(&standard_json).unwrap();
     let (signing_key, creator) = setup_creator();
     let voucher_data = create_minuto_voucher_data(creator);
-    let mut voucher = create_voucher(voucher_data, &signing_key).unwrap();
+    let mut voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
 
     // 2. Manipuliere die Signatur
     voucher.creator.signature = "invalid_signature_string_12345".to_string();
@@ -227,9 +227,12 @@ fn test_validation_fails_on_invalid_signature() {
 #[test]
 fn test_validation_fails_on_missing_required_field() {
     // 1. Erstelle einen gültigen Gutschein
+    let standard_json =
+        std::fs::read_to_string("voucher_standards/minuto_standard.json").unwrap();
+    let base_standard: VoucherStandardDefinition = load_standard_definition(&standard_json).unwrap();
     let (signing_key, creator) = setup_creator();
     let voucher_data = create_minuto_voucher_data(creator);
-    let voucher = create_voucher(voucher_data, &signing_key).unwrap();
+    let voucher = create_voucher(voucher_data, &base_standard, &signing_key).unwrap();
 
     // 2. Lade einen manipulierten Standard, der ein zusätzliches Feld erfordert
     let standard_json =
@@ -257,7 +260,7 @@ fn test_validation_fails_on_inconsistent_unit() {
     let mut voucher_data = create_minuto_voucher_data(creator);
     voucher_data.nominal_value.unit = "EUR".to_string(); // Falsche Einheit für Silber-Standard
 
-    let voucher = create_voucher(voucher_data, &signing_key).unwrap();
+    let voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
 
     // Validierung sollte wegen der Einheit fehlschlagen
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
@@ -278,7 +281,7 @@ fn test_validation_fails_on_guarantor_count() {
     let standard: VoucherStandardDefinition = load_standard_definition(&standard_json).unwrap();
     let (signing_key, creator) = setup_creator();
     let voucher_data = create_minuto_voucher_data(creator);
-    let mut voucher = create_voucher(voucher_data, &signing_key).unwrap();
+    let mut voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
 
     // Der erstellte Gutschein hat 0 Bürgen, der Standard erfordert aber 2
     voucher.guarantor_signatures.clear();
@@ -299,13 +302,16 @@ fn test_validation_fails_on_guarantor_count() {
 fn test_canonical_json_is_deterministic_and_sorted() {
     // 1. Erstelle zwei identische Datenstrukturen.
     // Wir rufen setup_creator nur einmal auf, um einen konsistenten Schlüssel zu erhalten.
+    let standard_json =
+        std::fs::read_to_string("voucher_standards/minuto_standard.json").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_json).unwrap();
     let (signing_key, creator) = setup_creator();
     let data1 = create_minuto_voucher_data(creator.clone());
     let data2 = create_minuto_voucher_data(creator);
 
     // 2. Erstelle zwei Gutscheine nacheinander.
-    let voucher1 = create_voucher(data1, &signing_key).unwrap();
-    let voucher2 = create_voucher(data2, &signing_key).unwrap();
+    let voucher1 = create_voucher(data1, &standard, &signing_key).unwrap();
+    let voucher2 = create_voucher(data2, &standard, &signing_key).unwrap();
 
     // 3. Verifiziere, dass die Gutscheine NICHT identisch sind, da ihre Zeitstempel
     // und die daraus abgeleiteten Felder (IDs, Signaturen) sich unterscheiden müssen.
@@ -333,11 +339,11 @@ fn test_canonical_json_is_deterministic_and_sorted() {
 fn test_validation_succeeds_with_extra_fields_in_json() {
     // 1. Erstelle einen VOLLSTÄNDIG gültigen Gutschein, inklusive der benötigten Bürgen.
     let (signing_key, creator) = setup_creator();
-    let voucher_data = create_minuto_voucher_data(creator);
-    let mut valid_voucher = create_voucher(voucher_data, &signing_key).unwrap();
     let standard_json =
         std::fs::read_to_string("voucher_standards/minuto_standard.json").unwrap();
     let standard: VoucherStandardDefinition = load_standard_definition(&standard_json).unwrap();
+    let voucher_data = create_minuto_voucher_data(creator);
+    let mut valid_voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
 
     // Füge die für den Minuto-Standard erforderlichen Bürgen hinzu.
     let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g1_extra"));
@@ -405,10 +411,16 @@ fn test_validation_fails_on_replayed_guarantor_signature() {
         std::fs::read_to_string("voucher_standards/minuto_standard.json").unwrap();
     let standard: VoucherStandardDefinition = load_standard_definition(&standard_json).unwrap();
     let (creator1_key, creator1) = setup_creator();
-    let voucher_a = create_voucher(create_minuto_voucher_data(creator1), &creator1_key).unwrap();
+    let voucher_a =
+        create_voucher(create_minuto_voucher_data(creator1), &standard, &creator1_key).unwrap();
 
     let (creator2_key, creator2) = setup_creator();
-    let mut voucher_b = create_voucher(create_minuto_voucher_data(creator2), &creator2_key).unwrap();
+    let mut voucher_b = create_voucher(
+        create_minuto_voucher_data(creator2),
+        &standard,
+        &creator2_key,
+    )
+    .unwrap();
     assert_ne!(voucher_a.voucher_id, voucher_b.voucher_id);
 
     // 2. Erstelle eine gültige Bürgschaft für Gutschein A
@@ -446,7 +458,8 @@ fn test_validation_fails_on_tampered_guarantor_signature() {
         std::fs::read_to_string("voucher_standards/minuto_standard.json").unwrap();
     let standard: VoucherStandardDefinition = load_standard_definition(&standard_json).unwrap();
     let (signing_key, creator) = setup_creator();
-    let mut voucher = create_voucher(create_minuto_voucher_data(creator), &signing_key).unwrap();
+    let mut voucher =
+        create_voucher(create_minuto_voucher_data(creator), &standard, &signing_key).unwrap();
 
     let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g1_tamper"));
     let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g2_tamper"));

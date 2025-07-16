@@ -192,8 +192,10 @@ pub struct Voucher {
     pub voucher_standard: VoucherStandard,
     /// Die eindeutige ID dieses spezifischen Gutscheins.
     pub voucher_id: String,
-    /// Eine allgemeine, menschenlesbare Beschreibung des Gutscheins.
+    /// Eine allgemeine, menschenlesbare Beschreibung des spezifischen Gutscheins.
     pub description: String,
+    /// Der primäre Einlösezweck, übernommen vom Standard (z.B. "goods_or_services").
+    pub primary_redemption_type: String,
     /// Gibt an, ob der Gutschein in kleinere Einheiten aufgeteilt werden kann.
     pub divisible: bool,
     /// Das Erstellungsdatum des Gutscheins im ISO 8601-Format.
@@ -208,6 +210,8 @@ pub struct Voucher {
     pub collateral: Collateral,
     /// Detaillierte Informationen zum Ersteller des Gutscheins.
     pub creator: Creator,
+    /// Eine menschenlesbare Beschreibung der Bürgenanforderungen, übernommen vom Standard.
+    pub guarantor_requirements_description: String,
     /// Ein Array von Signaturen der Bürgen.
     pub guarantor_signatures: Vec<GuarantorSignature>,
     /// Die Anzahl der für diesen Gutschein benötigten Bürgen.

@@ -12,7 +12,7 @@
 use voucher_lib::{
     create_voucher, crypto_utils, load_standard_definition, to_canonical_json, to_json,
     validate_voucher_against_standard, Address, Collateral, Creator, GuarantorSignature,
-    NewVoucherData, NominalValue, ValidationError, VoucherStandard, VoucherStandardDefinition,
+    NewVoucherData, NominalValue, ValidationError, Voucher, VoucherStandardDefinition,
 };
 
 // Test-Standard, um nicht jedes Mal die Datei laden zu müssen.
@@ -65,15 +65,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         organization: None, community: None, phone: None, email: None, url: None, service_offer: None, needs: None, coordinates: "0,0".into(),
     };
     let voucher_data = NewVoucherData {
-        voucher_standard: VoucherStandard { name: "Minuto-Gutschein".into(), uuid: "MINUTO-V1-XXXX-YYYY".into() },
         description: "Gutschein für 60 Minuten Leistung".into(),
-        divisible: true, years_valid: 1, non_redeemable_test_voucher: true,
-        nominal_value: NominalValue { unit: "Minuten".into(), amount: "60".into(), abbreviation: "m".into(), description: "Leistung".into() },
-        collateral: Collateral { type_: "Community-Besicherung".into(), unit: "".into(), amount: "".into(), abbreviation: "".into(), description: "Vertrauen".into(), redeem_condition: "Keine Einlösung".into() },
+        years_valid: 1,
+        non_redeemable_test_voucher: true,
+        nominal_value: NominalValue {
+            unit: "".to_string(), // Wird vom Standard überschrieben
+            amount: "60".to_string(),
+            abbreviation: "".to_string(), // Wird vom Standard überschrieben
+            description: "Leistung".to_string(),
+        },
+        collateral: Collateral {
+            type_: "".to_string(), // Wird vom Standard überschrieben
+            unit: "".to_string(), amount: "".to_string(), abbreviation: "".to_string(), description: "".to_string(), redeem_condition: "".to_string(),
+        },
         creator: creator_data,
-        needed_guarantors: 2,
     };
-    let mut voucher = create_voucher(voucher_data, &creator_priv)?;
+    let mut voucher = create_voucher(voucher_data, &standard, &creator_priv)?;
     println!("✅ Gutschein erfolgreich erstellt.");
 
     // Zeige die Rohdaten (kanonisches JSON), deren Hash die Creator-Signatur bildet.
