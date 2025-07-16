@@ -3,12 +3,16 @@
   "uuid": "MINUTO-V1-XXXX-YYYY",
   "description": "Ein Gutschein für Waren oder Dienstleistungen im Wert von X Minuten qualitativer Leistung.",
   "nominal_value_unit": "Minuten",
+  "abbreviation": "Minuto",
   "is_divisible": true,
   "primary_redemption_type": "goods_or_services",
   "guarantor_requirements": {
     "needed_count": 2,
     "gender_specific": true,
-    "genders_needed": ["1", "2"],
+    "genders_needed": [
+      "1",
+      "2"
+    ],
     "description": "Ein männlicher und ein weiblicher Bürge sind erforderlich."
   },
   "collateral": {
@@ -22,5 +26,9 @@
     "creator.signature",
     "guarantor_signatures"
   ],
-  "allowed_transaction_types": ["init", "split", "redeem"]
+  "allowed_transaction_types": [
+    "init",
+    "split",
+    "redeem"
+  ]
 }

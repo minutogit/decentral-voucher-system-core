@@ -3,6 +3,7 @@
   "uuid": "SILVER-PAYMENT-V1-XXXX-YYYY",
   "description": "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von X Unzen Silber.",
   "nominal_value_unit": "Unzen",
+  "abbreviation": "Oz",
   "is_divisible": true,
   "primary_redemption_type": "goods_or_services",
   "guarantor_requirements": {
