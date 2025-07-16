@@ -20,7 +20,8 @@ const MINUTO_STANDARD_JSON: &str = r#"{
   "name": "Minuto-Gutschein",
   "uuid": "MINUTO-V1-XXXX-YYYY",
   "description": "Ein Gutschein für Waren oder Dienstleistungen im Wert von X Minuten qualitativer Leistung, besichert durch eine Gemeinschaft.",
-  "nominal_value_unit": "Minuten",
+  "unit": "Minuten",
+  "abbreviation": "Minuto",
   "is_divisible": true,
   "primary_redemption_type": "goods_or_services",
   "guarantor_requirements": {

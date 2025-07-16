@@ -113,9 +113,9 @@ fn verify_required_fields(voucher: &Voucher, standard: &VoucherStandardDefinitio
 /// Überprüft die Konsistenz der Gutscheindaten mit den Vorgaben des Standards.
 fn verify_consistency_with_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
     // Überprüfe die Einheit des Nennwerts
-    if voucher.nominal_value.unit != standard.nominal_value_unit {
+    if voucher.nominal_value.unit != standard.unit {
         return Err(ValidationError::IncorrectNominalValueUnit {
-            expected: standard.nominal_value_unit.clone(),
+            expected: standard.unit.clone(),
             found: voucher.nominal_value.unit.clone(),
         });
     }

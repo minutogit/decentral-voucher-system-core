@@ -52,8 +52,8 @@ pub struct VoucherStandardDefinition {
     pub uuid: String,
     /// Eine allgemeine Beschreibung des Gutschein-Standards.
     pub description: String,
-    /// Die feste Einheit des Nennwerts für diesen Standard (z.B. "Minuten").
-    pub nominal_value_unit: String,
+    /// Die feste Einheit für den Nennwert dieses Standards (z.B. "Minuten").
+    pub unit: String,
     /// Eine gängige Abkürzung für den Standard (z.B. "Minuto").
     pub abbreviation: String,
     /// Gibt an, ob Gutscheine dieses Standards standardmäßig teilbar sind.
