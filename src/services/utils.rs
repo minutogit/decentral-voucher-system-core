@@ -1,4 +1,29 @@
-use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
+//! # utils.rs
+//!
+//! Enthält allgemeine Hilfsfunktionen, z.B. für Zeitstempel und kanonische Serialisierung.
+
+use chrono::{Datelike, DateTime, TimeZone, Timelike, Utc};
+use serde::Serialize;
+use serde_json_canonicalizer::to_string;
+
+/// Serialisiert eine beliebige `Serialize`-bare Struktur in einen kanonischen JSON-String
+/// gemäß RFC 8785 (JCS - JSON Canonicalization Scheme).
+///
+/// Dies stellt sicher, dass die Ausgabe deterministisch ist:
+/// - Schlüssel in Objekten sind alphabetisch sortiert.
+/// - Keine überflüssigen Leerzeichen.
+///
+/// Diese Funktion ist essenziell für die kryptographische Signatur und Verifizierung,
+/// da sie garantiert, dass derselbe logische Inhalt immer denselben Hash erzeugt.
+///
+/// # Arguments
+/// * `value` - Ein Wert, der `serde::Serialize` implementiert.
+///
+/// # Returns
+/// Ein `Result`, das entweder den kompakten, kanonischen JSON-String oder einen `UtilsError` enthält.
+pub fn to_canonical_json<T: Serialize>(value: &T) -> Result<String, serde_json::Error> {
+    to_string(value)
+}
 
 /// Returns the current timestamp in ISO 8601 format in UTC with microsecond precision.
 /// Optionally adds a number of years to the current timestamp.

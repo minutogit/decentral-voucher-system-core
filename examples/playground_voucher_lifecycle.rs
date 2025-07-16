@@ -73,6 +73,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         needed_guarantors: 2,
     };
 
+    // Die `create_voucher` Funktion verwendet intern die kanonische Serialisierung (RFC 8785),
+    // um eine deterministische `voucher_id` und die Creator-Signatur zu erzeugen.
     let mut voucher = create_voucher(voucher_data, &creator_priv)?;
     println!("✅ Gutschein erfolgreich erstellt. Aktueller JSON-Inhalt:");
     println!("{}", to_json(&voucher)?);

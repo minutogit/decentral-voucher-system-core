@@ -4,7 +4,7 @@
 use voucher_lib::{
     create_voucher, crypto_utils, from_json, load_standard_definition, to_json, GuarantorSignature,
     validate_voucher_against_standard, Address, Collateral, Creator, NewVoucherData,
-    NominalValue, ValidationError, Voucher, VoucherStandard, VoucherStandardDefinition,
+    NominalValue, ValidationError, Voucher, VoucherStandard, VoucherStandardDefinition, to_canonical_json,
 };
 use ed25519_dalek::SigningKey;
 
@@ -294,4 +294,125 @@ fn test_validation_fails_on_guarantor_count() {
         }
         e => panic!("Expected GuarantorRequirementsNotMet error, but got {:?}", e),
     }
+
 }
+
+
+// --- NEUE TESTS FÜR KANONISCHE SERIALISIERUNG ---
+
+#[test]
+fn test_canonical_json_is_deterministic_and_sorted() {
+    // 1. Erstelle zwei identische Datenstrukturen.
+    // Wir rufen setup_creator nur einmal auf, um einen konsistenten Schlüssel zu erhalten.
+    let (signing_key, creator) = setup_creator();
+    let data1 = create_minuto_voucher_data(creator.clone());
+    let data2 = create_minuto_voucher_data(creator);
+
+    // 2. Erstelle zwei Gutscheine nacheinander.
+    let voucher1 = create_voucher(data1, &signing_key).unwrap();
+    let voucher2 = create_voucher(data2, &signing_key).unwrap();
+    
+    // 3. Verifiziere, dass die Gutscheine NICHT identisch sind, da ihre Zeitstempel
+    // und die daraus abgeleiteten Felder (IDs, Signaturen) sich unterscheiden müssen.
+    assert_ne!(voucher1, voucher2, "Vouchers should be different due to unique timestamps");
+    assert_ne!(voucher1.voucher_id, voucher2.voucher_id, "Voucher IDs should be different");
+
+    // 4. Teste die kanonische Serialisierung an einem statischen Teil des Gutscheins.
+    // Das Ergebnis muss immer alphabetisch sortierte Schlüssel haben,
+    // z.B. "abbreviation" vor "amount", "amount" vor "description" etc.
+    // Dies bestätigt den "sorted" Aspekt des Testnamens.
+    let canonical_json = to_canonical_json(&voucher1.nominal_value).unwrap();
+    let expected_start = r#"{"abbreviation":"m","amount":"60","description":"Qualitative Leistung","unit":"Minuten"}"#;
+    assert_eq!(canonical_json, expected_start);
+    println!("Canonical Nominal Value: {}", canonical_json);
+}
+
+#[test]
+fn test_validation_succeeds_with_extra_fields_in_json() {
+    // 1. Erstelle einen VOLLSTÄNDIG gültigen Gutschein, inklusive der benötigten Bürgen.
+    let (signing_key, creator) = setup_creator();
+    let voucher_data = create_minuto_voucher_data(creator);
+    let mut valid_voucher = create_voucher(voucher_data, &signing_key).unwrap();
+    let standard: VoucherStandardDefinition =
+        load_standard_definition(MINUTO_STANDARD_JSON).unwrap();
+
+    // Füge die für den Minuto-Standard erforderlichen Bürgen hinzu.
+    let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g1_extra"));
+    let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g2_extra"));
+    let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
+    let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
+
+    let message_to_sign = crypto_utils::get_hash(&valid_voucher.voucher_id);
+    let g1_signature = crypto_utils::sign_ed25519(&g1_priv, message_to_sign.as_bytes());
+    let g2_signature = crypto_utils::sign_ed25519(&g2_priv, message_to_sign.as_bytes());
+
+    valid_voucher.guarantor_signatures.push(GuarantorSignature {
+        guarantor_id: g1_id,
+        first_name: "Guarantor1".to_string(),
+        last_name: "Test".to_string(),
+        organization: None,
+        community: None,
+        address: None,
+        gender: "1".to_string(), // Männlich
+        email: None,
+        phone: None,
+        coordinates: None,
+        url: None,
+        signature: bs58::encode(g1_signature.to_bytes()).into_string(),
+        signature_time: "2025-07-16T11:00:00Z".to_string(),
+    });
+    valid_voucher.guarantor_signatures.push(GuarantorSignature {
+        guarantor_id: g2_id,
+        first_name: "Guarantor2".to_string(),
+        last_name: "Test".to_string(),
+        organization: None,
+        community: None,
+        address: None,
+        gender: "2".to_string(), // Weiblich
+        email: None,
+        phone: None,
+        coordinates: None,
+        url: None,
+        signature: bs58::encode(g2_signature.to_bytes()).into_string(),
+        signature_time: "2025-07-16T11:01:00Z".to_string(),
+    });
+    // Stelle sicher, dass der Gutschein jetzt gültig ist, bevor wir ihn modifizieren.
+    assert!(validate_voucher_against_standard(&valid_voucher, &standard).is_ok());
+
+    let mut voucher_as_value: serde_json::Value = serde_json::to_value(&valid_voucher).unwrap();
+
+    // 2. Füge ein unbekanntes Feld zum JSON-Objekt hinzu.
+    // Dies simuliert einen Gutschein, der von einer neueren Software-Version erstellt wurde.
+    voucher_as_value
+        .as_object_mut()
+        .unwrap()
+        .insert("unknown_future_field".to_string(), serde_json::json!("some_data"));
+
+    // Füge auch ein unbekanntes Feld in ein verschachteltes Objekt ein.
+    voucher_as_value
+        .get_mut("creator")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("creator_metadata".to_string(), serde_json::json!({"rating": 5}));
+
+    let json_with_extra_fields = serde_json::to_string(&voucher_as_value).unwrap();
+
+    // 3. Deserialisiere diesen JSON-String. `serde` sollte die unbekannten Felder ignorieren.
+    let deserialized_voucher: Voucher = from_json(&json_with_extra_fields).unwrap();
+
+    // 4. Der deserialisierte Gutschein sollte exakt dem Original entsprechen, da die
+    // zusätzlichen Felder verworfen wurden.
+    assert_eq!(valid_voucher, deserialized_voucher);
+    
+        // 5. Die Validierung muss erfolgreich sein. Die `verify_creator_signature`-Funktion
+        // wird intern die kanonische Form des `deserialized_voucher` (ohne die extra Felder)
+        // berechnen, und diese muss mit der ursprünglichen Signatur übereinstimmen.
+        let validation_result = validate_voucher_against_standard(&deserialized_voucher, &standard);
+
+        assert!(
+            validation_result.is_ok(),
+            "Validation failed unexpectedly with extra fields: {:?}",
+            validation_result.err()
+        );
+    }

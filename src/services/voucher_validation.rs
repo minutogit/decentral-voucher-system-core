@@ -8,6 +8,7 @@ use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::crypto_utils::{
     get_hash, get_pubkey_from_user_id, verify_ed25519, GetPubkeyError,
 };
+use crate::services::utils::to_canonical_json;
 use ed25519_dalek::Signature;
 use serde_json::Value;
 use std::fmt;
@@ -137,8 +138,8 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
     voucher_to_verify.guarantor_signatures.clear();
     voucher_to_verify.additional_signatures.clear();
 
-    let voucher_json = serde_json::to_string(&voucher_to_verify)
-        .map_err(ValidationError::Serialization)?;
+    let voucher_json =
+        to_canonical_json(&voucher_to_verify).map_err(ValidationError::Serialization)?;
     let voucher_hash = get_hash(voucher_json);
 
     // 3. Dekodiere die Signatur aus dem Base58-Format.
@@ -228,8 +229,8 @@ fn verify_transactions(voucher: &Voucher) -> Result<(), ValidationError> {
         let signature_b58 = tx_to_verify.sender_signature.clone();
         tx_to_verify.sender_signature = "".to_string();
 
-        let tx_json = serde_json::to_string(&tx_to_verify)
-            .map_err(ValidationError::Serialization)?;
+        let tx_json =
+            to_canonical_json(&tx_to_verify).map_err(ValidationError::Serialization)?;
         let tx_hash = get_hash(tx_json);
 
         // Extrahiere den Public Key des Senders

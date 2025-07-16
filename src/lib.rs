@@ -22,6 +22,7 @@ pub use models::voucher_standard_definition::{
 
 // Services
 pub use services::crypto_utils;
+pub use services::utils::to_canonical_json;
 pub use services::utils;
 pub use services::voucher_validation::{validate_voucher_against_standard, ValidationError};
 pub use services::voucher_manager::{

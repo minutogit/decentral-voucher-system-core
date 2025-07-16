@@ -9,7 +9,7 @@ use crate::models::voucher::{
 };
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::crypto_utils::{get_hash, sign_ed25519};
-use crate::services::utils::{get_current_timestamp, get_timestamp};
+use crate::services::utils::{get_current_timestamp, get_timestamp, to_canonical_json};
 
 use ed25519_dalek::SigningKey;
 use serde_json;
@@ -145,24 +145,24 @@ pub fn create_voucher(
 
     // 3. Generiere die eindeutige voucher_id durch Hashing des vorläufigen Objekts.
     // Dies stellt sicher, dass die ID deterministisch aus dem Inhalt abgeleitet wird.
-    let voucher_json_for_id = serde_json::to_string(&temp_voucher)?;
+    let voucher_json_for_id = to_canonical_json(&temp_voucher)?;
     let voucher_id = get_hash(voucher_json_for_id);
     temp_voucher.voucher_id = voucher_id.clone();
 
     // Update die initiale Transaktion mit einer eigenen ID
-    let init_transaction_json_for_id = serde_json::to_string(&temp_voucher.transactions[0])?;
+    let init_transaction_json_for_id = to_canonical_json(&temp_voucher.transactions[0])?;
     let t_id = get_hash(init_transaction_json_for_id);
     temp_voucher.transactions[0].t_id = t_id;
 
     // 4. Signiere die initiale Transaktion
-    let transaction_to_sign_json = serde_json::to_string(&temp_voucher.transactions[0])?;
+    let transaction_to_sign_json = to_canonical_json(&temp_voucher.transactions[0])?;
     let transaction_signature_hash = get_hash(&transaction_to_sign_json);
     let transaction_signature = sign_ed25519(creator_signing_key, transaction_signature_hash.as_bytes());
     temp_voucher.transactions[0].sender_signature = bs58::encode(transaction_signature.to_bytes()).into_string();
 
     // 5. Generiere die finale Signatur des Erstellers für den gesamten Gutschein.
     // Die Signatur deckt alle initialen Daten, einschließlich der nun gesetzten voucher_id, ab.
-    let voucher_json_for_signing = serde_json::to_string(&temp_voucher)?;
+    let voucher_json_for_signing = to_canonical_json(&temp_voucher)?;
     let voucher_hash_to_sign = get_hash(voucher_json_for_signing);
     let creator_signature = sign_ed25519(creator_signing_key, voucher_hash_to_sign.as_bytes());
 
