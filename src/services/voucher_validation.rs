@@ -28,6 +28,10 @@ pub enum ValidationError {
     InvalidCreatorId(GetPubkeyError),
     /// Die Bürgenanforderungen des Standards werden nicht erfüllt.
     GuarantorRequirementsNotMet(String),
+    /// Die voucher_id in einer Signatur stimmt nicht mit der des Gutscheins überein.
+    MismatchedVoucherIdInSignature { expected: String, found: String },
+    /// Die Signatur-ID ist ungültig, was auf manipulierte Signatur-Metadaten hindeutet.
+    InvalidSignatureId(String),
     /// Eine Signatur eines Bürgen ist ungültig.
     InvalidGuarantorSignature(String),
     /// Eine Transaktionssignatur ist ungültig.
@@ -53,6 +57,12 @@ impl fmt::Display for ValidationError {
             Self::InvalidCreatorSignature => write!(f, "Creator signature is invalid"),
             Self::InvalidCreatorId(e) => write!(f, "Invalid creator ID: {}", e),
             Self::GuarantorRequirementsNotMet(reason) => write!(f, "Guarantor requirements not met: {}", reason),
+            Self::MismatchedVoucherIdInSignature { expected, found } => write!(
+                f,
+                "Signature references wrong voucher. Expected ID: {}, Found ID: {}",
+                expected, found
+            ),
+            Self::InvalidSignatureId(id) => write!(f, "The signature ID {} is invalid or data was tampered with", id),
             Self::InvalidGuarantorSignature(id) => write!(f, "Invalid signature for guarantor {}", id),
             Self::InvalidTransactionSignature(t_id) => write!(f, "Invalid signature for transaction {}", t_id),
             Self::InvalidTransactionSenderId(id) => write!(f, "Invalid sender ID in transaction: {}", id),
@@ -172,21 +182,44 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
         )));
     }
 
-    // 2. Prüfe jede Bürgen-Signatur kryptographisch
-    // Annahme: Der Bürge signiert den Hash der `voucher_id`, um die Existenz und
-    // den initialen Zustand des Gutscheins zu bestätigen.
-    let message_to_verify = get_hash(&voucher.voucher_id);
+    // 2. Prüfe jede vorhandene Bürgen-Signatur kryptographisch.
+    // Jede Signatur ist jetzt ein in sich geschlossenes Objekt.
     for guarantor_signature in &voucher.guarantor_signatures {
+        // 2.1. Stelle sicher, dass die Signatur zum richtigen Gutschein gehört.
+        if guarantor_signature.voucher_id != voucher.voucher_id {
+            return Err(ValidationError::MismatchedVoucherIdInSignature {
+                expected: voucher.voucher_id.clone(),
+                found: guarantor_signature.voucher_id.clone(),
+            });
+        }
+
+        // 2.2. Rekonstruiere die Daten, die zur Erzeugung der `signature_id` gehasht wurden.
+        let mut signature_to_verify = guarantor_signature.clone();
+        let signature_b58 = signature_to_verify.signature;
+
+        // Um die ID zu verifizieren, müssen wir exakt den Zustand hashen, der bei der Erstellung der ID vorlag.
+        // Dabei waren sowohl die signature_id als auch die Signatur selbst noch nicht gesetzt.
+        signature_to_verify.signature_id = "".to_string();
+        signature_to_verify.signature = "".to_string();
+
+        let calculated_signature_id_hash = get_hash(to_canonical_json(&signature_to_verify).map_err(ValidationError::Serialization)?);
+
+        // 2.3. Verifiziere, dass die `signature_id` mit den Daten übereinstimmt.
+        if calculated_signature_id_hash != guarantor_signature.signature_id {
+            return Err(ValidationError::InvalidSignatureId(guarantor_signature.signature_id.clone()));
+        }
+
+        // 2.4. Verifiziere die digitale Signatur selbst. Sie signiert die `signature_id`.
         let public_key = get_pubkey_from_user_id(&guarantor_signature.guarantor_id)
             .map_err(|_| ValidationError::InvalidGuarantorSignature(guarantor_signature.guarantor_id.clone()))?;
 
-        let signature_bytes = bs58::decode(&guarantor_signature.signature)
+        let signature_bytes = bs58::decode(signature_b58)
             .into_vec()
             .map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
         let signature = Signature::from_slice(&signature_bytes)
             .map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
 
-        if !verify_ed25519(&public_key, message_to_verify.as_bytes(), &signature) {
+        if !verify_ed25519(&public_key, guarantor_signature.signature_id.as_bytes(), &signature) {
             return Err(ValidationError::InvalidGuarantorSignature(
                 guarantor_signature.guarantor_id.clone(),
             ));

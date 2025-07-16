@@ -106,6 +106,10 @@ pub struct Creator {
 /// Repräsentiert die Signatur eines Bürgen.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct GuarantorSignature {
+    /// Die eindeutige ID des Gutscheins, auf den sich diese Signatur bezieht.
+    pub voucher_id: String,
+    /// Die eindeutige ID dieser Signatur, generiert aus dem Hash ihrer eigenen Daten.
+    pub signature_id: String,
     /// Eindeutige ID des Bürgen.
     pub guarantor_id: String,
     /// Vorname des Bürgen.
@@ -166,6 +170,10 @@ pub struct Transaction {
 /// Repräsentiert eine zusätzliche, optionale Signatur, die an den Gutschein angehängt wird.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AdditionalSignature {
+    /// Die eindeutige ID des Gutscheins, auf den sich diese Signatur bezieht.
+    pub voucher_id: String,
+    /// Die eindeutige ID dieser Signatur, generiert aus dem Hash ihrer eigenen Daten.
+    pub signature_id: String,
     /// Eindeutige ID des zusätzlichen Unterzeichners.
     pub signer_id: String,
     /// Die digitale Signatur.

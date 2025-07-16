@@ -3,16 +3,16 @@
 //! Zeigt den gesamten Lebenszyklus eines Gutscheins:
 //! 1. Erstellung eines neuen (unvollständigen) Gutscheins.
 //! 2. Fehlgeschlagene Validierung, da Bürgen fehlen.
-//! 3. Hinzufügen von kryptographisch echten Bürgen-Signaturen.
+//! 3. Hinzufügen von kryptographisch echten, entkoppelten Bürgen-Signaturen.
 //! 4. Erfolgreiche Validierung des vollständigen Gutscheins.
-//! 5. Manipulationsversuch und erneute fehlgeschlagene Validierung.
+//! 5. Manipulationsversuch der Metadaten und erneute fehlgeschlagene Validierung.
 //
 // Ausführen mit: cargo run --example playground_voucher_lifecycle
 
 use voucher_lib::{
-    create_voucher, crypto_utils, load_standard_definition, to_json,
-    validate_voucher_against_standard, Creator, GuarantorSignature, NewVoucherData,
-    NominalValue, ValidationError, VoucherStandard, VoucherStandardDefinition, Address, Collateral,
+    create_voucher, crypto_utils, load_standard_definition, to_canonical_json, to_json,
+    validate_voucher_against_standard, Address, Collateral, Creator, GuarantorSignature,
+    NewVoucherData, NominalValue, ValidationError, VoucherStandard, VoucherStandardDefinition,
 };
 
 // Test-Standard, um nicht jedes Mal die Datei laden zu müssen.
@@ -46,7 +46,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let standard: VoucherStandardDefinition = load_standard_definition(MINUTO_STANDARD_JSON)?;
     println!("\n✅ Standard '{}' erfolgreich geladen.", standard.name);
 
-    let (creator_pub, creator_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("creator"));
+    let (creator_pub, creator_priv) =
+        crypto_utils::generate_ed25519_keypair_for_tests(Some("creator"));
     let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("guarantor1"));
     let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("guarantor2"));
 
@@ -60,7 +61,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         address: Address { street: "Musterweg".into(), house_number: "1a".into(), zip_code: "12345".into(), city: "Musterstadt".into(), country: "DE".into(), full_address: "Musterweg 1a, 12345 Musterstadt".into() },
         gender: "1".into(),
         signature: "".into(), // wird von `create_voucher` gefüllt
-        // ... weitere optionale Felder hier ...
         organization: None, community: None, phone: None, email: None, url: None, service_offer: None, needs: None, coordinates: "0,0".into(),
     };
     let voucher_data = NewVoucherData {
@@ -72,14 +72,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         creator: creator_data,
         needed_guarantors: 2,
     };
-
-    // Die `create_voucher` Funktion verwendet intern die kanonische Serialisierung (RFC 8785),
-    // um eine deterministische `voucher_id` und die Creator-Signatur zu erzeugen.
     let mut voucher = create_voucher(voucher_data, &creator_priv)?;
-    println!("✅ Gutschein erfolgreich erstellt. Aktueller JSON-Inhalt:");
+    println!("✅ Gutschein erfolgreich erstellt.");
+
+    // Zeige die Rohdaten (kanonisches JSON), deren Hash die Creator-Signatur bildet.
+    let mut raw_view = voucher.clone();
+    raw_view.creator.signature = "".to_string();
+    println!("   - Rohdaten (kanonisches JSON), die vom Ersteller signiert wurden:\n     {}", to_canonical_json(&raw_view)?);
+
+    println!("\nSchön formatierter Gutschein (aktueller Zustand):");
     println!("{}", to_json(&voucher)?);
     println!("(Beachte: 'guarantor_signatures' ist noch leer)");
-
 
     // --- SCHRITT 2: Unvollständigen Gutschein validieren (erwarteter Fehler) ---
     println!("\n--- SCHRITT 2: Validiere unvollständigen Gutschein (erwarteter Fehler) ---");
@@ -87,53 +90,83 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(ValidationError::GuarantorRequirementsNotMet(reason)) => {
             println!("✅ Erfolg! Validierung wie erwartet fehlgeschlagen.");
             println!("   Grund: {}", reason);
-        },
+        }
         Ok(_) => eprintln!("❌ Fehler: Validierung war unerwartet erfolgreich."),
         Err(e) => eprintln!("❌ Fehler: Unerwarteter Validierungsfehler: {}", e),
     }
 
-    // --- SCHRITT 3: Bürgen fügen ihre Signaturen hinzu ---
-    println!("\n--- SCHRITT 3: Bürgen fügen ihre (echten) Signaturen hinzu ---");
+    // --- SCHRITT 3: Bürgen fügen ihre Signaturen nach dem neuen Schema hinzu ---
+    println!("\n--- SCHRITT 3: Bürgen fügen ihre (entkoppelten) Signaturen hinzu ---");
     let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1"))?;
     let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2"))?;
 
-    let message_to_sign = crypto_utils::get_hash(&voucher.voucher_id);
-    let g1_signature = crypto_utils::sign_ed25519(&g1_priv, message_to_sign.as_bytes());
-    let g2_signature = crypto_utils::sign_ed25519(&g2_priv, message_to_sign.as_bytes());
-
-    voucher.guarantor_signatures.push(GuarantorSignature {
-        guarantor_id: g1_id, gender: "1".into(), first_name: "Hans".into(), last_name: "Bürge".into(),
-        signature: bs58::encode(g1_signature.to_bytes()).into_string(),
+    // -- Bürge 1 --
+    println!("\nErstelle Signatur für Bürge 1 (Hans Bürge)...");
+    // 1. Erstelle die Metadaten der Signatur. `signature_id` und `signature` sind noch leer.
+    let mut g1_sig_obj = GuarantorSignature {
+        voucher_id: voucher.voucher_id.clone(),
+        signature_id: "".to_string(), // Wird jetzt berechnet
+        signature: "".to_string(),    // Wird jetzt berechnet
+        guarantor_id: g1_id,
+        gender: "1".into(),
+        first_name: "Hans".into(),
+        last_name: "Bürge".into(),
         signature_time: "2025-07-20T10:00:00Z".into(),
-        // ... weitere optionale Felder ...
         organization: None, community: None, address: None, email: None, phone: None, coordinates: None, url: None,
-    });
-    voucher.guarantor_signatures.push(GuarantorSignature {
+    };
+    // 2. Erzeuge die `signature_id` durch Hashing der Metadaten.
+    let raw_g1_metadata = to_canonical_json(&g1_sig_obj)?;
+    println!("   - Rohdaten der Signatur (kanonisches JSON), die zur ID-Generierung gehasht werden:\n     {}", raw_g1_metadata);
+    let g1_sig_id = crypto_utils::get_hash(&raw_g1_metadata);
+    g1_sig_obj.signature_id = g1_sig_id;
+    println!("   - Berechnete signature_id: {}", g1_sig_obj.signature_id);
+
+    // 3. Signiere die `signature_id`.
+    let g1_digital_sig =
+        crypto_utils::sign_ed25519(&g1_priv, g1_sig_obj.signature_id.as_bytes());
+    g1_sig_obj.signature = bs58::encode(g1_digital_sig.to_bytes()).into_string();
+    println!("   - Finale digitale Signatur (Base58): {}...", &g1_sig_obj.signature[..44]);
+
+    // -- Bürge 2 --
+    println!("\nErstelle Signatur für Bürgin 2 (Gabi Bürgin)...");
+    let mut g2_sig_obj = GuarantorSignature {
+        voucher_id: voucher.voucher_id.clone(), signature_id: "".into(), signature: "".into(),
         guarantor_id: g2_id, gender: "2".into(), first_name: "Gabi".into(), last_name: "Bürgin".into(),
-        signature: bs58::encode(g2_signature.to_bytes()).into_string(),
         signature_time: "2025-07-20T10:05:00Z".into(),
-        // ... weitere optionale Felder ...
         organization: None, community: None, address: None, email: None, phone: None, coordinates: None, url: None,
-    });
-    println!("✅ Bürgen-Signaturen hinzugefügt. Aktueller JSON-Inhalt:");
-    println!("{}", to_json(&voucher)?);
+    };
+    let g2_sig_id = crypto_utils::get_hash(to_canonical_json(&g2_sig_obj)?);
+    g2_sig_obj.signature_id = g2_sig_id;
+    let g2_digital_sig =
+        crypto_utils::sign_ed25519(&g2_priv, g2_sig_obj.signature_id.as_bytes());
+    g2_sig_obj.signature = bs58::encode(g2_digital_sig.to_bytes()).into_string();
+
+    // Füge die fertigen, in sich geschlossenen Signatur-Objekte zum Gutschein hinzu.
+    voucher.guarantor_signatures.push(g1_sig_obj);
+    voucher.guarantor_signatures.push(g2_sig_obj);
+    println!("\n✅ Beide Bürgen-Signaturen hinzugefügt.");
 
     // --- SCHRITT 4: Vollständigen Gutschein validieren (erwarteter Erfolg) ---
     println!("\n--- SCHRITT 4: Validiere den vollständigen Gutschein (erwarteter Erfolg) ---");
     match validate_voucher_against_standard(&voucher, &standard) {
         Ok(_) => println!("✅ Erfolg! Der vollständige Gutschein ist jetzt gültig."),
-        Err(e) => eprintln!("❌ Fehler: Validierung des vollständigen Gutscheins fehlgeschlagen: {}", e),
+        Err(e) => {
+            eprintln!("❌ Fehler: Validierung des vollständigen Gutscheins fehlgeschlagen: {}", e)
+        }
     }
 
-    // --- SCHRITT 5: Manipulation und erneute Validierung (erwarteter Fehler) ---
-    println!("\n--- SCHRITT 5: Manipuliere eine Bürgen-Signatur (erwarteter Fehler) ---");
+    // --- SCHRITT 5: Manipulation der Metadaten und erneute Validierung ---
+    println!("\n--- SCHRITT 5: Manipuliere die Metadaten einer Bürgschaft (erwarteter Fehler) ---");
     let mut tampered_voucher = voucher.clone();
-    tampered_voucher.guarantor_signatures[0].signature = "dies_ist_eine_gefaelschte_signatur".to_string();
-    println!("Eine Signatur wurde mit ungültigen Daten überschrieben.");
+    // Ein Angreifer ändert den Vornamen des ersten Bürgen, NACHDEM die Signatur erstellt wurde.
+    tampered_voucher.guarantor_signatures[0].first_name = "Betrüger".to_string();
+    println!("Der Name des ersten Bürgen wurde zu 'Betrüger' geändert.");
+
     match validate_voucher_against_standard(&tampered_voucher, &standard) {
-        Err(ValidationError::SignatureDecodeError(_)) => {
-            println!("✅ Erfolg! Validierung wie erwartet fehlgeschlagen, da die Signatur ungültig ist.");
-        },
+        Err(ValidationError::InvalidSignatureId(id)) => {
+            println!("✅ Erfolg! Validierung wie erwartet fehlgeschlagen.");
+            println!("   Grund: Die Metadaten der Signatur mit ID '{}' wurden manipuliert und passen nicht mehr zum Hash.", id);
+        }
         Ok(_) => eprintln!("❌ Fehler: Validierung war unerwartet erfolgreich."),
         Err(e) => eprintln!("❌ Fehler: Unerwarteter Validierungsfehler: {}", e),
     }
