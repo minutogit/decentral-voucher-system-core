@@ -17,7 +17,7 @@ pub use models::voucher::{
     Voucher, VoucherStandard,
 };
 pub use models::voucher_standard_definition::{
-    GuarantorRequirements, StandardCollateral, VoucherStandardDefinition,
+    VoucherStandardDefinition,
 };
 
 // Services

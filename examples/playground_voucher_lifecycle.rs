@@ -1,3 +1,4 @@
+// run with: cargo run --example playground_voucher_lifecycle
 //! # playground_voucher_lifecycle.rs
 //!
 //! Zeigt den gesamten Lebenszyklus eines Gutscheins:

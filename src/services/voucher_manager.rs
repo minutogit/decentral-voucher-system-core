@@ -6,6 +6,7 @@ use crate::services::crypto_utils::{get_hash, sign_ed25519};
 use crate::services::utils::{get_current_timestamp, get_timestamp, to_canonical_json};
 
 use ed25519_dalek::SigningKey;
+use toml::de::Error as TomlError;
 use serde_json;
 use std::fmt;
 
@@ -15,6 +16,8 @@ use std::fmt;
 pub enum VoucherManagerError {
     /// Fehler bei der Serialisierung oder Deserialisierung von JSON.
     Serialization(serde_json::Error),
+    /// Fehler beim Parsen von TOML.
+    TomlDeserialization(TomlError),
     /// Ein allgemeiner Fehler mit einer Beschreibung.
     Generic(String),
 }
@@ -26,10 +29,17 @@ impl From<serde_json::Error> for VoucherManagerError {
     }
 }
 
+// Implementiert die Konvertierung von toml::de::Error in unseren benutzerdefinierten Fehlertyp.
+impl From<TomlError> for VoucherManagerError {
+    fn from(err: TomlError) -> Self {
+        VoucherManagerError::TomlDeserialization(err)
+    }
+}
 // Ermöglicht die Anzeige des Fehlers als String.
 impl fmt::Display for VoucherManagerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            VoucherManagerError::TomlDeserialization(e) => write!(f, "TOML Deserialization Error: {}", e),
             VoucherManagerError::Serialization(e) => write!(f, "Serialization Error: {}", e),
             VoucherManagerError::Generic(s) => write!(f, "Voucher Manager Error: {}", s),
         }
@@ -50,9 +60,9 @@ pub fn to_json(voucher: &Voucher) -> Result<String, VoucherManagerError> {
     Ok(json_str)
 }
 
-/// Nimmt einen JSON-String entgegen und deserialisiert ihn in ein `VoucherStandardDefinition`-Struct.
-pub fn load_standard_definition(json_str: &str) -> Result<VoucherStandardDefinition, VoucherManagerError> {
-    let definition: VoucherStandardDefinition = serde_json::from_str(json_str)?;
+/// Nimmt einen TOML-String entgegen und deserialisiert ihn in ein `VoucherStandardDefinition`-Struct.
+pub fn load_standard_definition(toml_str: &str) -> Result<VoucherStandardDefinition, VoucherManagerError> {
+    let definition: VoucherStandardDefinition = toml::from_str(toml_str)?;
     Ok(definition)
 }
 
@@ -105,26 +115,26 @@ pub fn create_voucher(
 
     // Vorbereitung für den Voucher: Übernehme die Regel-basierten Felder aus der Standard-Definition.
     let voucher_standard = VoucherStandard {
-        name: standard_definition.name.clone(),
-        uuid: standard_definition.uuid.clone(),
+        name: standard_definition.metadata.name.clone(),
+        uuid: standard_definition.metadata.uuid.clone(),
     };
 
     let mut final_nominal_value = data.nominal_value;
-    final_nominal_value.unit = standard_definition.unit.clone();
-    final_nominal_value.abbreviation = standard_definition.abbreviation.clone();
+    final_nominal_value.unit = standard_definition.template.nominal_value.unit.clone();
+    final_nominal_value.abbreviation = standard_definition.metadata.abbreviation.clone();
 
     let mut final_collateral = data.collateral;
-    final_collateral.type_ = standard_definition.collateral.type_.clone();
-    final_collateral.description = standard_definition.collateral.description.clone();
-    final_collateral.redeem_condition = standard_definition.collateral.redeem_condition.clone();
+    final_collateral.type_ = standard_definition.template.collateral.type_.clone();
+    final_collateral.description = standard_definition.template.collateral.description.clone();
+    final_collateral.redeem_condition = standard_definition.template.collateral.redeem_condition.clone();
 
     // 2. Baue ein vorläufiges Voucher-Objekt, das zur Generierung von ID und Signatur verwendet wird.
     let mut temp_voucher = Voucher {
         voucher_standard,
         voucher_id: "".to_string(),
         description: data.description,
-        primary_redemption_type: standard_definition.primary_redemption_type.clone(),
-        divisible: standard_definition.is_divisible,
+        primary_redemption_type: standard_definition.template.primary_redemption_type.clone(),
+        divisible: standard_definition.template.is_divisible,
         creation_date: creation_date.clone(),
         valid_until,
         non_redeemable_test_voucher: data.non_redeemable_test_voucher,
@@ -132,37 +142,36 @@ pub fn create_voucher(
         collateral: final_collateral,
         creator: data.creator,
         guarantor_requirements_description: standard_definition
-            .guarantor_requirements
+            .template.guarantor_info
             .description
             .clone(),
         guarantor_signatures: vec![],
-        needed_guarantors: standard_definition.guarantor_requirements.needed_count,
+        needed_guarantors: standard_definition.template.guarantor_info.needed_count,
         transactions: vec![init_transaction],
         additional_signatures: vec![],
     };
 
-    // 3. Generiere die eindeutige voucher_id durch Hashing des vorläufigen Objekts.
-    let voucher_json_for_id = to_canonical_json(&temp_voucher)?;
-    let voucher_id = get_hash(voucher_json_for_id);
-    temp_voucher.voucher_id = voucher_id.clone();
-
-    // Update die initiale Transaktion mit einer eigenen ID
+    // 3. Update die initiale Transaktion mit einer eigenen ID, BEVOR sie signiert wird.
     let init_transaction_json_for_id = to_canonical_json(&temp_voucher.transactions[0])?;
     let t_id = get_hash(init_transaction_json_for_id);
     temp_voucher.transactions[0].t_id = t_id;
 
     // 4. Signiere die initiale Transaktion
     let transaction_to_sign_json = to_canonical_json(&temp_voucher.transactions[0])?;
-    let transaction_signature_hash = get_hash(&transaction_to_sign_json);
+    let transaction_signature_hash = get_hash(transaction_to_sign_json);
     let transaction_signature = sign_ed25519(creator_signing_key, transaction_signature_hash.as_bytes());
     temp_voucher.transactions[0].sender_signature = bs58::encode(transaction_signature.to_bytes()).into_string();
 
-    // 5. Generiere die finale Signatur des Erstellers für den gesamten Gutschein.
+    // 5. Generiere den finalen Hash für die voucher_id und die Signatur.
+    // Dies geschieht NACHDEM alle initialen Daten (inkl. signierter Transaktion) final sind.
     let voucher_json_for_signing = to_canonical_json(&temp_voucher)?;
     let voucher_hash_to_sign = get_hash(voucher_json_for_signing);
-    let creator_signature = sign_ed25519(creator_signing_key, voucher_hash_to_sign.as_bytes());
+    
+    // Setze die finale voucher_id.
+    temp_voucher.voucher_id = voucher_hash_to_sign.clone();
 
     // 6. Setze die finale Signatur in die Creator-Daten ein.
+    let creator_signature = sign_ed25519(creator_signing_key, voucher_hash_to_sign.as_bytes());
     temp_voucher.creator.signature = bs58::encode(creator_signature.to_bytes()).into_string();
 
     // 7. Gib den finalen, validen Gutschein zurück.

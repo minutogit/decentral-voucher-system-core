@@ -1,0 +1,49 @@
+# =======================================================
+# Standard-Definition für den "Silber-Umlauf-Gutschein"
+# =======================================================
+
+# Metadaten zur eindeutigen Identifikation des Standards.
+[metadata]
+name = "Silber-Umlauf-Gutschein"  # Offizieller Name.
+uuid = "SILVER-PAYMENT-V1-XXXX-YYYY" # Eindeutige ID.
+abbreviation = "Oz"                # Gängige Abkürzung für Unzen.
+
+# ---
+
+# Template-Werte, die bei der Erstellung direkt in einen neuen Gutschein kopiert werden.
+[template]
+description = "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von X Unzen Silber." #
+primary_redemption_type = "goods_or_services" #
+is_divisible = true                           # Gutscheine dieses Typs sind immer teilbar.
+
+# Vorgaben für den Nennwert.
+[template.nominal_value]
+unit = "Unzen" # Die Einheit ist durch den Standard fest vorgegeben.
+
+# Vorgaben für die Besicherung.
+[template.collateral]
+type = "Physisches Edelmetall" # Art der Besicherung.
+description = "Der Gutschein ist durch die entsprechende Menge an physischem Silber besichert." #
+redeem_condition = "Nur in Notfällen einlösbar, wenn der Aussteller die versprochene Leistung nicht erbringen kann." #
+
+# Vorgaben für die Bürgen.
+[template.guarantor_info]
+needed_count = 0 # Für diesen Standard sind keine Bürgen erforderlich.
+description = "Keine Bürgen erforderlich." #
+
+# ---
+
+# Validierungsregeln, die zur Überprüfung eines Gutscheins verwendet, aber nicht kopiert werden.
+[validation]
+allowed_transaction_types = ["init", "split", "redeem"]
+required_voucher_fields = [
+  "voucher_id",
+  "creation_date",
+  "creator.signature",
+  # Keine guarantor_signatures erforderlich.
+]
+
+# Spezifische Regeln für die Bürgen-Validierung.
+[validation.guarantor_rules]
+gender_specific = false
+genders_needed = []

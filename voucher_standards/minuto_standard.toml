@@ -1,0 +1,50 @@
+# =======================================================
+# Standard-Definition für den "Minuto-Gutschein"
+# =======================================================
+
+# Metadaten zur eindeutigen Identifikation des Standards.
+[metadata]
+name = "Minuto-Gutschein"             # Offizieller Name des Standards.
+uuid = "MINUTO-V1-XXXX-YYYY"           # Eindeutige ID des Standards.
+abbreviation = "Minuto"                # Gängige Abkürzung.
+
+# ---
+
+# Template-Werte, die bei der Erstellung direkt in einen neuen Gutschein kopiert werden.
+[template]
+# Die Beschreibung kann Platzhalter wie {{amount}} enthalten, die zur Laufzeit ersetzt werden.
+description = "Ein Gutschein für Waren oder Dienstleistungen im Wert von X Minuten qualitativer Leistung." #
+primary_redemption_type = "goods_or_services" #
+is_divisible = true                           # Gutscheine dieses Typs sind immer teilbar.
+
+# Vorgaben für den Nennwert.
+[template.nominal_value]
+unit = "Minuten" # Die Einheit ist durch den Standard fest vorgegeben.
+
+# Vorgaben für die Besicherung. Beim Minuto sind diese leer.
+[template.collateral]
+type = ""             #
+description = ""      #
+redeem_condition = "" #
+
+# Vorgaben für die Bürgen.
+[template.guarantor_info]
+needed_count = 2 #
+description = "Ein männlicher und ein weiblicher Bürge sind erforderlich." #
+
+# ---
+
+# Validierungsregeln, die zur Überprüfung eines Gutscheins verwendet, aber nicht kopiert werden.
+[validation]
+allowed_transaction_types = ["init", "split", "redeem"]
+required_voucher_fields = [
+  "voucher_id",
+  "creation_date",
+  "creator.signature",
+  "guarantor_signatures", # Bürgen-Signaturen sind für einen Minuto zwingend erforderlich.
+]
+
+# Spezifische Regeln für die Bürgen-Validierung.
+[validation.guarantor_rules]
+gender_specific = true      # Die Geschlechter der Bürgen werden geprüft.
+genders_needed = ["1", "2"] # Ein männlicher (1) und ein weiblicher (2) Bürge sind nötig.

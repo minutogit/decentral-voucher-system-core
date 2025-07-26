@@ -86,11 +86,13 @@ pub fn validate_voucher_against_standard(
     voucher: &Voucher,
     standard: &VoucherStandardDefinition,
 ) -> Result<(), ValidationError> {
+    // Die Reihenfolge der Prüfungen ist wichtig für aussagekräftige Fehlermeldungen.
+    // Zuerst logische und inhaltliche Konsistenz, dann die kryptographischen Prüfungen.
     verify_required_fields(voucher, standard)?;
-    verify_creator_signature(voucher)?;
-    verify_guarantor_requirements(voucher, standard)?;
     verify_consistency_with_standard(voucher, standard)?;
+    verify_guarantor_requirements(voucher, standard)?;
     verify_transactions(voucher)?;
+    verify_creator_signature(voucher)?; // Die kryptographische Gesamtprüfung zum Schluss.
 
     Ok(())
 }
@@ -98,7 +100,7 @@ pub fn validate_voucher_against_standard(
 /// Überprüft, ob alle im Standard als erforderlich markierten Felder im Gutschein vorhanden sind.
 fn verify_required_fields(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
     let voucher_value = serde_json::to_value(voucher).map_err(ValidationError::Serialization)?;
-    for path in &standard.required_voucher_fields {
+    for path in &standard.validation.required_voucher_fields {
         let mut current_value = &voucher_value;
         for key in path.split('.') {
             current_value = current_value.get(key).unwrap_or(&Value::Null);
@@ -113,17 +115,17 @@ fn verify_required_fields(voucher: &Voucher, standard: &VoucherStandardDefinitio
 /// Überprüft die Konsistenz der Gutscheindaten mit den Vorgaben des Standards.
 fn verify_consistency_with_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
     // Überprüfe die Einheit des Nennwerts
-    if voucher.nominal_value.unit != standard.unit {
+    if voucher.nominal_value.unit != standard.template.nominal_value.unit {
         return Err(ValidationError::IncorrectNominalValueUnit {
-            expected: standard.unit.clone(),
+            expected: standard.template.nominal_value.unit.clone(),
             found: voucher.nominal_value.unit.clone(),
         });
     }
 
     // Überprüfe die Teilbarkeit
-    if voucher.divisible != standard.is_divisible {
+    if voucher.divisible != standard.template.is_divisible {
         return Err(ValidationError::IncorrectDivisibility {
-            expected: standard.is_divisible,
+            expected: standard.template.is_divisible,
             found: voucher.divisible,
         });
     }
@@ -145,6 +147,10 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
     // Später hinzugefügte Signaturen (Bürgen, etc.) müssen für die Prüfung entfernt werden.
     let signature_b58 = voucher_to_verify.creator.signature.clone();
     voucher_to_verify.creator.signature = "".to_string();
+    // Die voucher_id selbst war auch Teil des Hashes, aber bei der Erstellung noch leer.
+    // Daher muss sie für die Verifizierung ebenfalls geleert werden, um den ursprünglichen
+    // Zustand exakt zu rekonstruieren.
+    voucher_to_verify.voucher_id = "".to_string();
     voucher_to_verify.guarantor_signatures.clear();
     voucher_to_verify.additional_signatures.clear();
 
@@ -170,7 +176,7 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
 
 /// Verifiziert die Signaturen der Bürgen gegen die Anforderungen des Standards.
 fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
-    let required_count = standard.guarantor_requirements.needed_count as usize;
+    let required_count = standard.template.guarantor_info.needed_count as usize;
     let actual_count = voucher.guarantor_signatures.len();
 
     // 1. Prüfe die Anzahl der Bürgen
@@ -227,9 +233,9 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
     }
 
     // 3. Prüfe geschlechtsspezifische Anforderungen, falls vorhanden
-    if standard.guarantor_requirements.gender_specific {
+    if standard.validation.guarantor_rules.gender_specific {
         // Erstelle eine Kopie der benötigten Geschlechter, um gefundene zu entfernen.
-        let mut needed_genders = standard.guarantor_requirements.genders_needed.to_vec();
+        let mut needed_genders = standard.validation.guarantor_rules.genders_needed.to_vec();
 
         for guarantor_signature in &voucher.guarantor_signatures {
             // Finde das Geschlecht des aktuellen Bürgen in der Liste der benötigten
