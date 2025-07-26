@@ -12,9 +12,9 @@ abbreviation = "Oz"                # Gängige Abkürzung für Unzen.
 
 # Template-Werte, die bei der Erstellung direkt in einen neuen Gutschein kopiert werden.
 [template]
-description = "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von X Unzen Silber." #
-primary_redemption_type = "goods_or_services" #
-is_divisible = true                           # Gutscheine dieses Typs sind immer teilbar.
+description = "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von {{amount}} Unzen Silber."
+primary_redemption_type = "goods_or_services"
+is_divisible = true
 
 # Vorgaben für den Nennwert.
 [template.nominal_value]

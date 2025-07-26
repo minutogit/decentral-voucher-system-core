@@ -12,10 +12,10 @@ abbreviation = "Minuto"                # Gängige Abkürzung.
 
 # Template-Werte, die bei der Erstellung direkt in einen neuen Gutschein kopiert werden.
 [template]
-# Die Beschreibung kann Platzhalter wie {{amount}} enthalten, die zur Laufzeit ersetzt werden.
-description = "Ein Gutschein für Waren oder Dienstleistungen im Wert von X Minuten qualitativer Leistung." #
-primary_redemption_type = "goods_or_services" #
-is_divisible = true                           # Gutscheine dieses Typs sind immer teilbar.
+# Die Beschreibung kann den Platzhalter {{amount}} enthalten, der zur Laufzeit ersetzt wird.
+description = "Ein Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Minuten qualitativer Leistung."
+primary_redemption_type = "goods_or_services"
+is_divisible = true
 
 # Vorgaben für den Nennwert.
 [template.nominal_value]

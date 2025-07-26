@@ -74,7 +74,6 @@ fn setup_creator() -> (SigningKey, Creator) {
 /// Erstellt die Basisdaten für einen Minuto-Gutschein.
 fn create_minuto_voucher_data(creator: Creator) -> NewVoucherData {
     NewVoucherData {
-        description: "Ein Test-Minuto".to_string(),
         years_valid: 1,
         non_redeemable_test_voucher: true,
         nominal_value: NominalValue {
@@ -150,6 +149,9 @@ fn test_full_creation_and_validation_cycle() {
     let mut voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
     assert!(!voucher.voucher_id.is_empty());
     assert!(!voucher.creator.signature.is_empty());
+    // Prüfe, ob die Beschreibung korrekt aus der Vorlage generiert wurde.
+    let expected_description = "Ein Gutschein für Waren oder Dienstleistungen im Wert von 60 Minuten qualitativer Leistung.";
+    assert_eq!(voucher.description, expected_description);
 
     // 3. Erste Validierung: Muss fehlschlagen, da Bürgen fehlen.
     let initial_validation_result = validate_voucher_against_standard(&voucher, &standard);

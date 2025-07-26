@@ -72,7 +72,6 @@ pub fn load_standard_definition(toml_str: &str) -> Result<VoucherStandardDefinit
 /// Eine Hilfsstruktur, die alle notwendigen Daten zur Erstellung eines neuen Gutscheins bündelt.
 /// Dies vereinfacht die Signatur der `create_voucher` Funktion.
 pub struct NewVoucherData {
-    pub description: String,
     pub years_valid: i32,
     pub non_redeemable_test_voucher: bool,
     pub nominal_value: NominalValue,
@@ -129,10 +128,14 @@ pub fn create_voucher(
     final_collateral.redeem_condition = standard_definition.template.collateral.redeem_condition.clone();
 
     // 2. Baue ein vorläufiges Voucher-Objekt, das zur Generierung von ID und Signatur verwendet wird.
+    // Die Beschreibung wird aus der Vorlage des Standards generiert und der Platzhalter {{amount}} ersetzt.
+    let description_template = standard_definition.template.description.clone().unwrap_or_default();
+    let final_description = description_template.replace("{{amount}}", &final_nominal_value.amount);
+
     let mut temp_voucher = Voucher {
         voucher_standard,
         voucher_id: "".to_string(),
-        description: data.description,
+        description: final_description,
         primary_redemption_type: standard_definition.template.primary_redemption_type.clone(),
         divisible: standard_definition.template.is_divisible,
         creation_date: creation_date.clone(),

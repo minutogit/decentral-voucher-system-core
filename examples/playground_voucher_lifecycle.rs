@@ -47,7 +47,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         organization: None, community: None, phone: None, email: None, url: None, service_offer: None, needs: None, coordinates: "0,0".into(),
     };
     let voucher_data = NewVoucherData {
-        description: "Gutschein für 60 Minuten Leistung".into(),
         years_valid: 1,
         non_redeemable_test_voucher: true,
         nominal_value: NominalValue {
@@ -64,6 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut voucher = create_voucher(voucher_data, &standard, &creator_priv)?;
     println!("✅ Gutschein erfolgreich erstellt.");
+    println!("   -> Die Beschreibung wurde aus der Vorlage generiert: \"{}\"", voucher.description);
 
     // Zeige die Rohdaten (kanonisches JSON), deren Hash die Creator-Signatur bildet.
     let mut raw_view = voucher.clone();
