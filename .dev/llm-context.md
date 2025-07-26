@@ -33,8 +33,13 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 
 ## 5. Kernkonzepte aus dem Paper (Zusammenfassung)
 Gutschein-Struktur: Das universelle Gutschein-Container-Format
-Ein Gutschein ist im Wesentlichen eine Textdatei (repräsentiert als JSON), die alle möglichen Informationen enthält, die ein Gutschein jemals haben könnte. Jede einzelne Gutscheininstitution wird in diesem einheitlichen JSON-Schema abgebildet. Die spezifischen Regeln und Eigenschaften eines Gutscheintyps (wie "Minuto-Gutschein" oder "Silber-Umlauf-Gutschein") werden in separaten Standard-Definitionen (voucher_standard_definitions) festgelegt, die der voucher_core-Bibliothek zur Laufzeit geladen werden.
-Diese Definitionen werden typischerweise als externe JSON-Dateien (z.B. aus einem `voucher_standards/`-Verzeichnis) bereitgestellt und zur Laufzeit geparst.
+Ein Gutschein ist im Wesentlichen eine Textdatei (repräsentiert als JSON), die alle möglichen Informationen enthält, die ein Gutschein jemals haben könnte. Jede einzelne Gutscheininstitution wird in diesem einheitlichen JSON-Schema abgebildet. Die spezifischen Regeln und Eigenschaften eines Gutscheintyps (wie "Minuto-Gutschein" oder "Silber-Umlauf-Gutschein") werden in separaten **Standard-Definitionen** (`voucher_standard_definitions`) festgelegt.
+
+Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_standards/`-Verzeichnis) bereitgestellt und zur Laufzeit geparst. Die TOML-Struktur ist klar in drei Blöcke unterteilt:
+- **`[metadata]`**: Enthält allgemeine Informationen wie Name und UUID des Standards.
+- **`[template]`**: Definiert Werte (z.B. die `unit` des Nennwerts), die bei der Erstellung eines neuen Gutscheins direkt in diesen kopiert werden.
+- **`[validation]`**: Beinhaltet Regeln (z.B. `required_voucher_fields`, `guarantor_rules`), die zur Überprüfung eines Gutscheins verwendet werden.
+
 ```
 {
   "voucher_standard": {
@@ -153,31 +158,35 @@ Die "Kette" besteht aktuell aus einer geordneten Liste von Transaktionen im `tra
 ```
 ├── Cargo.lock
 ├── Cargo.toml
-├── README.md
 ├── examples
 │   ├── playground_crypto_utils.rs
 │   ├── playground_utils.rs
 │   └── playground_voucher_lifecycle.rs
+├── output.txt
+├── README.md
 ├── src
+│   ├── examples
 │   ├── lib.rs
 │   ├── main.rs
 │   ├── models
 │   │   ├── mod.rs
 │   │   ├── voucher.rs
 │   │   └── voucher_standard_definition.rs
-│   └── services
-│       ├── crypto_utils.rs
-│       ├── mod.rs
-│       ├── utils.rs
-│       ├── voucher_manager.rs
-│       └── voucher_validation.rs
-├── voucher_standards
-│   ├── minuto_standard.json
-│   └── silver_standard.json
-└── tests
-    ├── test_crypto_utils.rs
-    ├── test_utils.rs
-    └── test_voucher_lifecycle.rs
+│   ├── services
+│   │   ├── crypto_utils.rs
+│   │   ├── mod.rs
+│   │   ├── utils.rs
+│   │   ├── voucher_manager.rs
+│   │   └── voucher_validation.rs
+│   └── utilities
+├── tests
+│   ├── test_crypto_utils.rs
+│   ├── test_utils.rs
+│   └── test_voucher_lifecycle.rs
+├── todo.txt
+└── voucher_standards
+    ├── minuto_standard.toml
+    └── silver_standard.toml
 ```
 
 ## 7. Implementierte Kernfunktionen

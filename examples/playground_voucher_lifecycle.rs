@@ -13,40 +13,21 @@
 use voucher_lib::{
     create_voucher, crypto_utils, load_standard_definition, to_canonical_json, to_json,
     validate_voucher_against_standard, Address, Collateral, Creator, GuarantorSignature,
-    NewVoucherData, NominalValue, ValidationError, Voucher, VoucherStandardDefinition,
+    NewVoucherData, NominalValue, ValidationError, VoucherStandardDefinition,
 };
-
-// Test-Standard, um nicht jedes Mal die Datei laden zu müssen.
-const MINUTO_STANDARD_JSON: &str = r#"{
-  "name": "Minuto-Gutschein",
-  "uuid": "MINUTO-V1-XXXX-YYYY",
-  "description": "Ein Gutschein für Waren oder Dienstleistungen im Wert von X Minuten qualitativer Leistung, besichert durch eine Gemeinschaft.",
-  "unit": "Minuten",
-  "abbreviation": "Minuto",
-  "is_divisible": true,
-  "primary_redemption_type": "goods_or_services",
-  "guarantor_requirements": {
-    "needed_count": 2,
-    "gender_specific": true,
-    "genders_needed": ["1", "2"],
-    "description": "Ein männlicher und ein weiblicher Bürge sind erforderlich."
-  },
-  "collateral": {
-    "type": "Community-Besicherung",
-    "description": "Besichert durch das Vertrauen und die Leistung der Minuto-Community.",
-    "redeem_condition": "Keine direkte physische Einlösung."
-  },
-  "required_voucher_fields": ["voucher_id", "creation_date", "creator.signature", "guarantor_signatures"],
-  "allowed_transaction_types": ["init", "split", "redeem"]
-}"#;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- VOUCHER LIFECYCLE PLAYGROUND ---");
 
     // --- SETUP ---
     // Standard laden und Schlüsselpaare für alle Teilnehmer erzeugen
-    let standard: VoucherStandardDefinition = load_standard_definition(MINUTO_STANDARD_JSON)?;
-    println!("\n✅ Standard '{}' erfolgreich geladen.", standard.name);
+    // Lade den Standard aus der TOML-Datei
+    let standard_toml = std::fs::read_to_string("voucher_standards/minuto_standard.toml")?;
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml)?;
+    println!(
+        "\n✅ Standard '{}' erfolgreich geladen.",
+        standard.metadata.name
+    );
 
     let (creator_pub, creator_priv) =
         crypto_utils::generate_ed25519_keypair_for_tests(Some("creator"));
@@ -86,7 +67,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Zeige die Rohdaten (kanonisches JSON), deren Hash die Creator-Signatur bildet.
     let mut raw_view = voucher.clone();
+    // Um die signierten Daten anzuzeigen, müssen wir den Zustand exakt rekonstruieren:
     raw_view.creator.signature = "".to_string();
+    raw_view.voucher_id = "".to_string();
+    raw_view.guarantor_signatures.clear(); // Waren bei Erstellung leer
+    raw_view.additional_signatures.clear(); // Waren bei Erstellung leer
     println!("   - Rohdaten (kanonisches JSON), die vom Ersteller signiert wurden:\n     {}", to_canonical_json(&raw_view)?);
 
     println!("\nSchön formatierter Gutschein (aktueller Zustand):");
