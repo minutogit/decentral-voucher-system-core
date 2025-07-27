@@ -13,7 +13,7 @@
 use voucher_lib::{
     create_voucher, crypto_utils, load_standard_definition, to_canonical_json, to_json,
     validate_voucher_against_standard, Address, Collateral, Creator, GuarantorSignature,
-    NewVoucherData, NominalValue, ValidationError, VoucherStandardDefinition,
+    NewVoucherData, NominalValue, ValidationError, VoucherManagerError, VoucherStandardDefinition,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,10 +34,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("guarantor1"));
     let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("guarantor2"));
 
-    // --- SCHRITT 1: Gutschein erstellen ---
-    println!("\n--- SCHRITT 1: Erstelle einen neuen Minuto-Gutschein ---");
+    // Erstelle die Creator-Daten, die für beide Versuche (den fehlschlagenden und den erfolgreichen) verwendet werden.
     let creator_id = crypto_utils::create_user_id(&creator_pub, Some("cr"))?;
-    let creator_data = Creator {
+    let base_creator_data = Creator {
         id: creator_id,
         first_name: "Max".into(),
         last_name: "Creator".into(),
@@ -46,8 +45,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         signature: "".into(), // wird von `create_voucher` gefüllt
         organization: None, community: None, phone: None, email: None, url: None, service_offer: None, needs: None, coordinates: "0,0".into(),
     };
+
+    // --- (NEU) SCHRITT 0: Versuch, einen Gutschein mit ungültiger Dauer zu erstellen ---
+    println!("\n--- SCHRITT 0: Versuch, einen Gutschein mit zu kurzer Gültigkeit zu erstellen (erwarteter Fehler) ---");
+    let invalid_voucher_data = NewVoucherData {
+        validity_duration: Some("P30D".to_string()), // Zu kurz, Minuto-Standard erfordert P90D
+        non_redeemable_test_voucher: true,
+        nominal_value: NominalValue { unit: "".into(), amount: "30".into(), abbreviation: "".into(), description: "Leistung".into() },
+        collateral: Collateral { type_: "".into(), unit: "".into(), amount: "".into(), abbreviation: "".into(), description: "".into(), redeem_condition: "".into() },
+        creator: base_creator_data.clone(),
+    };
+    match create_voucher(invalid_voucher_data, &standard, &creator_priv) {
+        Err(VoucherManagerError::InvalidValidityDuration(reason)) => {
+            println!("✅ Erfolg! Erstellung wie erwartet fehlgeschlagen.");
+            println!("   Grund: {}", reason);
+        }
+        Ok(_) => eprintln!("❌ Fehler: Erstellung war unerwartet erfolgreich."),
+        Err(e) => eprintln!("❌ Fehler: Unerwarteter Fehler bei der Erstellung: {}", e),
+    }
+
+    // --- SCHRITT 1: Gültigen Gutschein erstellen ---
+    println!("\n--- SCHRITT 1: Erstelle einen neuen, gültigen Minuto-Gutschein ---");
     let voucher_data = NewVoucherData {
-        years_valid: 1,
+        validity_duration: Some("P5Y".to_string()), // Gültigkeit von 2 Jahren
         non_redeemable_test_voucher: true,
         nominal_value: NominalValue {
             unit: "".to_string(), // Wird vom Standard überschrieben
@@ -59,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             type_: "".to_string(), // Wird vom Standard überschrieben
             unit: "".to_string(), amount: "".to_string(), abbreviation: "".to_string(), description: "".to_string(), redeem_condition: "".to_string(),
         },
-        creator: creator_data,
+        creator: base_creator_data,
     };
     let mut voucher = create_voucher(voucher_data, &standard, &creator_priv)?;
     println!("✅ Gutschein erfolgreich erstellt.");

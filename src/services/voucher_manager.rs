@@ -110,26 +110,28 @@ pub fn create_voucher(
         .or(standard_definition.template.default.default_validity_duration.as_deref())
         .ok_or_else(|| VoucherManagerError::Generic("No validity duration specified and no default found in standard.".to_string()))?;
 
-    // 2. Berechne das `valid_until`-Datum.
-    let mut valid_until_dt = add_iso8601_duration(creation_dt, duration_str)?;
+    // 2. Berechne das initiale `valid_until`-Datum.
+    let initial_valid_until_dt = add_iso8601_duration(creation_dt, duration_str)?;
 
-    // 3. Wende die Rundungsregel an, falls im Standard definiert.
-    if let Some(rounding_str) = &standard_definition.template.fixed.round_up_validity_to {
-        valid_until_dt = round_up_date(valid_until_dt, rounding_str)?;
-    }
-    let valid_until_str = valid_until_dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
-
-    // 4. PRÜFUNG: Stelle sicher, dass die berechnete Dauer die Mindestanforderung erfüllt.
+    // 3. PRÜFUNG: Stelle sicher, dass die Dauer die Mindestanforderung erfüllt, BEVOR gerundet wird.
     if let Some(min_duration_str) = &standard_definition.validation.issuance_minimum_validity_duration {
         let min_duration_dt = add_iso8601_duration(creation_dt, min_duration_str)?;
-        if valid_until_dt < min_duration_dt {
+        if initial_valid_until_dt < min_duration_dt {
             return Err(VoucherManagerError::InvalidValidityDuration(format!(
-                "Calculated validity ({}) is less than the required minimum ({}).",
-                valid_until_dt.to_rfc3339(),
+                "Initial validity ({}) is less than the required minimum ({}).",
+                initial_valid_until_dt.to_rfc3339(),
                 min_duration_dt.to_rfc3339()
             )));
         }
     }
+
+    // 4. Wende die Rundungsregel an, falls vorhanden, NACHDEM die Prüfung bestanden wurde.
+    let final_valid_until_dt = if let Some(rounding_str) = &standard_definition.template.fixed.round_up_validity_to {
+        round_up_date(initial_valid_until_dt, rounding_str)?
+    } else {
+        initial_valid_until_dt
+    };
+    let valid_until_str = final_valid_until_dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
 
     // 5. Erstelle die initiale "init" Transaktion.
     let init_transaction = Transaction {

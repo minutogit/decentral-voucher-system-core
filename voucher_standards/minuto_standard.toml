@@ -22,7 +22,7 @@ round_up_validity_to = "P1Y" # Gültigkeit auf Jahresende aufrunden.
 
 # Vorgaben für den Nennwert.
 [template.fixed.nominal_value]
-unit = "Minuten" # Die Einheit ist durch den Standard fest vorgegeben.
+unit = "Minuto" # Die Einheit ist durch den Standard fest vorgegeben.
 
 # Vorgaben für die Besicherung. Beim Minuto sind diese leer.
 [template.fixed.collateral]
@@ -36,11 +36,11 @@ needed_count = 2 #
 description = "Ein männlicher und ein weiblicher Bürge sind erforderlich." #
 
 [template.default]
-default_validity_duration = "P2Y" # Standard-Gültigkeit von 2 Jahren.
+default_validity_duration = "P5Y" # Standard-Gültigkeit von 5 Jahren.
 
 # Validierungsregeln, die zur Überprüfung eines Gutscheins verwendet, aber nicht kopiert werden.
 [validation]
-issuance_minimum_validity_duration = "P90D" # Mindestgültigkeit bei Ausgabe: 90 Tage.
+issuance_minimum_validity_duration = "P3Y" # Mindestgültigkeit bei Ausgabe: 3 Jahre.
 allowed_transaction_types = ["init", "split", "redeem"]
 required_voucher_fields = [
   "voucher_id",

@@ -76,7 +76,8 @@ fn setup_creator() -> (SigningKey, Creator) {
 fn create_minuto_voucher_data(creator: Creator) -> NewVoucherData {
     NewVoucherData {
         // Anstelle von `years_valid` wird nun die ISO 8601-Dauer verwendet.
-        validity_duration: Some("P1Y".to_string()),
+        // Wir verwenden P4Y, da dies die neue Mindestanforderung von P3Y erfüllt.
+        validity_duration: Some("P4Y".to_string()),
         non_redeemable_test_voucher: true,
         nominal_value: NominalValue {
             // Einheit und Abkürzung werden später vom Standard überschrieben.
@@ -151,8 +152,8 @@ fn test_full_creation_and_validation_cycle() {
     let mut voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
     assert!(!voucher.voucher_id.is_empty());
     assert!(!voucher.creator.signature.is_empty());
-    // Prüfe, ob die Beschreibung korrekt aus der Vorlage generiert wurde.
-    assert_eq!(voucher.standard_minimum_issuance_validity, "P90D");
+    // Prüfe die neuen Werte, die aus dem geänderten Standard kommen.
+    assert_eq!(voucher.standard_minimum_issuance_validity, "P3Y");
     // Prüfe, ob das Gültigkeitsdatum korrekt auf das Jahresende gerundet wurde.
     assert!(voucher.valid_until.contains("-12-31T23:59:59"));
     let expected_description = "Ein Gutschein für Waren oder Dienstleistungen im Wert von 60 Minuten qualitativer Leistung.";
@@ -342,11 +343,16 @@ fn test_canonical_json_is_deterministic_and_sorted() {
 
     // 4. Teste die kanonische Serialisierung an einem statischen Teil des Gutscheins.
     // Das Ergebnis muss immer alphabetisch sortierte Schlüssel haben,
-    // z.B. "abbreviation" vor "amount", "amount" vor "description" etc.
-    // Dies bestätigt den "sorted" Aspekt des Testnamens.
-    let canonical_json = to_canonical_json(&voucher1.nominal_value).unwrap(); //
-    let expected_start = r#"{"abbreviation":"Minuto","amount":"60","description":"Qualitative Leistung","unit":"Minuten"}"#;
-    assert_eq!(canonical_json, expected_start);
+    // z.B. "abbreviation" vor "amount".
+    let canonical_json = to_canonical_json(&voucher1.nominal_value).unwrap();
+
+    // Erzeuge den Erwartungswert dynamisch aus dem geladenen Standard,
+    // anstatt einen hartkodierten String zu verwenden.
+    let expected_json = format!(
+        r#"{{"abbreviation":"{}","amount":"60","description":"Qualitative Leistung","unit":"{}"}}"#,
+        standard.metadata.abbreviation, standard.template.fixed.nominal_value.unit
+    );
+    assert_eq!(canonical_json, expected_json);
     println!("Canonical Nominal Value: {}", canonical_json);
 }
 
@@ -424,9 +430,9 @@ fn test_validity_duration_rules() {
     let (signing_key, creator) = setup_creator();
 
     // 2. Testfall: Versuch, einen Gutschein mit zu kurzer Gültigkeit zu erstellen.
-    // Der Minuto-Standard erfordert P90D. Wir versuchen es mit P30D.
+    // Der Minuto-Standard erfordert jetzt P3Y. Wir versuchen es mit P2Y.
     let mut short_duration_data = create_minuto_voucher_data(creator.clone());
-    short_duration_data.validity_duration = Some("P30D".to_string());
+    short_duration_data.validity_duration = Some("P2Y".to_string());
     let creation_result = create_voucher(short_duration_data, &standard, &signing_key);
 
     assert!(
@@ -462,9 +468,9 @@ fn test_validity_duration_rules() {
     ));
 
     // 4. Testfall: Nicht übereinstimmende Mindestgültigkeitsregel zwischen Gutschein und Standard
-    let mut voucher2 = create_voucher(create_minuto_voucher_data(creator), &standard, &signing_key).unwrap();
+    let mut voucher2 = create_voucher(create_minuto_voucher_data(creator.clone()), &standard, &signing_key).unwrap();
     // Manipuliere die im Gutschein gespeicherte Regel
-    voucher2.standard_minimum_issuance_validity = "P365D".to_string(); // Standard erwartet P90D
+    voucher2.standard_minimum_issuance_validity = "P1Y".to_string(); // Standard erwartet P3Y
     let validation_result2 = validate_voucher_against_standard(&voucher2, &standard);
     assert!(matches!(
         validation_result2.unwrap_err(),
