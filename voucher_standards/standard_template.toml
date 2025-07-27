@@ -1,0 +1,160 @@
+# =================================================================================
+# Vorlage für Gutschein-Standard-Definitionen (standard_template.toml)
+# =================================================================================
+#
+# Diese Datei dient als umfassende Dokumentation und Kopiervorlage zur Erstellung
+# neuer Gutschein-Standards. Sie erklärt alle verfügbaren Felder und Regeln.
+#
+# Ein Standard ist in drei Hauptblöcke unterteilt:
+# 1. [metadata]:    Beschreibt den Standard selbst.
+# 2. [template]:    Definiert Werte, die als Vorlage für neue Gutscheine dienen.
+# 3. [validation]:  Legt Regeln fest, anhand derer Gutscheine validiert werden.
+#
+
+# =================================================================================
+# Block 1: Metadaten
+# =================================================================================
+#
+# Enthält allgemeine, identifizierende Informationen über den Standard.
+#
+[metadata]
+# (String) Der offizielle, menschenlesbare Name des Standards.
+name = "Name des Standards (z.B. Regional-Taler)"
+
+# (String) Eine global eindeutige ID für diesen Standard.
+# Es wird empfohlen, hier eine UUID zu verwenden.
+uuid = "STANDARD-UUID-V1-XXXX-YYYY"
+
+# (String) Eine gängige Abkürzung für die Nennwert-Einheit des Gutscheins.
+# Diese wird bei der Erstellung in das `abbreviation`-Feld des Nennwerts kopiert.
+abbreviation = "RT"
+
+
+# =================================================================================
+# Block 2: Template (Vorlage)
+# =================================================================================
+#
+# Definiert Werte, die bei der Erstellung eines neuen Gutscheins als Vorlage dienen.
+# Der Block ist unterteilt in `fixed` (feste, unveränderliche Werte) und
+# `default` (überschreibbare Standardwerte).
+#
+
+# ---------------------------------------------------------------------------------
+# Sektion 2a: Feste Template-Werte
+# ---------------------------------------------------------------------------------
+#
+# Alle hier definierten Werte werden 1:1 in jeden neuen Gutschein kopiert und
+# können vom Ersteller des Gutscheins NICHT überschrieben werden.
+#
+[template.fixed]
+# (String) Eine menschenlesbare Beschreibung des Gutscheins.
+# Der Platzhalter {{amount}} wird bei der Erstellung automatisch durch den
+# Nennwert des Gutscheins ersetzt.
+description = "Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Einheiten."
+
+# (String) Definiert den primären Zweck, für den der Gutschein eingelöst werden kann.
+# z.B. "goods_or_services", "specific_product", "community_work"
+primary_redemption_type = "goods_or_services"
+
+# (Boolean) Gibt an, ob der Gutschein teilbar ist (`true`) oder nur als
+# Ganzes eingelöst werden kann (`false`).
+is_divisible = true
+
+# (String, Optional) Regel zur Aufrundung des Gültigkeitsdatums.
+# Wenn angegeben, wird das berechnete `valid_until`-Datum auf das Ende des
+# jeweiligen Zeitraums aufgerundet.
+# Mögliche Werte (ISO 8601 Duration Format): "P1D" (Tagesende), "P1M" (Monatsende), "P1Y" (Jahresende).
+# Wenn das Feld fehlt, wird das exakte Datum ohne Rundung verwendet.
+round_up_validity_to = "P1M"
+
+
+# [template.fixed.nominal_value]
+# Definiert die festen Eigenschaften des Nennwerts.
+[template.fixed.nominal_value]
+# (String) Die Einheit des Nennwerts, die für diesen Standard zwingend ist.
+# z.B. "Minuten", "Unzen", "Regional-Taler"
+unit = "Regional-Taler"
+
+
+# [template.fixed.collateral]
+# Definiert die festen Eigenschaften der Besicherung.
+[template.fixed.collateral]
+# (String) Die Art der Besicherung.
+# z.B. "Physisches Edelmetall", "Community-Besicherung", "Fiat-Währung", "Keine"
+type = "Keine"
+
+# (String) Eine allgemeine Beschreibung der Besicherung.
+description = "Dieser Gutschein ist durch das Vertrauen der Gemeinschaft besichert."
+
+# (String) **Extrem wichtig:** Die Bedingungen, unter denen die Besicherung
+# eingefordert werden kann (z.B. eine Notfallklausel).
+redeem_condition = "Nicht zutreffend."
+
+
+# [template.fixed.guarantor_info]
+# Definiert die festen Anforderungen an die Bürgen.
+[template.fixed.guarantor_info]
+# (Integer) Die Anzahl der benötigten Bürgen für diesen Gutschein.
+# Bei `0` ist kein Bürge erforderlich.
+needed_count = 2
+
+# (String) Eine menschenlesbare Beschreibung der Bürgenanforderungen.
+description = "Zwei Bürgen aus der Community sind erforderlich."
+
+
+# ---------------------------------------------------------------------------------
+# Sektion 2b: Überschreibbare Standardwerte (Defaults)
+# ---------------------------------------------------------------------------------
+#
+# Alle hier definierten Werte dienen als Vorschläge. Wenn der Ersteller eines
+# Gutscheins keinen eigenen Wert für ein entsprechendes Feld angibt, wird dieser
+# Standardwert verwendet.
+#
+[template.default]
+# (String, Optional) Die Standard-Gültigkeitsdauer, wenn vom Ersteller keine
+# eigene Dauer angegeben wird.
+# Format: ISO 8601 Duration (z.B. "P5Y" für 5 Jahre, "P6M" für 6 Monate).
+default_validity_duration = "P5Y"
+
+
+# =================================================================================
+# Block 3: Validierungsregeln
+# =================================================================================
+#
+# Legt die Regeln fest, nach denen ein Gutschein dieses Standards validiert wird.
+# Diese Regeln werden zur Überprüfung herangezogen, aber nicht in den Gutschein kopiert.
+#
+[validation]
+# (String, Optional) Legt eine unveränderliche Mindestgültigkeitsdauer fest,
+# die ein Gutschein bei seiner Erstellung haben muss.
+# Verhindert, dass Gutscheine mit zu kurzer Laufzeit ausgestellt werden.
+# Format: ISO 8601 Duration (z.B. "P90D" für 90 Tage).
+issuance_minimum_validity_duration = "P1Y"
+
+# (Array von Strings) Definiert die erlaubten Transaktionstypen für diesen Standard.
+# Mögliche Werte: "init", "split", "redeem", "transfer", etc.
+allowed_transaction_types = ["init", "split", "redeem"]
+
+# (Array von Strings) Liste aller Felder, die in einem Gutschein dieses Standards
+# zwingend vorhanden sein müssen. Die Pfade werden mit Punkt-Notation angegeben.
+required_voucher_fields = [
+    "voucher_id",
+    "creation_date",
+    "valid_until",
+    "creator.signature",
+    "guarantor_signatures", # Wenn Bürgen erforderlich sind, muss dieses Feld vorhanden sein.
+    "creator.email",        # Beispiel: Erfordert, dass der Ersteller eine E-Mail angibt.
+]
+
+
+# [validation.guarantor_rules]
+# Definiert spezifische Validierungsregeln für die Bürgen.
+[validation.guarantor_rules]
+# (Boolean) Wenn `true`, werden die Geschlechter der Bürgen überprüft.
+gender_specific = true
+
+# (Array von Strings) Wenn `gender_specific = true`, definiert diese Liste,
+# welche Geschlechter in welcher Anzahl benötigt werden.
+# Die Codes basieren auf ISO 5218: "1" (männlich), "2" (weiblich).
+# Beispiel: ["1", "2"] erfordert einen männlichen und einen weiblichen Bürgen.
+genders_needed = ["1", "2"]
