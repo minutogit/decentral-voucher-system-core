@@ -10,31 +10,36 @@ abbreviation = "Oz"                # Gängige Abkürzung für Unzen.
 
 # ---
 
-# Template-Werte, die bei der Erstellung direkt in einen neuen Gutschein kopiert werden.
-[template]
+# Template-Werte, die bei der Erstellung in einen neuen Gutschein kopiert werden.
+# Aufgeteilt in feste (nicht überschreibbare) und Standardwerte (überschreibbar).
+
+[template.fixed]
 description = "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von {{amount}} Unzen Silber."
 primary_redemption_type = "goods_or_services"
 is_divisible = true
+# Kein 'round_up_validity_to', daher exaktes Datum.
 
 # Vorgaben für den Nennwert.
-[template.nominal_value]
+[template.fixed.nominal_value]
 unit = "Unzen" # Die Einheit ist durch den Standard fest vorgegeben.
 
 # Vorgaben für die Besicherung.
-[template.collateral]
+[template.fixed.collateral]
 type = "Physisches Edelmetall" # Art der Besicherung.
 description = "Der Gutschein ist durch die entsprechende Menge an physischem Silber besichert." #
 redeem_condition = "Nur in Notfällen einlösbar, wenn der Aussteller die versprochene Leistung nicht erbringen kann." #
 
 # Vorgaben für die Bürgen.
-[template.guarantor_info]
+[template.fixed.guarantor_info]
 needed_count = 0 # Für diesen Standard sind keine Bürgen erforderlich.
 description = "Keine Bürgen erforderlich." #
 
-# ---
+[template.default]
+default_validity_duration = "P5Y" # Standard-Gültigkeit von 5 Jahren.
 
 # Validierungsregeln, die zur Überprüfung eines Gutscheins verwendet, aber nicht kopiert werden.
 [validation]
+issuance_minimum_validity_duration = "P1Y" # Mindestgültigkeit bei Ausgabe: 1 Jahr.
 allowed_transaction_types = ["init", "split", "redeem"]
 required_voucher_fields = [
   "voucher_id",

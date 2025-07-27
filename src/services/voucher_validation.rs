@@ -9,6 +9,7 @@ use crate::services::crypto_utils::{
     get_hash, get_pubkey_from_user_id, verify_ed25519, GetPubkeyError,
 };
 use crate::services::utils::to_canonical_json;
+use chrono::{DateTime, Utc};
 use ed25519_dalek::Signature;
 use serde_json::Value;
 use std::fmt;
@@ -38,6 +39,12 @@ pub enum ValidationError {
     InvalidTransactionSignature(String),
     /// Die User ID eines Senders in einer Transaktion ist ungültig.
     InvalidTransactionSenderId(String),
+    /// Die im Gutschein gespeicherte Mindestgültigkeit stimmt nicht mit dem Standard überein.
+    MismatchedMinimumValidity { expected: String, found: String },
+    /// Die tatsächliche Gültigkeitsdauer des Gutscheins ist kürzer als vom Standard gefordert.
+    ValidityDurationTooShort { required: String, actual: String },
+    /// Ein Datum im Gutschein konnte nicht geparst werden.
+    DateParseError(String),
     /// Ein Fehler bei der JSON-Verarbeitung während der Validierung.
     Serialization(serde_json::Error),
     /// Ein Fehler bei der Dekodierung einer Signatur (z.B. Base58).
@@ -66,6 +73,13 @@ impl fmt::Display for ValidationError {
             Self::InvalidGuarantorSignature(id) => write!(f, "Invalid signature for guarantor {}", id),
             Self::InvalidTransactionSignature(t_id) => write!(f, "Invalid signature for transaction {}", t_id),
             Self::InvalidTransactionSenderId(id) => write!(f, "Invalid sender ID in transaction: {}", id),
+            Self::MismatchedMinimumValidity { expected, found } => {
+                write!(f, "Voucher's stored minimum validity rule ('{}') does not match standard's rule ('{}')", found, expected)
+            }
+            Self::ValidityDurationTooShort { required, actual } => {
+                write!(f, "Actual voucher validity duration is too short. Required at least: {}, Actual: {}", required, actual)
+            }
+            Self::DateParseError(e) => write!(f, "Failed to parse date: {}", e),
             Self::Serialization(e) => write!(f, "JSON serialization error during validation: {}", e),
             Self::SignatureDecodeError(e) => write!(f, "Failed to decode signature: {}", e),
         }
@@ -90,6 +104,7 @@ pub fn validate_voucher_against_standard(
     // Zuerst logische und inhaltliche Konsistenz, dann die kryptographischen Prüfungen.
     verify_required_fields(voucher, standard)?;
     verify_consistency_with_standard(voucher, standard)?;
+    verify_validity_duration(voucher, standard)?;
     verify_guarantor_requirements(voucher, standard)?;
     verify_transactions(voucher)?;
     verify_creator_signature(voucher)?; // Die kryptographische Gesamtprüfung zum Schluss.
@@ -115,15 +130,15 @@ fn verify_required_fields(voucher: &Voucher, standard: &VoucherStandardDefinitio
 /// Überprüft die Konsistenz der Gutscheindaten mit den Vorgaben des Standards.
 fn verify_consistency_with_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
     // Überprüfe die Einheit des Nennwerts
-    if voucher.nominal_value.unit != standard.template.nominal_value.unit {
+    if voucher.nominal_value.unit != standard.template.fixed.nominal_value.unit {
         return Err(ValidationError::IncorrectNominalValueUnit {
-            expected: standard.template.nominal_value.unit.clone(),
+            expected: standard.template.fixed.nominal_value.unit.clone(),
             found: voucher.nominal_value.unit.clone(),
         });
     }
 
     // Überprüfe die Teilbarkeit
-    if voucher.divisible != standard.template.is_divisible {
+    if voucher.divisible != standard.template.fixed.is_divisible {
         return Err(ValidationError::IncorrectDivisibility {
             expected: standard.template.is_divisible,
             found: voucher.divisible,
@@ -132,6 +147,55 @@ fn verify_consistency_with_standard(voucher: &Voucher, standard: &VoucherStandar
 
     // Weitere Konsistenzprüfungen (z.B. für collateral) können hier hinzugefügt werden.
     Ok(())
+}
+
+/// Verifiziert, dass die Gültigkeitsdauer des Gutscheins den Regeln des Standards entspricht.
+fn verify_validity_duration(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
+    let standard_min_duration = standard.validation.issuance_minimum_validity_duration.clone().unwrap_or_default();
+
+    // 1. Prüfe, ob die im Gutschein gespeicherte Regel mit der aktuellen Regel des Standards übereinstimmt.
+    //    Dies verhindert, dass ein Gutschein gegen eine veraltete/andere Standard-Version validiert wird.
+    if voucher.standard_minimum_issuance_validity != standard_min_duration {
+        return Err(ValidationError::MismatchedMinimumValidity {
+            expected: standard_min_duration,
+            found: voucher.standard_minimum_issuance_validity.clone(),
+        });
+    }
+
+    // Wenn keine Mindestdauer im Standard definiert ist, sind wir hier fertig.
+    if standard_min_duration.is_empty() {
+        return Ok(());
+    }
+
+    // 2. Parse die Daten aus dem Gutschein.
+    let creation_dt = DateTime::parse_from_rfc3339(&voucher.creation_date)
+        .map_err(|e| ValidationError::DateParseError(e.to_string()))?
+        .with_timezone(&Utc);
+
+    let valid_until_dt = DateTime::parse_from_rfc3339(&voucher.valid_until)
+        .map_err(|e| ValidationError::DateParseError(e.to_string()))?
+        .with_timezone(&Utc);
+
+    // 3. Berechne das erforderliche Mindest-Gültigkeitsdatum.
+    let required_valid_until = add_iso8601_duration_for_validation(creation_dt, &standard_min_duration)?;
+
+    // 4. Vergleiche das tatsächliche Datum mit dem erforderlichen Datum.
+    if valid_until_dt < required_valid_until {
+        return Err(ValidationError::ValidityDurationTooShort {
+            required: required_valid_until.to_rfc3339(),
+            actual: valid_until_dt.to_rfc3339(),
+        });
+    }
+
+    Ok(())
+}
+
+/// Eine eigenständige Hilfsfunktion, die `add_iso8601_duration` aus dem `voucher_manager` spiegelt.
+fn add_iso8601_duration_for_validation(start_date: DateTime<Utc>, duration_str: &str) -> Result<DateTime<Utc>, ValidationError> {
+     if !duration_str.starts_with('P') || duration_str.len() < 3 { return Err(ValidationError::DateParseError(format!("Invalid ISO 8601 duration format: {}", duration_str))); }
+    let (value_str, unit) = duration_str.split_at(duration_str.len() - 1);
+    let value: u32 = value_str[1..].parse().map_err(|_| ValidationError::DateParseError(format!("Invalid number in duration: {}", duration_str)))?;
+    match unit { "Y" => Ok(start_date + chrono::Duration::days(i64::from(value) * 365)), "M" => Ok(start_date + chrono::Duration::days(i64::from(value) * 30)), "D" => Ok(start_date + chrono::Duration::days(i64::from(value))), _ => Err(ValidationError::DateParseError(format!("Unsupported duration unit in: {}", duration_str))), }
 }
 
 /// Verifiziert die Signatur des Erstellers.
@@ -176,7 +240,7 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
 
 /// Verifiziert die Signaturen der Bürgen gegen die Anforderungen des Standards.
 fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
-    let required_count = standard.template.guarantor_info.needed_count as usize;
+    let required_count = standard.template.fixed.guarantor_info.needed_count as usize;
     let actual_count = voucher.guarantor_signatures.len();
 
     // 1. Prüfe die Anzahl der Bürgen

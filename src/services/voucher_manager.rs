@@ -3,11 +3,12 @@ use crate::models::voucher::{
 };
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::crypto_utils::{get_hash, sign_ed25519};
-use crate::services::utils::{get_current_timestamp, get_timestamp, to_canonical_json};
+use crate::services::utils::{get_current_timestamp, to_canonical_json};
 
 use ed25519_dalek::SigningKey;
 use toml::de::Error as TomlError;
 use serde_json;
+use chrono::{DateTime, Utc, Datelike, TimeZone};
 use std::fmt;
 
 // ... (Der Fehler-Enum und die Funktionen from_json, to_json, load_standard_definition bleiben unverändert) ...
@@ -20,6 +21,8 @@ pub enum VoucherManagerError {
     TomlDeserialization(TomlError),
     /// Ein allgemeiner Fehler mit einer Beschreibung.
     Generic(String),
+    /// Die angegebene Gültigkeitsdauer erfüllt nicht die Mindestanforderungen des Standards.
+    InvalidValidityDuration(String),
 }
 
 // Implementiert die Konvertierung von serde_json::Error in unseren benutzerdefinierten Fehlertyp.
@@ -42,6 +45,7 @@ impl fmt::Display for VoucherManagerError {
             VoucherManagerError::TomlDeserialization(e) => write!(f, "TOML Deserialization Error: {}", e),
             VoucherManagerError::Serialization(e) => write!(f, "Serialization Error: {}", e),
             VoucherManagerError::Generic(s) => write!(f, "Voucher Manager Error: {}", s),
+            VoucherManagerError::InvalidValidityDuration(s) => write!(f, "Invalid validity duration: {}", s),
         }
     }
 }
@@ -72,7 +76,8 @@ pub fn load_standard_definition(toml_str: &str) -> Result<VoucherStandardDefinit
 /// Eine Hilfsstruktur, die alle notwendigen Daten zur Erstellung eines neuen Gutscheins bündelt.
 /// Dies vereinfacht die Signatur der `create_voucher` Funktion.
 pub struct NewVoucherData {
-    pub years_valid: i32,
+    /// Eine vom Ersteller optional angegebene Gültigkeitsdauer im ISO 8601 Duration Format (z.B. "P1Y").
+    pub validity_duration: Option<String>,
     pub non_redeemable_test_voucher: bool,
     pub nominal_value: NominalValue,
     pub collateral: Collateral,
@@ -94,17 +99,44 @@ pub struct NewVoucherData {
 pub fn create_voucher(
     data: NewVoucherData,
     standard_definition: &VoucherStandardDefinition, // WICHTIG: Dieser Parameter ist entscheidend!
-    creator_signing_key: &SigningKey,
+    creator_signing_key: &SigningKey
 ) -> Result<Voucher, VoucherManagerError> {
-    let creation_date = get_current_timestamp();
-    let valid_until = get_timestamp(data.years_valid, true);
+    let creation_dt = Utc::now();
+    let creation_date_str = creation_dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
 
-    // 1. Erstelle die initiale "init" Transaktion.
+    // 1. Bestimme die zu verwendende Gültigkeitsdauer.
+    let duration_str = data.validity_duration
+        .as_deref()
+        .or(standard_definition.template.default.default_validity_duration.as_deref())
+        .ok_or_else(|| VoucherManagerError::Generic("No validity duration specified and no default found in standard.".to_string()))?;
+
+    // 2. Berechne das `valid_until`-Datum.
+    let mut valid_until_dt = add_iso8601_duration(creation_dt, duration_str)?;
+
+    // 3. Wende die Rundungsregel an, falls im Standard definiert.
+    if let Some(rounding_str) = &standard_definition.template.fixed.round_up_validity_to {
+        valid_until_dt = round_up_date(valid_until_dt, rounding_str)?;
+    }
+    let valid_until_str = valid_until_dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+
+    // 4. PRÜFUNG: Stelle sicher, dass die berechnete Dauer die Mindestanforderung erfüllt.
+    if let Some(min_duration_str) = &standard_definition.validation.issuance_minimum_validity_duration {
+        let min_duration_dt = add_iso8601_duration(creation_dt, min_duration_str)?;
+        if valid_until_dt < min_duration_dt {
+            return Err(VoucherManagerError::InvalidValidityDuration(format!(
+                "Calculated validity ({}) is less than the required minimum ({}).",
+                valid_until_dt.to_rfc3339(),
+                min_duration_dt.to_rfc3339()
+            )));
+        }
+    }
+
+    // 5. Erstelle die initiale "init" Transaktion.
     // Der Betrag wird direkt aus den Eingabedaten (`data`) genommen.
     let init_transaction = Transaction {
         t_id: "".to_string(),
         t_type: "init".to_string(),
-        t_time: creation_date.clone(),
+        t_time: creation_date_str.clone(),
         sender_id: data.creator.id.clone(),
         recipient_id: data.creator.id.clone(),
         amount: data.nominal_value.amount.clone(),
@@ -112,7 +144,6 @@ pub fn create_voucher(
         sender_signature: "".to_string(),
     };
 
-    // Vorbereitung für den Voucher: Übernehme die Regel-basierten Felder aus der Standard-Definition.
     let voucher_standard = VoucherStandard {
         name: standard_definition.metadata.name.clone(),
         uuid: standard_definition.metadata.uuid.clone(),

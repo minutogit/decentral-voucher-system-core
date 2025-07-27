@@ -202,6 +202,8 @@ pub struct Voucher {
     pub creation_date: String,
     /// Das Gültigkeitsdatum des Gutscheins im ISO 8601-Format.
     pub valid_until: String,
+    /// Die bei der Erstellung gültige Mindestgültigkeitsdauer aus dem Standard (ISO 8601 Duration).
+    pub standard_minimum_issuance_validity: String,
     /// Eine Markierung, ob es sich um einen nicht einlösbaren Testgutschein handelt.
     pub non_redeemable_test_voucher: bool,
     /// Definiert den Nennwert des Gutscheins.

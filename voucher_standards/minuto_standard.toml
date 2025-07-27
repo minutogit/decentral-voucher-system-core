@@ -10,32 +10,37 @@ abbreviation = "Minuto"                # Gängige Abkürzung.
 
 # ---
 
-# Template-Werte, die bei der Erstellung direkt in einen neuen Gutschein kopiert werden.
-[template]
+# Template-Werte, die bei der Erstellung in einen neuen Gutschein kopiert werden.
+# Aufgeteilt in feste (nicht überschreibbare) und Standardwerte (überschreibbar).
+
+[template.fixed]
 # Die Beschreibung kann den Platzhalter {{amount}} enthalten, der zur Laufzeit ersetzt wird.
 description = "Ein Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Minuten qualitativer Leistung."
 primary_redemption_type = "goods_or_services"
 is_divisible = true
+round_up_validity_to = "P1Y" # Gültigkeit auf Jahresende aufrunden.
 
 # Vorgaben für den Nennwert.
-[template.nominal_value]
+[template.fixed.nominal_value]
 unit = "Minuten" # Die Einheit ist durch den Standard fest vorgegeben.
 
 # Vorgaben für die Besicherung. Beim Minuto sind diese leer.
-[template.collateral]
+[template.fixed.collateral]
 type = ""             #
 description = ""      #
 redeem_condition = "" #
 
 # Vorgaben für die Bürgen.
-[template.guarantor_info]
+[template.fixed.guarantor_info]
 needed_count = 2 #
 description = "Ein männlicher und ein weiblicher Bürge sind erforderlich." #
 
-# ---
+[template.default]
+default_validity_duration = "P2Y" # Standard-Gültigkeit von 2 Jahren.
 
 # Validierungsregeln, die zur Überprüfung eines Gutscheins verwendet, aber nicht kopiert werden.
 [validation]
+issuance_minimum_validity_duration = "P90D" # Mindestgültigkeit bei Ausgabe: 90 Tage.
 allowed_transaction_types = ["init", "split", "redeem"]
 required_voucher_fields = [
   "voucher_id",

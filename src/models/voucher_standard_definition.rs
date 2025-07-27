@@ -13,17 +13,6 @@ pub struct StandardMetadata {
     pub abbreviation: String,
 }
 
-/// Eine Vorlage für Felder, die 1:1 in einen neuen Gutschein kopiert werden.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct VoucherTemplate {
-    pub description: Option<String>,
-    pub primary_redemption_type: String,
-    pub is_divisible: bool,
-    pub nominal_value: TemplateNominalValue,
-    pub collateral: TemplateCollateral,
-    pub guarantor_info: TemplateGuarantorInfo,
-}
-
 /// Vorlage für den Nennwert (nur die Einheit wird vom Standard vorgegeben).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TemplateNominalValue {
@@ -46,9 +35,43 @@ pub struct TemplateGuarantorInfo {
     pub description: String,
 }
 
+/// Enthält alle Werte, die vom Standard zwingend und unveränderlich vorgegeben werden.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TemplateFixed {
+    pub description: Option<String>,
+    pub primary_redemption_type: String,
+    pub is_divisible: bool,
+    pub nominal_value: TemplateNominalValue,
+    pub collateral: TemplateCollateral,
+    pub guarantor_info: TemplateGuarantorInfo,
+    /// Optionales Feld, um das Gültigkeitsdatum aufzurunden (z.B. P1D, P1M, P1Y).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round_up_validity_to: Option<String>,
+}
+
+/// Enthält alle Werte, die als Vorschläge dienen und überschrieben werden können.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct TemplateDefault {
+    /// Standard-Gültigkeitsdauer (z.B. P5Y), wenn vom Ersteller nicht anders angegeben.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_validity_duration: Option<String>,
+}
+
+/// Eine Vorlage für Felder, die in einen neuen Gutschein kopiert werden,
+/// aufgeteilt in feste und überschreibbare Standardwerte.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct VoucherTemplate {
+    pub fixed: TemplateFixed,
+    #[serde(default)]
+    pub default: TemplateDefault,
+}
+
 /// Regeln, die zur Validierung eines Gutscheins herangezogen werden.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ValidationRules {
+    /// Mindestgültigkeitsdauer, die ein Gutschein bei der Erstellung haben muss (z.B. P90D).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuance_minimum_validity_duration: Option<String>,
     pub guarantor_rules: ValidationGuarantorRules,
     pub required_voucher_fields: Vec<String>,
     pub allowed_transaction_types: Vec<String>,
