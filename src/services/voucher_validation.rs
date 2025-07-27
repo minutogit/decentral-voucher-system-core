@@ -140,7 +140,7 @@ fn verify_consistency_with_standard(voucher: &Voucher, standard: &VoucherStandar
     // Überprüfe die Teilbarkeit
     if voucher.divisible != standard.template.fixed.is_divisible {
         return Err(ValidationError::IncorrectDivisibility {
-            expected: standard.template.is_divisible,
+            expected: standard.template.fixed.is_divisible,
             found: voucher.divisible,
         });
     }

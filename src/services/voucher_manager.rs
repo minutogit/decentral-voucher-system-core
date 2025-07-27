@@ -3,12 +3,12 @@ use crate::models::voucher::{
 };
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::crypto_utils::{get_hash, sign_ed25519};
-use crate::services::utils::{get_current_timestamp, to_canonical_json};
+use crate::services::utils::to_canonical_json;
 
 use ed25519_dalek::SigningKey;
 use toml::de::Error as TomlError;
 use serde_json;
-use chrono::{DateTime, Utc, Datelike, TimeZone};
+use chrono::{DateTime, Utc, Datelike, TimeZone, Timelike};
 use std::fmt;
 
 // ... (Der Fehler-Enum und die Funktionen from_json, to_json, load_standard_definition bleiben unverändert) ...
@@ -98,7 +98,7 @@ pub struct NewVoucherData {
 /// Ein `Result`, das entweder den vollständig erstellten `Voucher` oder einen `VoucherManagerError` enthält.
 pub fn create_voucher(
     data: NewVoucherData,
-    standard_definition: &VoucherStandardDefinition, // WICHTIG: Dieser Parameter ist entscheidend!
+    standard_definition: &VoucherStandardDefinition,
     creator_signing_key: &SigningKey
 ) -> Result<Voucher, VoucherManagerError> {
     let creation_dt = Utc::now();
@@ -132,7 +132,6 @@ pub fn create_voucher(
     }
 
     // 5. Erstelle die initiale "init" Transaktion.
-    // Der Betrag wird direkt aus den Eingabedaten (`data`) genommen.
     let init_transaction = Transaction {
         t_id: "".to_string(),
         t_type: "init".to_string(),
@@ -150,47 +149,44 @@ pub fn create_voucher(
     };
 
     let mut final_nominal_value = data.nominal_value;
-    final_nominal_value.unit = standard_definition.template.nominal_value.unit.clone();
+    final_nominal_value.unit = standard_definition.template.fixed.nominal_value.unit.clone();
     final_nominal_value.abbreviation = standard_definition.metadata.abbreviation.clone();
 
     let mut final_collateral = data.collateral;
-    final_collateral.type_ = standard_definition.template.collateral.type_.clone();
-    final_collateral.description = standard_definition.template.collateral.description.clone();
-    final_collateral.redeem_condition = standard_definition.template.collateral.redeem_condition.clone();
+    final_collateral.type_ = standard_definition.template.fixed.collateral.type_.clone();
+    final_collateral.description = standard_definition.template.fixed.collateral.description.clone();
+    final_collateral.redeem_condition = standard_definition.template.fixed.collateral.redeem_condition.clone();
 
-    // 2. Baue ein vorläufiges Voucher-Objekt, das zur Generierung von ID und Signatur verwendet wird.
-    // Die Beschreibung wird aus der Vorlage des Standards generiert und der Platzhalter {{amount}} ersetzt.
-    let description_template = standard_definition.template.description.clone().unwrap_or_default();
+    let description_template = standard_definition.template.fixed.description.clone().unwrap_or_default();
     let final_description = description_template.replace("{{amount}}", &final_nominal_value.amount);
 
     let mut temp_voucher = Voucher {
         voucher_standard,
         voucher_id: "".to_string(),
         description: final_description,
-        primary_redemption_type: standard_definition.template.primary_redemption_type.clone(),
-        divisible: standard_definition.template.is_divisible,
-        creation_date: creation_date.clone(),
-        valid_until,
+        primary_redemption_type: standard_definition.template.fixed.primary_redemption_type.clone(),
+        divisible: standard_definition.template.fixed.is_divisible,
+        creation_date: creation_date_str,
+        valid_until: valid_until_str,
+        standard_minimum_issuance_validity: standard_definition.validation.issuance_minimum_validity_duration.clone().unwrap_or_default(),
         non_redeemable_test_voucher: data.non_redeemable_test_voucher,
         nominal_value: final_nominal_value,
         collateral: final_collateral,
         creator: data.creator,
         guarantor_requirements_description: standard_definition
-            .template.guarantor_info
+            .template.fixed.guarantor_info
             .description
             .clone(),
         guarantor_signatures: vec![],
-        needed_guarantors: standard_definition.template.guarantor_info.needed_count,
+        needed_guarantors: standard_definition.template.fixed.guarantor_info.needed_count,
         transactions: vec![init_transaction],
         additional_signatures: vec![],
     };
 
-    // 3. Update die initiale Transaktion mit einer eigenen ID, BEVOR sie signiert wird.
     let init_transaction_json_for_id = to_canonical_json(&temp_voucher.transactions[0])?;
     let t_id = get_hash(init_transaction_json_for_id);
     temp_voucher.transactions[0].t_id = t_id;
 
-    // 4. Signiere die initiale Transaktion
     let transaction_to_sign_json = to_canonical_json(&temp_voucher.transactions[0])?;
     let transaction_signature_hash = get_hash(transaction_to_sign_json);
     let transaction_signature = sign_ed25519(creator_signing_key, transaction_signature_hash.as_bytes());
@@ -210,4 +206,46 @@ pub fn create_voucher(
 
     // 7. Gib den finalen, validen Gutschein zurück.
     Ok(temp_voucher)
+}
+
+
+/// Hilfsfunktion zum Parsen einer einfachen ISO 8601 Duration und Addieren zu einem Datum.
+/// Unterstützt nur P...Y, P...M, P...D.
+fn add_iso8601_duration(start_date: DateTime<Utc>, duration_str: &str) -> Result<DateTime<Utc>, VoucherManagerError> {
+    if !duration_str.starts_with('P') || duration_str.len() < 3 {
+        return Err(VoucherManagerError::Generic(format!("Invalid ISO 8601 duration format: {}", duration_str)));
+    }
+
+    let (value_str, unit) = duration_str.split_at(duration_str.len() - 1);
+    let value: u32 = value_str[1..].parse().map_err(|_| VoucherManagerError::Generic(format!("Invalid number in duration: {}", duration_str)))?;
+
+    match unit {
+        "Y" => Ok(start_date + chrono::Duration::days(i64::from(value) * 365)), // Vereinfachung
+        "M" => Ok(start_date + chrono::Duration::days(i64::from(value) * 30)), // Vereinfachung
+        "D" => Ok(start_date + chrono::Duration::days(i64::from(value))),
+        _ => Err(VoucherManagerError::Generic(format!("Unsupported duration unit in: {}", duration_str))),
+    }
+}
+
+/// Hilfsfunktion, um ein Datum auf das Ende des Tages, Monats oder Jahres aufzurunden.
+fn round_up_date(date: DateTime<Utc>, rounding_str: &str) -> Result<DateTime<Utc>, VoucherManagerError> {
+    match rounding_str {
+        "P1D" => { // Ende des Tages
+            Ok(date.with_hour(23).unwrap()
+                .with_minute(59).unwrap()
+                .with_second(59).unwrap()
+                .with_nanosecond(999_999_999).unwrap())
+        }
+        "P1M" => { // Ende des Monats
+            let next_month = if date.month() == 12 { 1 } else { date.month() + 1 };
+            let year = if date.month() == 12 { date.year() + 1 } else { date.year() };
+            let first_of_next_month = Utc.with_ymd_and_hms(year, next_month, 1, 0, 0, 0).unwrap();
+            Ok(first_of_next_month - chrono::Duration::nanoseconds(1))
+        }
+        "P1Y" => { // Ende des Jahres
+            let first_of_next_year = Utc.with_ymd_and_hms(date.year() + 1, 1, 1, 0, 0, 0).unwrap();
+            Ok(first_of_next_year - chrono::Duration::nanoseconds(1))
+        }
+        _ => Err(VoucherManagerError::Generic(format!("Unsupported rounding unit: {}", rounding_str))),
+    }
 }

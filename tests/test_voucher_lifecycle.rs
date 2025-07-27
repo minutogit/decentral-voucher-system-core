@@ -32,7 +32,8 @@
 use voucher_lib::{
     create_voucher, crypto_utils, from_json, load_standard_definition, to_canonical_json, to_json,
     validate_voucher_against_standard, Address, Collateral, Creator, GuarantorSignature,
-    NewVoucherData, NominalValue, ValidationError, Voucher, VoucherStandardDefinition,
+    NewVoucherData, NominalValue, ValidationError, Voucher, VoucherManagerError,
+    VoucherStandardDefinition,
 };
 use ed25519_dalek::SigningKey;
 
@@ -74,7 +75,8 @@ fn setup_creator() -> (SigningKey, Creator) {
 /// Erstellt die Basisdaten für einen Minuto-Gutschein.
 fn create_minuto_voucher_data(creator: Creator) -> NewVoucherData {
     NewVoucherData {
-        years_valid: 1,
+        // Anstelle von `years_valid` wird nun die ISO 8601-Dauer verwendet.
+        validity_duration: Some("P1Y".to_string()),
         non_redeemable_test_voucher: true,
         nominal_value: NominalValue {
             // Einheit und Abkürzung werden später vom Standard überschrieben.
@@ -150,6 +152,9 @@ fn test_full_creation_and_validation_cycle() {
     assert!(!voucher.voucher_id.is_empty());
     assert!(!voucher.creator.signature.is_empty());
     // Prüfe, ob die Beschreibung korrekt aus der Vorlage generiert wurde.
+    assert_eq!(voucher.standard_minimum_issuance_validity, "P90D");
+    // Prüfe, ob das Gültigkeitsdatum korrekt auf das Jahresende gerundet wurde.
+    assert!(voucher.valid_until.contains("-12-31T23:59:59"));
     let expected_description = "Ein Gutschein für Waren oder Dienstleistungen im Wert von 60 Minuten qualitativer Leistung.";
     assert_eq!(voucher.description, expected_description);
 
@@ -409,6 +414,62 @@ fn test_validation_succeeds_with_extra_fields_in_json() {
         "Validation failed unexpectedly with extra fields: {:?}",
         validation_result.err()
     );
+}
+
+#[test]
+fn test_validity_duration_rules() {
+    // 1. Setup
+    let standard_toml = std::fs::read_to_string("voucher_standards/minuto_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+    let (signing_key, creator) = setup_creator();
+
+    // 2. Testfall: Versuch, einen Gutschein mit zu kurzer Gültigkeit zu erstellen.
+    // Der Minuto-Standard erfordert P90D. Wir versuchen es mit P30D.
+    let mut short_duration_data = create_minuto_voucher_data(creator.clone());
+    short_duration_data.validity_duration = Some("P30D".to_string());
+    let creation_result = create_voucher(short_duration_data, &standard, &signing_key);
+
+    assert!(
+        matches!(
+            creation_result.unwrap_err(),
+            VoucherManagerError::InvalidValidityDuration(_)
+        ),
+        "Creation should fail with InvalidValidityDuration error"
+    );
+
+    // 3. Testfall: Erstelle einen gültigen Gutschein und manipuliere dann sein Gültigkeitsdatum.
+    let valid_data = create_minuto_voucher_data(creator.clone());
+    let mut voucher = create_voucher(valid_data, &standard, &signing_key).unwrap();
+
+    // Mache ihn mit Bürgen vollständig gültig, um die Datumsprüfung zu isolieren.
+    let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g1_validity"));
+    let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g2_validity"));
+    let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
+    let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
+    voucher.guarantor_signatures.push(create_guarantor_signature(&voucher.voucher_id, g1_id, "G1", "1", &g1_priv));
+    voucher.guarantor_signatures.push(create_guarantor_signature(&voucher.voucher_id, g2_id, "G2", "2", &g2_priv));
+    assert!(validate_voucher_against_standard(&voucher, &standard).is_ok());
+
+    // Manipuliere das Datum
+    let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date).unwrap();
+    let tampered_until_dt = creation_dt + chrono::Duration::days(10); // weniger als 90
+    voucher.valid_until = tampered_until_dt.to_rfc3339();
+
+    let validation_result = validate_voucher_against_standard(&voucher, &standard);
+    assert!(matches!(
+        validation_result.unwrap_err(),
+        ValidationError::ValidityDurationTooShort { .. }
+    ));
+
+    // 4. Testfall: Nicht übereinstimmende Mindestgültigkeitsregel zwischen Gutschein und Standard
+    let mut voucher2 = create_voucher(create_minuto_voucher_data(creator), &standard, &signing_key).unwrap();
+    // Manipuliere die im Gutschein gespeicherte Regel
+    voucher2.standard_minimum_issuance_validity = "P365D".to_string(); // Standard erwartet P90D
+    let validation_result2 = validate_voucher_against_standard(&voucher2, &standard);
+    assert!(matches!(
+        validation_result2.unwrap_err(),
+        ValidationError::MismatchedMinimumValidity { .. }
+    ));
 }
 
 // --- NEUE SICHERHEITSTESTS ---
