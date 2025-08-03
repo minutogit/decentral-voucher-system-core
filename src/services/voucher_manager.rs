@@ -3,7 +3,7 @@ use crate::models::voucher::{
 };
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::crypto_utils::{get_hash, sign_ed25519};
-use crate::services::utils::to_canonical_json;
+use crate::services::utils::{get_current_timestamp, to_canonical_json};
 
 use ed25519_dalek::SigningKey;
 use toml::de::Error as TomlError;
@@ -101,8 +101,8 @@ pub fn create_voucher(
     standard_definition: &VoucherStandardDefinition,
     creator_signing_key: &SigningKey
 ) -> Result<Voucher, VoucherManagerError> {
-    let creation_dt = Utc::now();
-    let creation_date_str = creation_dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+    let creation_date_str = get_current_timestamp();
+    let creation_dt = DateTime::parse_from_rfc3339(&creation_date_str).unwrap().with_timezone(&Utc);
 
     // 1. Bestimme die zu verwendende Gültigkeitsdauer.
     let duration_str = data.validity_duration
@@ -133,18 +133,6 @@ pub fn create_voucher(
     };
     let valid_until_str = final_valid_until_dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
 
-    // 5. Erstelle die initiale "init" Transaktion.
-    let init_transaction = Transaction {
-        t_id: "".to_string(),
-        t_type: "init".to_string(),
-        t_time: creation_date_str.clone(),
-        sender_id: data.creator.id.clone(),
-        recipient_id: data.creator.id.clone(),
-        amount: data.nominal_value.amount.clone(),
-        sender_remaining_amount: None,
-        sender_signature: "".to_string(),
-    };
-
     let voucher_standard = VoucherStandard {
         name: standard_definition.metadata.name.clone(),
         uuid: standard_definition.metadata.uuid.clone(),
@@ -162,13 +150,14 @@ pub fn create_voucher(
     let description_template = standard_definition.template.fixed.description.clone().unwrap_or_default();
     let final_description = description_template.replace("{{amount}}", &final_nominal_value.amount);
 
+    // Erstelle einen temporären Gutschein OHNE Transaktionen, um die voucher_id zu erzeugen.
     let mut temp_voucher = Voucher {
         voucher_standard,
         voucher_id: "".to_string(),
         description: final_description,
         primary_redemption_type: standard_definition.template.fixed.primary_redemption_type.clone(),
         divisible: standard_definition.template.fixed.is_divisible,
-        creation_date: creation_date_str,
+        creation_date: creation_date_str.clone(), // Klonen, um Ownership zu behalten
         valid_until: valid_until_str,
         standard_minimum_issuance_validity: standard_definition.validation.issuance_minimum_validity_duration.clone().unwrap_or_default(),
         non_redeemable_test_voucher: data.non_redeemable_test_voucher,
@@ -181,32 +170,53 @@ pub fn create_voucher(
             .clone(),
         guarantor_signatures: vec![],
         needed_guarantors: standard_definition.template.fixed.guarantor_info.needed_count,
-        transactions: vec![init_transaction],
+        transactions: vec![], // Wichtig: Transaktionen sind hier leer!
         additional_signatures: vec![],
     };
 
-    let init_transaction_json_for_id = to_canonical_json(&temp_voucher.transactions[0])?;
-    let t_id = get_hash(init_transaction_json_for_id);
-    temp_voucher.transactions[0].t_id = t_id;
-
-    let transaction_to_sign_json = to_canonical_json(&temp_voucher.transactions[0])?;
-    let transaction_signature_hash = get_hash(transaction_to_sign_json);
-    let transaction_signature = sign_ed25519(creator_signing_key, transaction_signature_hash.as_bytes());
-    temp_voucher.transactions[0].sender_signature = bs58::encode(transaction_signature.to_bytes()).into_string();
-
-    // 5. Generiere den finalen Hash für die voucher_id und die Signatur.
-    // Dies geschieht NACHDEM alle initialen Daten (inkl. signierter Transaktion) final sind.
+    // Erzeuge den Hash für die voucher_id und die Signatur des Erstellers.
     let voucher_json_for_signing = to_canonical_json(&temp_voucher)?;
-    let voucher_hash_to_sign = get_hash(voucher_json_for_signing);
+    let voucher_hash = get_hash(voucher_json_for_signing);
     
-    // Setze die finale voucher_id.
-    temp_voucher.voucher_id = voucher_hash_to_sign.clone();
-
-    // 6. Setze die finale Signatur in die Creator-Daten ein.
-    let creator_signature = sign_ed25519(creator_signing_key, voucher_hash_to_sign.as_bytes());
+    // Setze die finale voucher_id und die Signatur des Erstellers.
+    temp_voucher.voucher_id = voucher_hash.clone();
+    let creator_signature = sign_ed25519(creator_signing_key, voucher_hash.as_bytes());
     temp_voucher.creator.signature = bs58::encode(creator_signature.to_bytes()).into_string();
 
-    // 7. Gib den finalen, validen Gutschein zurück.
+    // JETZT: Erstelle und signiere die 'init' Transaktion, die sich auf die finale voucher_id bezieht.
+    let mut init_transaction = Transaction {
+        t_id: "".to_string(), // Wird im nächsten Schritt berechnet
+        prev_hash: get_hash(&temp_voucher.voucher_id),
+        t_type: "init".to_string(),
+        t_time: creation_date_str.clone(),
+        sender_id: temp_voucher.creator.id.clone(),
+        recipient_id: temp_voucher.creator.id.clone(),
+        amount: temp_voucher.nominal_value.amount.clone(),
+        sender_remaining_amount: None,
+        sender_signature: "".to_string(), // Wird im nächsten Schritt berechnet
+    };
+
+    // Berechne die t_id aus der Transaktion (ohne t_id und Signatur)
+    let tx_json_for_id = to_canonical_json(&init_transaction)?;
+    let final_t_id = get_hash(tx_json_for_id);
+    init_transaction.t_id = final_t_id;
+
+    // Erstelle die Daten für die Transaktionssignatur (JSON-Objekt)
+    let signature_payload = serde_json::json!({
+        "prev_hash": init_transaction.prev_hash,
+        "sender_id": init_transaction.sender_id,
+        "t_id": init_transaction.t_id
+    });
+    let signature_payload_json = to_canonical_json(&signature_payload)?;
+    let signature_hash = get_hash(signature_payload_json);
+
+    // Signiere den Hash der Signatur-Daten
+    let transaction_signature = sign_ed25519(creator_signing_key, signature_hash.as_bytes());
+    init_transaction.sender_signature = bs58::encode(transaction_signature.to_bytes()).into_string();
+
+    // Füge die finale, signierte Transaktion zum Gutschein hinzu.
+    temp_voucher.transactions.push(init_transaction);
+
     Ok(temp_voucher)
 }
 

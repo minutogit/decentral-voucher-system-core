@@ -215,6 +215,7 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
     // Daher muss sie für die Verifizierung ebenfalls geleert werden, um den ursprünglichen
     // Zustand exakt zu rekonstruieren.
     voucher_to_verify.voucher_id = "".to_string();
+    voucher_to_verify.transactions.clear(); // BUGFIX: Transaktionen müssen entfernt werden!
     voucher_to_verify.guarantor_signatures.clear();
     voucher_to_verify.additional_signatures.clear();
 
@@ -322,32 +323,57 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
 
 /// Verifiziert die Integrität und die Signaturen der Transaktionsliste.
 fn verify_transactions(voucher: &Voucher) -> Result<(), ValidationError> {
-    // TODO: Die vollständige Prüfung der Transaktionskette (z.B. Überprüfung von
-    // previous_hash-Verkettungen und Double-Spending-Prävention auf Gutscheinebene)
-    // muss implementiert werden, sobald die Transaktionsstruktur final definiert ist.
+    for (i, transaction) in voucher.transactions.iter().enumerate() {
+        // 1. Überprüfe die Verkettung des `prev_hash`.
+        let expected_prev_hash = if i == 0 {
+            // Die erste Transaktion muss auf die voucher_id verweisen.
+            get_hash(&voucher.voucher_id)
+        } else {
+            // Jede weitere Transaktion muss auf den Hash der kompletten vorherigen Transaktion verweisen.
+            let prev_transaction = &voucher.transactions[i - 1];
+            get_hash(to_canonical_json(prev_transaction).map_err(ValidationError::Serialization)?)
+        };
 
-    for transaction in &voucher.transactions {
-        // Rekonstruiere die signierten Daten für jede Transaktion
-        let mut tx_to_verify = transaction.clone();
-        let signature_b58 = tx_to_verify.sender_signature.clone();
-        tx_to_verify.sender_signature = "".to_string();
+        if transaction.prev_hash != expected_prev_hash {
+            return Err(ValidationError::InvalidTransactionSignature(format!(
+                "Transaction {} has an invalid prev_hash.",
+                transaction.t_id
+            )));
+        }
 
-        let tx_json =
-            to_canonical_json(&tx_to_verify).map_err(ValidationError::Serialization)?;
-        let tx_hash = get_hash(tx_json);
+        // 2. Überprüfe die Integrität der `t_id` selbst.
+        let mut tx_for_tid_calc = transaction.clone();
+        tx_for_tid_calc.t_id = "".to_string();
+        tx_for_tid_calc.sender_signature = "".to_string();
+        let calculated_tid = get_hash(to_canonical_json(&tx_for_tid_calc).map_err(ValidationError::Serialization)?);
+        if transaction.t_id != calculated_tid {
+             return Err(ValidationError::InvalidTransactionSignature(format!(
+                "Transaction ID {} does not match its content hash.",
+                transaction.t_id
+            )));
+        }
 
-        // Extrahiere den Public Key des Senders
-        let sender_pub_key = get_pubkey_from_user_id(&transaction.sender_id)
-            .map_err(|_| ValidationError::InvalidTransactionSenderId(transaction.sender_id.clone()))?;
+        // 3. Überprüfe die `sender_signature`.
+        // Die Signatur deckt ein JSON-Objekt aus `prev_hash`, `sender_id` und `t_id` ab.
+        let signature_payload = serde_json::json!({
+            "prev_hash": transaction.prev_hash,
+            "sender_id": transaction.sender_id,
+            "t_id": transaction.t_id,
+        });
+        let signature_payload_hash =
+            get_hash(to_canonical_json(&signature_payload).map_err(ValidationError::Serialization)?);
 
-        // Dekodiere und verifiziere die Signatur
-        let signature_bytes = bs58::decode(signature_b58)
+        let sender_pub_key = get_pubkey_from_user_id(&transaction.sender_id).map_err(|_| {
+            ValidationError::InvalidTransactionSenderId(transaction.sender_id.clone())
+        })?;
+
+        let signature_bytes = bs58::decode(&transaction.sender_signature)
             .into_vec()
             .map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
         let signature = Signature::from_slice(&signature_bytes)
             .map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
 
-        if !verify_ed25519(&sender_pub_key, tx_hash.as_bytes(), &signature) {
+        if !verify_ed25519(&sender_pub_key, signature_payload_hash.as_bytes(), &signature) {
             return Err(ValidationError::InvalidTransactionSignature(transaction.t_id.clone()));
         }
     }

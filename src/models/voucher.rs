@@ -165,6 +165,8 @@ pub struct Transaction {
     pub sender_remaining_amount: Option<String>,
     /// Digitale Signatur des Senders für diese Transaktion.
     pub sender_signature: String,
+    /// Der Hash der vorhergehenden Transaktion oder der voucher_id für die init-Transaktion.
+    pub prev_hash: String,
 }
 
 /// Repräsentiert eine zusätzliche, optionale Signatur, die an den Gutschein angehängt wird.

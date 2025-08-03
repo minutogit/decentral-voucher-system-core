@@ -327,7 +327,10 @@ fn test_canonical_json_is_deterministic_and_sorted() {
     let data2 = create_minuto_voucher_data(creator);
 
     // 2. Erstelle zwei Gutscheine nacheinander.
+    // Wir fügen eine winzige Pause ein, um sicherzustellen, dass die Zeitstempel
+    // und somit die Hashes sich auf jeden Fall unterscheiden.
     let voucher1 = create_voucher(data1, &standard, &signing_key).unwrap();
+    std::thread::sleep(std::time::Duration::from_micros(10));
     let voucher2 = create_voucher(data2, &standard, &signing_key).unwrap();
 
     // 3. Verifiziere, dass die Gutscheine NICHT identisch sind, da ihre Zeitstempel
