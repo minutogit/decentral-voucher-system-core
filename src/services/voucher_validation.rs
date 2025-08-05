@@ -354,11 +354,12 @@ fn verify_transactions(voucher: &Voucher) -> Result<(), ValidationError> {
         }
 
         // 3. Überprüfe die `sender_signature`.
-        // Die Signatur deckt ein JSON-Objekt aus `prev_hash`, `sender_id` und `t_id` ab.
+        // Die Signatur deckt ein JSON-Objekt aus `prev_hash`, `sender_id`, `t_id` und `t_time` ab.
         let signature_payload = serde_json::json!({
             "prev_hash": transaction.prev_hash,
             "sender_id": transaction.sender_id,
             "t_id": transaction.t_id,
+            "t_time": transaction.t_time,
         });
         let signature_payload_hash =
             get_hash(to_canonical_json(&signature_payload).map_err(ValidationError::Serialization)?);

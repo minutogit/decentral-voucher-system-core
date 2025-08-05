@@ -205,7 +205,8 @@ pub fn create_voucher(
     let signature_payload = serde_json::json!({
         "prev_hash": init_transaction.prev_hash,
         "sender_id": init_transaction.sender_id,
-        "t_id": init_transaction.t_id
+        "t_id": init_transaction.t_id,
+        "t_time": init_transaction.t_time
     });
     let signature_payload_json = to_canonical_json(&signature_payload)?;
     let signature_hash = get_hash(signature_payload_json);
