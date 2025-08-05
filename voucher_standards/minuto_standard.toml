@@ -41,6 +41,7 @@ default_validity_duration = "P5Y" # Standard-Gültigkeit von 5 Jahren.
 # Validierungsregeln, die zur Überprüfung eines Gutscheins verwendet, aber nicht kopiert werden.
 [validation]
 issuance_minimum_validity_duration = "P3Y" # Mindestgültigkeit bei Ausgabe: 3 Jahre.
+amount_decimal_places = 0 # Minuten sind nicht teilbar.
 allowed_transaction_types = ["init", "split", "redeem"]
 required_voucher_fields = [
   "voucher_id",

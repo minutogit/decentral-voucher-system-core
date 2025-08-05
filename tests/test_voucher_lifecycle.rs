@@ -30,12 +30,16 @@
 
 // Wir importieren die öffentlichen Typen, die in lib.rs re-exportiert wurden.
 use voucher_lib::{
-    create_voucher, crypto_utils, from_json, load_standard_definition, to_canonical_json, to_json,
-    validate_voucher_against_standard, Address, Collateral, Creator, GuarantorSignature,
+    create_split_transaction, create_voucher, crypto_utils, from_json, get_spendable_balance,
+    load_standard_definition, to_canonical_json, to_json, validate_voucher_against_standard,
+    Address, Collateral, Creator, GuarantorSignature,
     NewVoucherData, NominalValue, ValidationError, Voucher, VoucherManagerError,
     VoucherStandardDefinition,
 };
+
 use ed25519_dalek::SigningKey;
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 
 // --- HELPER-FUNKTIONEN UND TESTDATEN ---
 
@@ -186,6 +190,14 @@ fn test_full_creation_and_validation_cycle() {
         final_validation_result.is_ok(),
         "Final validation failed unexpectedly: {:?}",
         final_validation_result.err()
+    );
+
+    // 6. Finale Überprüfung des Guthabens mit der neuen Funktion
+    let balance = get_spendable_balance(&voucher, &voucher.creator.id, &standard).unwrap();
+    let expected_balance = Decimal::from_str_exact(voucher.nominal_value.amount.as_str()).unwrap();
+    assert_eq!(
+        balance, expected_balance,
+        "Final balance check failed."
     );
 }
 
@@ -425,6 +437,130 @@ fn test_validation_succeeds_with_extra_fields_in_json() {
     );
 }
 
+// --- NEUE TESTS FÜR SPLIT-TRANSAKTIONEN ---
+
+#[test]
+fn test_split_transaction_cycle_and_balance_check() {
+    // 1. Setup: Silber-Standard, da er teilbar ist und keine Bürgen benötigt.
+    let standard_toml = std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+    assert!(standard.template.fixed.is_divisible);
+
+    // 2. Erstelle Sender und Empfänger
+    let (sender_key, sender_creator) = setup_creator();
+    let sender_id = sender_creator.id.clone();
+
+    let (recipient_pub, _recipient_key) =
+        crypto_utils::generate_ed25519_keypair_for_tests(Some("recipient"));
+    let recipient_id = crypto_utils::create_user_id(&recipient_pub, Some("rc")).unwrap();
+
+    // 3. Erstelle einen Gutschein mit dem Wert 100.0000
+    let mut voucher_data = create_minuto_voucher_data(sender_creator);
+    voucher_data.nominal_value.amount = "100.0000".to_string();
+    let initial_voucher = create_voucher(voucher_data, &standard, &sender_key).unwrap();
+
+    // 4. Überprüfe den initialen Zustand und das Guthaben
+    assert!(validate_voucher_against_standard(&initial_voucher, &standard).is_ok());
+    let initial_balance = get_spendable_balance(&initial_voucher, &sender_id, &standard).unwrap();
+    assert_eq!(initial_balance, dec!(100.0000));
+
+    // 5. Führe eine Split-Transaktion durch: Sende 30.5000 an den Empfänger
+    let split_amount = "30.5000";
+    let voucher_after_split = create_split_transaction(
+        &initial_voucher,
+        &standard,
+        &sender_id,
+        &sender_key,
+        &recipient_id,
+        split_amount,
+    )
+    .unwrap();
+
+    // 6. Validiere den Gutschein nach dem Split
+    let validation_result = validate_voucher_against_standard(&voucher_after_split, &standard);
+    assert!(
+        validation_result.is_ok(),
+        "Validation after split failed: {:?}",
+        validation_result.err()
+    );
+    assert_eq!(voucher_after_split.transactions.len(), 2);
+    assert_eq!(
+        voucher_after_split.transactions.last().unwrap().t_type,
+        "split"
+    );
+
+    // 7. Überprüfe die Guthaben beider Parteien
+    let sender_balance_after_split =
+        get_spendable_balance(&voucher_after_split, &sender_id, &standard).unwrap();
+    let recipient_balance_after_split =
+        get_spendable_balance(&voucher_after_split, &recipient_id, &standard).unwrap();
+
+    assert_eq!(sender_balance_after_split, dec!(69.5000)); // 100.0000 - 30.5000
+    assert_eq!(recipient_balance_after_split, dec!(30.5000));
+}
+
+#[test]
+fn test_split_fails_on_insufficient_funds() {
+    // Setup wie oben
+    let standard_toml = std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+    let (sender_key, sender_creator) = setup_creator();
+    let sender_id = sender_creator.id.clone();
+    let (recipient_pub, _) = crypto_utils::generate_ed25519_keypair_for_tests(Some("recipient2"));
+    let recipient_id = crypto_utils::create_user_id(&recipient_pub, Some("rc")).unwrap();
+
+    let mut voucher_data = create_minuto_voucher_data(sender_creator);
+    voucher_data.nominal_value.amount = "50.0".to_string(); // Initialwert 50
+    let initial_voucher = create_voucher(voucher_data, &standard, &sender_key).unwrap();
+
+    // Versuche, 50.1 zu senden (mehr als vorhanden)
+    let split_result = create_split_transaction(
+        &initial_voucher,
+        &standard,
+        &sender_id,
+        &sender_key,
+        &recipient_id,
+        "50.1",
+    );
+
+    assert!(matches!(
+        split_result.unwrap_err(),
+        VoucherManagerError::InsufficientFunds { .. }
+    ));
+}
+
+#[test]
+fn test_split_fails_on_non_divisible_voucher() {
+    let mut standard_toml =
+        std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
+    // Manipuliere den Standard, um ihn nicht-teilbar zu machen
+    standard_toml = standard_toml.replace("is_divisible = true", "is_divisible = false");
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+    assert!(!standard.template.fixed.is_divisible);
+
+    let (sender_key, sender_creator) = setup_creator();
+    let sender_id = sender_creator.id.clone();
+    let (recipient_pub, _) = crypto_utils::generate_ed25519_keypair_for_tests(Some("recipient3"));
+    let recipient_id = crypto_utils::create_user_id(&recipient_pub, Some("rc")).unwrap();
+
+    let voucher_data = create_minuto_voucher_data(sender_creator);
+    let initial_voucher = create_voucher(voucher_data, &standard, &sender_key).unwrap();
+
+    let split_result = create_split_transaction(
+        &initial_voucher,
+        &standard,
+        &sender_id,
+        &sender_key,
+        &recipient_id,
+        "10.0",
+    );
+
+    assert!(matches!(
+        split_result.unwrap_err(),
+        VoucherManagerError::VoucherNotDivisible
+    ));
+}
+
 #[test]
 fn test_validity_duration_rules() {
     // 1. Setup
@@ -557,4 +693,53 @@ fn test_validation_fails_on_tampered_guarantor_signature() {
     // 3. Die Validierung muss nun fehlschlagen, da der Hash der Daten nicht mehr zur signature_id passt.
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
     assert!(matches!(validation_result.unwrap_err(), ValidationError::InvalidSignatureId(id) if id == original_signature_id));
+}
+
+#[test]
+fn test_double_spend_detection_logic() {
+    // 1. Setup: Silber-Standard, ein Ersteller (Alice) und zwei Empfänger (Bob, Frank).
+    let standard_toml = std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+
+    let (alice_key, alice_creator) = setup_creator();
+    let alice_id = alice_creator.id.clone();
+
+    let (bob_pub, _) = crypto_utils::generate_ed25519_keypair_for_tests(Some("bob"));
+    let bob_id = crypto_utils::create_user_id(&bob_pub, Some("rc")).unwrap();
+
+    let (frank_pub, _) = crypto_utils::generate_ed25519_keypair_for_tests(Some("frank"));
+    let frank_id = crypto_utils::create_user_id(&frank_pub, Some("fr")).unwrap();
+
+    // 2. Alice erstellt einen Gutschein mit dem Wert 100.
+    let mut voucher_data = create_minuto_voucher_data(alice_creator);
+    voucher_data.nominal_value.amount = "100".to_string();
+    let initial_voucher = create_voucher(voucher_data, &standard, &alice_key).unwrap();
+    assert!(validate_voucher_against_standard(&initial_voucher, &standard).is_ok());
+
+    // 3. Alice führt eine erste, legitime Transaktion durch: Sie sendet 40 an Bob.
+    let voucher_after_split = create_split_transaction(
+        &initial_voucher, &standard, &alice_id, &alice_key, &bob_id, "40"
+    ).unwrap();
+    assert!(validate_voucher_against_standard(&voucher_after_split, &standard).is_ok());
+
+    // 4. Alice betrügt: Sie nimmt den Zustand VOR der Transaktion an Bob (`initial_voucher`)
+    //    und versucht, ihr ursprüngliches Guthaben von 100 erneut auszugeben, indem sie 60 an Frank sendet.
+    let fraudulent_voucher = create_split_transaction(
+        &initial_voucher, &standard, &alice_id, &alice_key, &frank_id, "60"
+    ).unwrap();
+    assert!(validate_voucher_against_standard(&fraudulent_voucher, &standard).is_ok());
+
+    // 5. Verifizierung des Double Spends:
+    //    Beide Gutscheine sind für sich genommen gültig, aber die zweite Transaktion in beiden
+    //    basiert auf demselben Vorgänger (der `init`-Transaktion).
+    let tx_to_bob = &voucher_after_split.transactions[1];
+    let fraudulent_tx_to_frank = &fraudulent_voucher.transactions[1];
+
+    // Der Beweis: Gleicher `prev_hash` und `sender_id`, aber unterschiedliche `t_id`.
+    // Dies ist der Fingerabdruck, den ein Layer-2-System erkennen würde.
+    assert_eq!(tx_to_bob.prev_hash, fraudulent_tx_to_frank.prev_hash, "prev_hash values must be identical to prove the double spend");
+    assert_eq!(tx_to_bob.sender_id, fraudulent_tx_to_frank.sender_id, "Sender IDs must be identical");
+    assert_ne!(tx_to_bob.t_id, fraudulent_tx_to_frank.t_id, "Transaction IDs must be different");
+
+    println!("Double Spend Test: OK. prev_hash für beide Transaktionen ist: {}", tx_to_bob.prev_hash);
 }

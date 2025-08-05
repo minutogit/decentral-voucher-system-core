@@ -131,6 +131,11 @@ default_validity_duration = "P5Y"
 # Format: ISO 8601 Duration (z.B. "P90D" für 90 Tage).
 issuance_minimum_validity_duration = "P1Y"
 
+# (Integer) Legt die Anzahl der Nachkommastellen fest, die für alle
+# Betragsberechnungen (z.B. bei Splits) verwendet werden soll, um die Genauigkeit
+# sicherzustellen. `2` ist ein typischer Wert für Währungen.
+amount_decimal_places = 2
+
 # (Array von Strings) Definiert die erlaubten Transaktionstypen für diesen Standard.
 # Mögliche Werte: "init", "split", "redeem", "transfer", etc.
 allowed_transaction_types = ["init", "split", "redeem"]

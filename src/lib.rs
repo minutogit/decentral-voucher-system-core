@@ -24,8 +24,10 @@ pub use models::voucher_standard_definition::{
 pub use services::crypto_utils;
 pub use services::utils::to_canonical_json;
 pub use services::utils;
-pub use services::voucher_validation::{validate_voucher_against_standard, ValidationError};
 pub use services::voucher_manager::{
-    create_voucher, from_json, to_json, load_standard_definition, NewVoucherData,
+    create_split_transaction, create_voucher, from_json, to_json, load_standard_definition, NewVoucherData,
     VoucherManagerError,
+};
+pub use services::voucher_validation::{
+    get_spendable_balance, validate_voucher_against_standard, ValidationError,
 };

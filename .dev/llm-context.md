@@ -19,6 +19,7 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 - **Dezentraler Ansatz:** Das System basiert auf dezentralen Gutscheinen (Textdateien), die eine verkettete Liste der Transaktionshistorie enthalten (eine Art "Mini-Blockchain pro Gutschein").
 - **Kein globales Ledger:** Im Gegensatz zu traditionellen Blockchains wird bewusst auf ein globales, verteiltes Ledger verzichtet. Die Integrität wird durch digitale Signaturen und soziale Kontrolle gewährleistet.
 - **Offline-Fähigkeit:** Transaktionen sollen auch offline durchgeführt werden können, indem die aktualisierte Gutschein-Datei direkt an den neuen Halter übergeben wird.
+- **Fokus auf Betrugserkennung, nicht -vermeidung:** Da es kein globales Ledger gibt, kann die Core-Bibliothek nicht verhindern, dass ein Nutzer widersprüchliche Transaktionshistorien (Double Spending) erzeugt. Das System stellt stattdessen sicher, dass jeder Betrugsversuch durch digitale Signaturen kryptographisch beweisbar ist, was eine Erkennung und soziale Sanktionen in einem übergeordneten System (Layer 2) ermöglicht.
 - **Fokus auf Kernlogik:** Zunächst wird nur die grundlegende Funktionalität der Gutschein- und Transaktionsverwaltung implementiert. Die "Transaction Verification Layer" und "User Trust Verification Layer" (Layer 2 mit Servern) sollen _nicht_ implementiert werden, aber die Struktur der Transaktionsketten sollte so optimiert werden, dass eine spätere Erweiterung um diese Layer möglich ist.
 - **FFI/WASM-Kompatibilität:** Rust-Typen und -Funktionen müssen so gestaltet sein, dass sie einfach über FFI und WASM exponiert werden können (z.B. durch Verwendung von `#[no_mangle]`, C-kompatiblen Datentypen und `wasm_bindgen`).
 
@@ -143,9 +144,16 @@ Die "Kette" besteht aktuell aus einer geordneten Liste von Transaktionen im `tra
 
 
 ### Double-Spending-Erkennung (Basis-Layer)
-- Erkennung durch Prüfung, ob mehrere Transaktionen desselben Senders ausgegeben werden, die sich auf denselben "Kontostand" (den gesamten Gutschein oder einen Teil davon) beziehen.
-- Digitale Signaturen ermöglichen die Identifizierung des Betrügers.
-- Abgelaufene Gutscheine müssen für eine gewisse Zeit aufbewahrt werden, um Double-Spending nachträglich erkennen zu können.
+Ein **Double Spend** liegt vor, wenn ein Nutzer, nachdem er einen Gutschein (oder einen Teil davon per Split) an einen Empfänger gesendet hat, diese letzte Transaktion aus seiner eigenen Kopie der Gutschein-Datei wieder entfernt. Dadurch wird sein Guthaben auf den Stand vor der Transaktion zurückgesetzt. Anschließend versucht er, dieses "wiederhergestellte" Guthaben erneut auszugeben, indem er eine neue, widersprüchliche Transaktion erstellt.
+- **Erkennung:** Der Betrug ist nachweisbar, weil sowohl die legitime als auch die betrügerische Transaktion vom selben vorherigen Transaktionszustand (`prev_hash`) ausgehen und vom selben Sender (`sender_id`) signiert sind. Ein übergeordnetes System (Layer 2) kann dies durch Abgleich der Transaktions-Fingerabdrücke (`hash(prev_hash + sender_id)`) aufdecken.
+- **Beweisbarkeit:** Die digitale Signatur ermöglicht die eindeutige und unwiderlegbare Identifizierung des Betrügers.
+
+#### Erkennung ohne Layer-2-Server (durch Pfad-Vereinigung)
+Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich die aufgespaltenen Transaktionspfade bei einem späteren Nutzer wieder treffen. Da Gutscheine im System zirkulieren und oft beim Ersteller wieder eingelöst werden, ist dies ein praxisnaher Anwendungsfall.
+
+- **Mechanismus:** Ein Nutzer, der einen Gutschein erhält, kann dessen Transaktionshistorie mit den Historien von bereits erhaltenen oder archivierten Gutscheinen vergleichen.
+- **Beispiel:** Der ursprüngliche Ersteller eines Gutscheins erhält später zwei unterschiedliche Gutschein-Dateien zur Einlösung zurück. Beide leiten ihre Herkunft von seinem ursprünglichen Gutschein ab. Beim Vergleich der Historien stellt er fest, dass beide Dateien eine unterschiedliche Transaktion enthalten, die aber vom selben `prev_hash` abstammt. Damit ist der Double Spend bewiesen.
+- **Voraussetzung:** Diese Methode erfordert, dass Nutzer (insbesondere Akteure wie Ersteller, die Einlösungen akzeptieren) alte Gutschein-Zustände vorhalten, um eine Vergleichsbasis zu haben.
 
 ### Weitere relevante Konzepte (für zukünftige Erweiterungen optimieren)
 - **Teilzahlungen:** Ein Gutschein kann in kleinere Beträge aufgeteilt werden. Der Restbetrag verbleibt beim Sender, der daraus weitere Transaktionen erstellen kann.

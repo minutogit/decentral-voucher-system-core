@@ -11,9 +11,10 @@
 // Ausführen mit: cargo run --example playground_voucher_lifecycle
 
 use voucher_lib::{
-    create_voucher, crypto_utils, load_standard_definition, to_canonical_json, to_json,
-    validate_voucher_against_standard, Address, Collateral, Creator, GuarantorSignature,
-    NewVoucherData, NominalValue, ValidationError, VoucherManagerError, VoucherStandardDefinition,
+    create_split_transaction, create_voucher, crypto_utils, get_spendable_balance,
+    load_standard_definition, to_canonical_json, to_json, validate_voucher_against_standard,
+    Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue,
+    ValidationError, VoucherManagerError, VoucherStandardDefinition,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,6 +34,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         crypto_utils::generate_ed25519_keypair_for_tests(Some("creator"));
     let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("guarantor1"));
     let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("guarantor2"));
+    // Wichtig: Wir benötigen jetzt den privaten Schlüssel des Empfängers, damit dieser
+    // seine eigene Transaktion signieren kann.
+    let (recipient_pub, recipient_priv) =
+        crypto_utils::generate_ed25519_keypair_for_tests(Some("recipient"));
+    let (carol_pub, _carol_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("carol"));
+    let (david_pub, _david_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("david"));
+    let (frank_pub, _frank_priv) =
+        crypto_utils::generate_ed25519_keypair_for_tests(Some("frank"));
 
     // Erstelle die Creator-Daten, die für beide Versuche (den fehlschlagenden und den erfolgreichen) verwendet werden.
     let creator_id = crypto_utils::create_user_id(&creator_pub, Some("cr"))?;
@@ -48,14 +57,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- (NEU) SCHRITT 0: Versuch, einen Gutschein mit ungültiger Dauer zu erstellen ---
     println!("\n--- SCHRITT 0: Versuch, einen Gutschein mit zu kurzer Gültigkeit zu erstellen (erwarteter Fehler) ---");
-    let invalid_voucher_data = NewVoucherData {
+    let invalid_duration_data = NewVoucherData {
         validity_duration: Some("P30D".to_string()), // Zu kurz, Minuto-Standard erfordert P90D
         non_redeemable_test_voucher: true,
         nominal_value: NominalValue { unit: "".into(), amount: "30".into(), abbreviation: "".into(), description: "Leistung".into() },
         collateral: Collateral { type_: "".into(), unit: "".into(), amount: "".into(), abbreviation: "".into(), description: "".into(), redeem_condition: "".into() },
         creator: base_creator_data.clone(),
     };
-    match create_voucher(invalid_voucher_data, &standard, &creator_priv) {
+    match create_voucher(invalid_duration_data, &standard, &creator_priv) {
         Err(VoucherManagerError::InvalidValidityDuration(reason)) => {
             println!("✅ Erfolg! Erstellung wie erwartet fehlgeschlagen.");
             println!("   Grund: {}", reason);
@@ -184,6 +193,113 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => eprintln!("❌ Fehler: Validierung war unerwartet erfolgreich."),
         Err(e) => eprintln!("❌ Fehler: Unerwarteter Validierungsfehler: {}", e),
     }
+
+    // --- SCHRITT 6: Eine Split-Transaktion durchführen ---
+    println!("\n--- SCHRITT 6: Führe eine Split-Transaktion durch ---");
+    println!(
+        "Der Ersteller (Guthaben: {}) sendet 25 an einen neuen Empfänger.",
+        voucher.nominal_value.amount
+    );
+
+    // Empfänger-ID erstellen
+    let recipient_id = crypto_utils::create_user_id(&recipient_pub, Some("rc"))?;
+
+    let voucher_after_split = create_split_transaction(
+        &voucher, // der letzte gültige Zustand
+        &standard,
+        &voucher.creator.id, // Der ursprüngliche Ersteller ist der Sender
+        &creator_priv,       // Sein privater Schlüssel zum Signieren
+        &recipient_id,
+        "25", // Betrag, der gesendet wird (als ganze Zahl für Minuto-Standard)
+    )?;
+
+    println!("✅ Split-Transaktion erfolgreich erstellt.");
+    println!(
+        "   -> Anzahl der Transaktionen im Gutschein: {}",
+        voucher_after_split.transactions.len()
+    );
+
+    // --- SCHRITT 7: Zustand nach dem Split validieren und Guthaben prüfen ---
+    println!("\n--- SCHRITT 7: Validiere Gutschein nach Split und prüfe Guthaben ---");
+
+    // Der Gutschein sollte immer noch gültig sein
+    validate_voucher_against_standard(&voucher_after_split, &standard)?;
+    println!("✅ Erfolg! Der Gutschein ist auch nach dem Split gültig.");
+
+    // Prüfe die neuen Guthaben
+    let sender_balance = get_spendable_balance(&voucher_after_split, &voucher.creator.id, &standard)?;
+    let recipient_balance = get_spendable_balance(&voucher_after_split, &recipient_id, &standard)?;
+
+    println!("   - Guthaben des Senders (Ersteller): {}", sender_balance);
+    println!("   - Guthaben des Empfängers: {}", recipient_balance);
+
+    assert_eq!(sender_balance, rust_decimal::Decimal::new(35, 0)); // 60 - 25 = 35
+    assert_eq!(recipient_balance, rust_decimal::Decimal::new(25, 0)); // 25
+
+    // --- SCHRITT 8: Aufspaltung der Transaktionspfade (erwartetes Verhalten) ---
+    println!("\n--- SCHRITT 8: Aufspaltung der Transaktionspfade (erwartetes Verhalten) ---");
+    println!("Alice (die Erstellerin) und Bob (der Empfänger) haben nun beide eine identische Kopie des Gutscheins.");
+    println!("Jeder kann nun sein jeweiliges Guthaben unabhängig voneinander ausgeben. Die Pfade teilen sich.");
+
+    // Aktion 1: Alice sendet ihren Restbetrag von 35 an Carol.
+    println!("\n -> Pfad A: Alice sendet ihren Restbetrag (35) an Carol...");
+    let carol_id = crypto_utils::create_user_id(&carol_pub, Some("ca"))?;
+
+    let voucher_version_alice = create_split_transaction(
+        &voucher_after_split,
+        &standard,
+        &voucher.creator.id, // Alice's ID
+        &creator_priv,       // Alice's Schlüssel
+        &carol_id,
+        "35", // Alices gesamtes Restguthaben
+    )?;
+    println!("✅ Alices Transaktion erfolgreich erstellt.");
+    assert!(validate_voucher_against_standard(&voucher_version_alice, &standard).is_ok());
+    println!("✅ Der Gutschein-Pfad von Alice ist intern konsistent und gültig.");
+
+    // Aktion 2: Bob sendet sein Guthaben von 25 an David.
+    println!("\n -> Pfad B: Bob sendet sein Guthaben (25) an David...");
+    let david_id = crypto_utils::create_user_id(&david_pub, Some("da"))?;
+
+    let voucher_version_bob = create_split_transaction(
+        &voucher_after_split, // Basiert auf dem SELBEN Zustand wie Alices Transaktion
+        &standard,
+        &recipient_id, // Bob's ID
+        &recipient_priv, // Bob's Schlüssel
+        &david_id,
+        "25", // Bobs gesamtes Guthaben
+    )?;
+    println!("✅ Bobs Transaktion erfolgreich erstellt.");
+    assert!(validate_voucher_against_standard(&voucher_version_bob, &standard).is_ok());
+    println!("✅ Der Gutschein-Pfad von Bob ist intern konsistent und gültig.");
+
+    // --- SCHRITT 9: Echten Double-Spend durch Betrug simulieren ---
+    println!("\n--- SCHRITT 9: Echten Double-Spend durch Betrug simulieren ---");
+    println!("Alice versucht nun zu betrügen. Sie ignoriert die Transaktion an Bob (Schritt 6)");
+    println!("und verwendet den Gutschein-Zustand DAVOR, um ihr ursprüngliches Guthaben von 60 erneut auszugeben.");
+    let frank_id = crypto_utils::create_user_id(&frank_pub, Some("fr"))?;
+
+    let fraudulent_voucher =
+        create_split_transaction(&voucher, &standard, &voucher.creator.id, &creator_priv, &frank_id, "60")?;
+    println!("✅ Alices betrügerische Transaktion wurde technisch korrekt erstellt.");
+
+    println!("\n--- ERGEBNIS DES BETRUGSVERSUCHS ---");
+    let original_tx_to_bob = &voucher_after_split.transactions[1];
+    let fraudulent_tx_to_frank = &fraudulent_voucher.transactions[1];
+
+    assert_eq!(original_tx_to_bob.prev_hash, fraudulent_tx_to_frank.prev_hash);
+    assert_eq!(original_tx_to_bob.sender_id, fraudulent_tx_to_frank.sender_id);
+    assert_ne!(original_tx_to_bob.t_id, fraudulent_tx_to_frank.t_id);
+
+    println!("Es existieren nun ZWEI unterschiedliche Transaktionen vom selben Sender (Alice),");
+    println!("die beide auf demselben vorherigen Zustand (prev_hash) basieren.");
+    println!("-> Transaktion 1 (an Bob):");
+    println!("   - t_id:      {}", original_tx_to_bob.t_id);
+    println!("   - prev_hash: {}", original_tx_to_bob.prev_hash);
+    println!("-> Transaktion 2 (an Frank):");
+    println!("   - t_id:      {}", fraudulent_tx_to_frank.t_id);
+    println!("   - prev_hash: {}", fraudulent_tx_to_frank.prev_hash);
+    println!("\nDer 'prev_hash' ist identisch. Dies ist der Double Spend, der durch Abgleich von 'hash(prev_hash + sender_id)' auf einem Layer-2-System nachweisbar ist.");
 
     println!("\n--- PLAYGROUND BEENDET ---");
     Ok(())

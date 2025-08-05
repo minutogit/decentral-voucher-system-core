@@ -72,6 +72,9 @@ pub struct ValidationRules {
     /// Mindestgültigkeitsdauer, die ein Gutschein bei der Erstellung haben muss (z.B. P90D).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuance_minimum_validity_duration: Option<String>,
+    /// Definiert die Anzahl der Nachkommastellen für Betragsberechnungen, um Rundungsfehler zu vermeiden.
+    #[serde(default)]
+    pub amount_decimal_places: u8,
     pub guarantor_rules: ValidationGuarantorRules,
     pub required_voucher_fields: Vec<String>,
     pub allowed_transaction_types: Vec<String>,
