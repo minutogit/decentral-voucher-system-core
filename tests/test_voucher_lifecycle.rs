@@ -32,9 +32,12 @@
 use voucher_lib::{
     create_split_transaction, create_voucher, crypto_utils, from_json, get_spendable_balance,
     load_standard_definition, to_canonical_json, to_json, validate_voucher_against_standard,
-    Address, Collateral, Creator, GuarantorSignature,
-    NewVoucherData, NominalValue, ValidationError, Voucher, VoucherManagerError,
-    VoucherStandardDefinition,
+    Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue, Voucher,
+    VoucherCoreError, VoucherStandardDefinition,
+};
+// Importiere die spezifischen Fehlertypen direkt aus ihren Modulen für die `matches!`-Makros.
+use voucher_lib::services::{
+    voucher_manager::VoucherManagerError, voucher_validation::ValidationError,
 };
 
 use ed25519_dalek::SigningKey;
@@ -167,7 +170,7 @@ fn test_full_creation_and_validation_cycle() {
     let initial_validation_result = validate_voucher_against_standard(&voucher, &standard);
     assert!(matches!(
         initial_validation_result.unwrap_err(),
-        ValidationError::GuarantorRequirementsNotMet(_)
+        VoucherCoreError::Validation(ValidationError::GuarantorRequirementsNotMet(_))
     ));
 
     // 4. Simulation des Bürgenprozesses nach neuer Logik
@@ -252,7 +255,7 @@ fn test_validation_fails_on_invalid_signature() {
     // Wir erwarten einen Fehler beim Dekodieren der Signatur, da sie kein gültiges Base58 ist.
     assert!(matches!(
         validation_result.unwrap_err(),
-        ValidationError::SignatureDecodeError(_)
+        VoucherCoreError::Validation(ValidationError::SignatureDecodeError(_))
     ));
 }
 
@@ -276,7 +279,7 @@ fn test_validation_fails_on_missing_required_field() {
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
     assert!(validation_result.is_err());
     match validation_result.unwrap_err() {
-        ValidationError::MissingRequiredField(path) => assert_eq!(path, "creator.phone"),
+        VoucherCoreError::Validation(ValidationError::MissingRequiredField(path)) => assert_eq!(path, "creator.phone"),
         _ => panic!("Expected MissingRequiredField error"),
     }
 }
@@ -297,7 +300,7 @@ fn test_validation_fails_on_inconsistent_unit() {
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
     assert!(validation_result.is_err());
     match validation_result.unwrap_err() {
-        ValidationError::IncorrectNominalValueUnit { expected, found } => {
+        VoucherCoreError::Validation(ValidationError::IncorrectNominalValueUnit { expected, found }) => {
             assert_eq!(expected, "Unzen");
             assert_eq!(found, "EUR");
         }
@@ -319,7 +322,7 @@ fn test_validation_fails_on_guarantor_count() {
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
     assert!(validation_result.is_err());
     match validation_result.unwrap_err() {
-        ValidationError::GuarantorRequirementsNotMet(_) => {
+        VoucherCoreError::Validation(ValidationError::GuarantorRequirementsNotMet(_)) => {
             // Korrekter Fehlertyp
         }
         e => panic!("Expected GuarantorRequirementsNotMet error, but got {:?}", e),
@@ -525,7 +528,7 @@ fn test_split_fails_on_insufficient_funds() {
 
     assert!(matches!(
         split_result.unwrap_err(),
-        VoucherManagerError::InsufficientFunds { .. }
+        VoucherCoreError::Manager(VoucherManagerError::InsufficientFunds { .. })
     ));
 }
 
@@ -557,7 +560,7 @@ fn test_split_fails_on_non_divisible_voucher() {
 
     assert!(matches!(
         split_result.unwrap_err(),
-        VoucherManagerError::VoucherNotDivisible
+        VoucherCoreError::Manager(VoucherManagerError::VoucherNotDivisible)
     ));
 }
 
@@ -577,7 +580,7 @@ fn test_validity_duration_rules() {
     assert!(
         matches!(
             creation_result.unwrap_err(),
-            VoucherManagerError::InvalidValidityDuration(_)
+            VoucherCoreError::Manager(VoucherManagerError::InvalidValidityDuration(_))
         ),
         "Creation should fail with InvalidValidityDuration error"
     );
@@ -603,7 +606,7 @@ fn test_validity_duration_rules() {
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
     assert!(matches!(
         validation_result.unwrap_err(),
-        ValidationError::ValidityDurationTooShort { .. }
+        VoucherCoreError::Validation(ValidationError::ValidityDurationTooShort { .. })
     ));
 
     // 4. Testfall: Nicht übereinstimmende Mindestgültigkeitsregel zwischen Gutschein und Standard
@@ -613,7 +616,7 @@ fn test_validity_duration_rules() {
     let validation_result2 = validate_voucher_against_standard(&voucher2, &standard);
     assert!(matches!(
         validation_result2.unwrap_err(),
-        ValidationError::MismatchedMinimumValidity { .. }
+        VoucherCoreError::Validation(ValidationError::MismatchedMinimumValidity { .. })
     ));
 }
 
@@ -657,7 +660,7 @@ fn test_validation_fails_on_replayed_guarantor_signature() {
     let validation_result = validate_voucher_against_standard(&voucher_b, &standard);
     assert!(validation_result.is_err());
     match validation_result.unwrap_err() {
-        ValidationError::MismatchedVoucherIdInSignature { expected, found } => {
+        VoucherCoreError::Validation(ValidationError::MismatchedVoucherIdInSignature { expected, found }) => {
             assert_eq!(expected, voucher_b.voucher_id);
             assert_eq!(found, voucher_a.voucher_id);
         }
@@ -692,7 +695,7 @@ fn test_validation_fails_on_tampered_guarantor_signature() {
 
     // 3. Die Validierung muss nun fehlschlagen, da der Hash der Daten nicht mehr zur signature_id passt.
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
-    assert!(matches!(validation_result.unwrap_err(), ValidationError::InvalidSignatureId(id) if id == original_signature_id));
+    assert!(matches!(validation_result.unwrap_err(), VoucherCoreError::Validation(ValidationError::InvalidSignatureId(id)) if id == original_signature_id));
 }
 
 #[test]

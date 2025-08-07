@@ -3,6 +3,7 @@
 //! Dieses Modul enthält die Logik zur Validierung eines `Voucher`-Objekts
 //! gegen die Regeln eines `VoucherStandardDefinition`.
 
+use crate::error::VoucherCoreError;
 use crate::models::voucher::Voucher;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::crypto_utils::{
@@ -53,10 +54,7 @@ pub enum ValidationError {
     ValidityDurationTooShort { required: String, actual: String },
     /// Ein Datum im Gutschein konnte nicht geparst werden.
     DateParseError(String),
-    /// Fehler bei der Konvertierung von Beträgen.
-    AmountConversion(rust_decimal::Error),
-    /// Ein Fehler bei der JSON-Verarbeitung während der Validierung.
-    Serialization(serde_json::Error),
+    // Fehler bei der Konvertierung von Beträgen wird jetzt in VoucherCoreError behandelt.
     /// Ein Fehler bei der Dekodierung einer Signatur (z.B. Base58).
     SignatureDecodeError(String),
 }
@@ -80,17 +78,8 @@ impl fmt::Display for ValidationError {
             Self::MismatchedMinimumValidity { expected, found } => write!(f, "Voucher's stored minimum validity rule ('{}') does not match standard's rule ('{}')", found, expected),
             Self::ValidityDurationTooShort { required, actual } => write!(f, "Actual voucher validity duration is too short. Required at least: {}, Actual: {}", required, actual),
             Self::DateParseError(e) => write!(f, "Failed to parse date: {}", e),
-            Self::AmountConversion(e) => write!(f, "Failed to convert amount: {}", e),
-            Self::Serialization(e) => write!(f, "JSON serialization error during validation: {}", e),
             Self::SignatureDecodeError(e) => write!(f, "Failed to decode signature: {}", e),
         }
-    }
-}
-
-// Implementiert die Konvertierung von rust_decimal::Error.
-impl From<rust_decimal::Error> for ValidationError {
-    fn from(err: rust_decimal::Error) -> Self {
-        ValidationError::AmountConversion(err)
     }
 }
 
@@ -107,7 +96,7 @@ impl std::error::Error for ValidationError {}
 pub fn validate_voucher_against_standard(
     voucher: &Voucher,
     standard: &VoucherStandardDefinition,
-) -> Result<(), ValidationError> {
+) -> Result<(), VoucherCoreError> {
     // Die Reihenfolge der Prüfungen ist wichtig für aussagekräftige Fehlermeldungen.
     // Zuerst logische und inhaltliche Konsistenz, dann die kryptographischen Prüfungen.
     verify_required_fields(voucher, standard)?;
@@ -121,28 +110,28 @@ pub fn validate_voucher_against_standard(
 }
 
 /// Überprüft, ob alle im Standard als erforderlich markierten Felder im Gutschein vorhanden sind.
-fn verify_required_fields(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
-    let voucher_value = serde_json::to_value(voucher).map_err(ValidationError::Serialization)?;
+fn verify_required_fields(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), VoucherCoreError> {
+    let voucher_value = serde_json::to_value(voucher)?;
     for path in &standard.validation.required_voucher_fields {
         let mut current_value = &voucher_value;
         for key in path.split('.') {
             current_value = current_value.get(key).unwrap_or(&Value::Null);
         }
         if current_value.is_null() {
-            return Err(ValidationError::MissingRequiredField(path.clone()));
+            return Err(ValidationError::MissingRequiredField(path.clone()).into());
         }
     }
     Ok(())
 }
 
 /// Überprüft die Konsistenz der Gutscheindaten mit den Vorgaben des Standards.
-fn verify_consistency_with_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
+fn verify_consistency_with_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), VoucherCoreError> {
     // Überprüfe die Einheit des Nennwerts
     if voucher.nominal_value.unit != standard.template.fixed.nominal_value.unit {
         return Err(ValidationError::IncorrectNominalValueUnit {
             expected: standard.template.fixed.nominal_value.unit.clone(),
             found: voucher.nominal_value.unit.clone(),
-        });
+        }.into());
     }
 
     // Überprüfe die Teilbarkeit
@@ -150,7 +139,7 @@ fn verify_consistency_with_standard(voucher: &Voucher, standard: &VoucherStandar
         return Err(ValidationError::IncorrectDivisibility {
             expected: standard.template.fixed.is_divisible,
             found: voucher.divisible,
-        });
+        }.into());
     }
 
     // Weitere Konsistenzprüfungen (z.B. für collateral) können hier hinzugefügt werden.
@@ -158,7 +147,7 @@ fn verify_consistency_with_standard(voucher: &Voucher, standard: &VoucherStandar
 }
 
 /// Verifiziert, dass die Gültigkeitsdauer des Gutscheins den Regeln des Standards entspricht.
-fn verify_validity_duration(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
+fn verify_validity_duration(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), VoucherCoreError> {
     let standard_min_duration = standard.validation.issuance_minimum_validity_duration.clone().unwrap_or_default();
 
     // 1. Prüfe, ob die im Gutschein gespeicherte Regel mit der aktuellen Regel des Standards übereinstimmt.
@@ -167,7 +156,7 @@ fn verify_validity_duration(voucher: &Voucher, standard: &VoucherStandardDefinit
         return Err(ValidationError::MismatchedMinimumValidity {
             expected: standard_min_duration,
             found: voucher.standard_minimum_issuance_validity.clone(),
-        });
+        }.into());
     }
 
     // Wenn keine Mindestdauer im Standard definiert ist, sind wir hier fertig.
@@ -192,22 +181,22 @@ fn verify_validity_duration(voucher: &Voucher, standard: &VoucherStandardDefinit
         return Err(ValidationError::ValidityDurationTooShort {
             required: required_valid_until.to_rfc3339(),
             actual: valid_until_dt.to_rfc3339(),
-        });
+        }.into());
     }
 
     Ok(())
 }
 
 /// Eine eigenständige Hilfsfunktion, die `add_iso8601_duration` aus dem `voucher_manager` spiegelt.
-fn add_iso8601_duration_for_validation(start_date: DateTime<Utc>, duration_str: &str) -> Result<DateTime<Utc>, ValidationError> {
-    if !duration_str.starts_with('P') || duration_str.len() < 3 { return Err(ValidationError::DateParseError(format!("Invalid ISO 8601 duration format: {}", duration_str))); }
+fn add_iso8601_duration_for_validation(start_date: DateTime<Utc>, duration_str: &str) -> Result<DateTime<Utc>, VoucherCoreError> {
+    if !duration_str.starts_with('P') || duration_str.len() < 3 { return Err(ValidationError::DateParseError(format!("Invalid ISO 8601 duration format: {}", duration_str)).into()); }
     let (value_str, unit) = duration_str.split_at(duration_str.len() - 1);
     let value: u32 = value_str[1..].parse().map_err(|_| ValidationError::DateParseError(format!("Invalid number in duration: {}", duration_str)))?;
-    match unit { "Y" => Ok(start_date + chrono::Duration::days(i64::from(value) * 365)), "M" => Ok(start_date + chrono::Duration::days(i64::from(value) * 30)), "D" => Ok(start_date + chrono::Duration::days(i64::from(value))), _ => Err(ValidationError::DateParseError(format!("Unsupported duration unit in: {}", duration_str))), }
+    match unit { "Y" => Ok(start_date + chrono::Duration::days(i64::from(value) * 365)), "M" => Ok(start_date + chrono::Duration::days(i64::from(value) * 30)), "D" => Ok(start_date + chrono::Duration::days(i64::from(value))), _ => Err(ValidationError::DateParseError(format!("Unsupported duration unit in: {}", duration_str)).into()), }
 }
 
 /// Verifiziert die Signatur des Erstellers.
-fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
+fn verify_creator_signature(voucher: &Voucher) -> Result<(), VoucherCoreError> {
     // 1. Extrahiere den Public Key aus der User ID des Erstellers.
     let public_key = get_pubkey_from_user_id(&voucher.creator.id)
         .map_err(ValidationError::InvalidCreatorId)?;
@@ -227,8 +216,7 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
     voucher_to_verify.guarantor_signatures.clear();
     voucher_to_verify.additional_signatures.clear();
 
-    let voucher_json =
-        to_canonical_json(&voucher_to_verify).map_err(ValidationError::Serialization)?;
+    let voucher_json = to_canonical_json(&voucher_to_verify)?;
     let voucher_hash = get_hash(voucher_json);
 
     // 3. Dekodiere die Signatur aus dem Base58-Format.
@@ -241,14 +229,14 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), ValidationError> {
 
     // 4. Verifiziere die Signatur.
     if !verify_ed25519(&public_key, voucher_hash.as_bytes(), &signature) {
-        return Err(ValidationError::InvalidCreatorSignature);
+        return Err(ValidationError::InvalidCreatorSignature.into());
     }
 
     Ok(())
 }
 
 /// Verifiziert die Signaturen der Bürgen gegen die Anforderungen des Standards.
-fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
+fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), VoucherCoreError> {
     let required_count = standard.template.fixed.guarantor_info.needed_count as usize;
     let actual_count = voucher.guarantor_signatures.len();
 
@@ -258,7 +246,7 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
             "Expected at least {} guarantors, but found {}",
             required_count,
             actual_count
-        )));
+        )).into());
     }
 
     // 2. Prüfe jede vorhandene Bürgen-Signatur kryptographisch.
@@ -269,7 +257,7 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
             return Err(ValidationError::MismatchedVoucherIdInSignature {
                 expected: voucher.voucher_id.clone(),
                 found: guarantor_signature.voucher_id.clone(),
-            });
+            }.into());
         }
 
         // 2.2. Rekonstruiere die Daten, die zur Erzeugung der `signature_id` gehasht wurden.
@@ -281,11 +269,11 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
         signature_to_verify.signature_id = "".to_string();
         signature_to_verify.signature = "".to_string();
 
-        let calculated_signature_id_hash = get_hash(to_canonical_json(&signature_to_verify).map_err(ValidationError::Serialization)?);
+        let calculated_signature_id_hash = get_hash(to_canonical_json(&signature_to_verify)?);
 
         // 2.3. Verifiziere, dass die `signature_id` mit den Daten übereinstimmt.
         if calculated_signature_id_hash != guarantor_signature.signature_id {
-            return Err(ValidationError::InvalidSignatureId(guarantor_signature.signature_id.clone()));
+            return Err(ValidationError::InvalidSignatureId(guarantor_signature.signature_id.clone()).into());
         }
 
         // 2.4. Verifiziere die digitale Signatur selbst. Sie signiert die `signature_id`.
@@ -301,7 +289,7 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
         if !verify_ed25519(&public_key, guarantor_signature.signature_id.as_bytes(), &signature) {
             return Err(ValidationError::InvalidGuarantorSignature(
                 guarantor_signature.guarantor_id.clone(),
-            ));
+            ).into());
         }
     }
 
@@ -322,7 +310,7 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
             return Err(ValidationError::GuarantorRequirementsNotMet(format!(
                 "Missing required genders: {:?}",
                 needed_genders
-            )));
+            )).into());
         }
     }
 
@@ -332,7 +320,7 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
 
 /// Verifiziert die Integrität, Signaturen und Geschäftslogik der Transaktionsliste.
 /// Dies ist eine zustandsbehaftete Prüfung, die Bilanzen über die Kette hinweg verfolgt.
-fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError> {
+fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), VoucherCoreError> {
     // Ein Mapping von user_id zu ihrem aktuellen Guthaben.
     let mut balances: HashMap<String, Decimal> = HashMap::new();
     let decimal_places = standard.validation.amount_decimal_places as u32;
@@ -343,14 +331,14 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
             get_hash(&voucher.voucher_id)
         } else {
             let prev_transaction = &voucher.transactions[i - 1];
-            get_hash(to_canonical_json(prev_transaction).map_err(ValidationError::Serialization)?)
+            get_hash(to_canonical_json(prev_transaction)?)
         };
 
         if transaction.prev_hash != expected_prev_hash {
             return Err(ValidationError::InvalidTransaction(format!(
                 "Transaction {} has an invalid prev_hash.",
                 transaction.t_id
-            )));
+            )).into());
         }
 
         // 2. Überprüfe die Integrität der `t_id` und die `sender_signature`.
@@ -370,13 +358,13 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
         } else {
             // Geschäftslogik für alle nachfolgenden Transaktionen.
             if amount_sent > sender_balance {
-                return Err(ValidationError::InsufficientFunds);
+                return Err(ValidationError::InsufficientFunds.into());
             }
 
             // Spezifische Logik für 'split' Transaktionen
             if transaction.t_type == "split" {
                 if !voucher.divisible {
-                    return Err(ValidationError::InvalidTransaction("Voucher is not divisible.".to_string()));
+                    return Err(ValidationError::InvalidTransaction("Voucher is not divisible.".to_string()).into());
                 }
                 let remaining_str = transaction.sender_remaining_amount.as_deref()
                     .ok_or_else(|| ValidationError::InvalidTransaction("split transaction must have a sender_remaining_amount.".to_string()))?;
@@ -386,7 +374,7 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
 
                 // Prüfe die Erhaltung des Wertes.
                 if amount_sent + remaining_amount != sender_balance {
-                    return Err(ValidationError::AmountMismatchOnSplit);
+                    return Err(ValidationError::AmountMismatchOnSplit.into());
                 }
 
                 // Aktualisiere Guthaben für Sender und Empfänger.
@@ -406,17 +394,17 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
 }
 
 /// Hilfsfunktion zur Überprüfung der internen Integrität (t_id) und der Signatur einer einzelnen Transaktion.
-fn verify_transaction_integrity_and_signature(transaction: &crate::models::voucher::Transaction) -> Result<(), ValidationError> {
+fn verify_transaction_integrity_and_signature(transaction: &crate::models::voucher::Transaction) -> Result<(), VoucherCoreError> {
     // Überprüfe die t_id
     let mut tx_for_tid_calc = transaction.clone();
     tx_for_tid_calc.t_id = "".to_string();
     tx_for_tid_calc.sender_signature = "".to_string();
-    let calculated_tid = get_hash(to_canonical_json(&tx_for_tid_calc).map_err(ValidationError::Serialization)?);
+    let calculated_tid = get_hash(to_canonical_json(&tx_for_tid_calc)?);
     if transaction.t_id != calculated_tid {
         return Err(ValidationError::InvalidTransaction(format!(
             "Transaction ID {} does not match its content hash.",
             transaction.t_id
-        )));
+        )).into());
     }
 
     // Überprüfe die Signatur
@@ -426,8 +414,7 @@ fn verify_transaction_integrity_and_signature(transaction: &crate::models::vouch
         "t_id": transaction.t_id,
         "t_time": transaction.t_time,
     });
-    let signature_payload_hash =
-        get_hash(to_canonical_json(&signature_payload).map_err(ValidationError::Serialization)?);
+    let signature_payload_hash = get_hash(to_canonical_json(&signature_payload)?);
 
     let sender_pub_key = get_pubkey_from_user_id(&transaction.sender_id).map_err(|_| {
         ValidationError::InvalidTransactionSenderId(transaction.sender_id.clone())
@@ -440,7 +427,7 @@ fn verify_transaction_integrity_and_signature(transaction: &crate::models::vouch
         .map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
 
     if !verify_ed25519(&sender_pub_key, signature_payload_hash.as_bytes(), &signature) {
-        return Err(ValidationError::InvalidTransaction(format!("Invalid signature for transaction {}", transaction.t_id)));
+        return Err(ValidationError::InvalidTransaction(format!("Invalid signature for transaction {}", transaction.t_id)).into());
     }
 
     Ok(())
@@ -452,7 +439,7 @@ pub fn get_spendable_balance(
     voucher: &Voucher,
     user_id: &str,
     standard: &VoucherStandardDefinition,
-) -> Result<Decimal, ValidationError> {
+) -> Result<Decimal, VoucherCoreError> {
     let decimal_places = standard.validation.amount_decimal_places as u32;
     let mut balance = Decimal::ZERO;
 

@@ -6,6 +6,7 @@
 
 // Deklariert die Hauptmodule der Bibliothek und macht sie öffentlich.
 pub mod models;
+pub mod error;
 pub mod services;
 
 // Re-exportiert die wichtigsten öffentlichen Typen für eine einfachere Nutzung.
@@ -19,15 +20,15 @@ pub use models::voucher::{
 pub use models::voucher_standard_definition::{
     VoucherStandardDefinition,
 };
+pub use error::VoucherCoreError;
 
 // Services
 pub use services::crypto_utils;
 pub use services::utils::to_canonical_json;
 pub use services::utils;
 pub use services::voucher_manager::{
-    create_split_transaction, create_voucher, from_json, to_json, load_standard_definition, NewVoucherData,
-    VoucherManagerError,
+    create_split_transaction, create_voucher, from_json, to_json, load_standard_definition, NewVoucherData
 };
 pub use services::voucher_validation::{
-    get_spendable_balance, validate_voucher_against_standard, ValidationError,
+    get_spendable_balance, validate_voucher_against_standard
 };

@@ -1,27 +1,23 @@
 use crate::models::voucher::{
     Collateral, Creator, NominalValue, Transaction, Voucher, VoucherStandard,
 };
+use crate::error::VoucherCoreError;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::voucher_validation::get_spendable_balance;
 use crate::services::crypto_utils::{get_hash, sign_ed25519};
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
 
 use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
+// use toml::de::Error as TomlError; // ungenutzt
 use ed25519_dalek::SigningKey;
 use rust_decimal::Decimal;
-use serde_json;
 use std::fmt;
-use toml::de::Error as TomlError;
 
 // Definiert die Fehler, die im `voucher_manager`-Modul auftreten können.
 #[derive(Debug)]
 pub enum VoucherManagerError {
-    /// Fehler bei der Serialisierung oder Deserialisierung von JSON.
-    Serialization(serde_json::Error),
-    /// Fehler bei der Konvertierung von Beträgen (String zu Decimal).
-    AmountConversion(rust_decimal::Error),
-    /// Fehler beim Parsen von TOML.
-    TomlDeserialization(TomlError),
+    // AmountConversion wird jetzt direkt in VoucherCoreError behandelt
+    // TomlDeserialization(TomlError), // Wird jetzt direkt in VoucherCoreError behandelt
     /// Der Gutschein ist laut Standard nicht teilbar.
     VoucherNotDivisible,
     /// Das verfügbare Guthaben ist für die Transaktion nicht ausreichend.
@@ -34,38 +30,14 @@ pub enum VoucherManagerError {
     ValidationError(String),
 }
 
-// Implementiert die Konvertierung von serde_json::Error in unseren benutzerdefinierten Fehlertyp.
-impl From<serde_json::Error> for VoucherManagerError {
-    fn from(err: serde_json::Error) -> Self {
-        VoucherManagerError::Serialization(err)
-    }
-}
-
-// Implementiert die Konvertierung von rust_decimal::Error in unseren benutzerdefinierten Fehlertyp.
-impl From<rust_decimal::Error> for VoucherManagerError {
-    fn from(err: rust_decimal::Error) -> Self {
-        VoucherManagerError::AmountConversion(err)
-    }
-}
-
-// Implementiert die Konvertierung von toml::de::Error in unseren benutzerdefinierten Fehlertyp.
-impl From<TomlError> for VoucherManagerError {
-    fn from(err: TomlError) -> Self {
-        VoucherManagerError::TomlDeserialization(err)
-    }
-}
-
 impl fmt::Display for VoucherManagerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            VoucherManagerError::Serialization(e) => write!(f, "Serialization Error: {}", e),
-            VoucherManagerError::InvalidValidityDuration(s) => write!(f, "Invalid validity duration: {}", s),
-            VoucherManagerError::AmountConversion(e) => write!(f, "Amount Conversion Error: {}", e),
-            VoucherManagerError::TomlDeserialization(e) => write!(f, "TOML Deserialization Error: {}", e),
             VoucherManagerError::VoucherNotDivisible => write!(f, "Voucher is not divisible according to its standard."),
             VoucherManagerError::InsufficientFunds { available, needed } => {
                 write!(f, "Insufficient funds: Available: {}, Needed: {}", available, needed)
             }
+            VoucherManagerError::InvalidValidityDuration(s) => write!(f, "Invalid validity duration: {}", s),
             VoucherManagerError::Generic(s) => write!(f, "Voucher Manager Error: {}", s),
             VoucherManagerError::ValidationError(s) => write!(f, "Validation Error: {}", s),
         }
@@ -75,23 +47,22 @@ impl fmt::Display for VoucherManagerError {
 impl std::error::Error for VoucherManagerError {}
 
 /// Nimmt einen JSON-String entgegen und deserialisiert ihn in ein `Voucher`-Struct.
-pub fn from_json(json_str: &str) -> Result<Voucher, VoucherManagerError> {
+pub fn from_json(json_str: &str) -> Result<Voucher, VoucherCoreError> {
     let voucher: Voucher = serde_json::from_str(json_str)?;
     Ok(voucher)
 }
 
 /// Serialisiert ein `Voucher`-Struct in einen formatierten JSON-String.
-pub fn to_json(voucher: &Voucher) -> Result<String, VoucherManagerError> {
+pub fn to_json(voucher: &Voucher) -> Result<String, VoucherCoreError> {
     let json_str = serde_json::to_string_pretty(voucher)?;
     Ok(json_str)
 }
 
 /// Nimmt einen TOML-String entgegen und deserialisiert ihn in ein `VoucherStandardDefinition`-Struct.
-pub fn load_standard_definition(toml_str: &str) -> Result<VoucherStandardDefinition, VoucherManagerError> {
+pub fn load_standard_definition(toml_str: &str) -> Result<VoucherStandardDefinition, VoucherCoreError> {
     let definition: VoucherStandardDefinition = toml::from_str(toml_str)?;
     Ok(definition)
 }
-
 
 /// Eine Hilfsstruktur, die alle notwendigen Daten zur Erstellung eines neuen Gutscheins bündelt.
 /// Dies vereinfacht die Signatur der `create_voucher` Funktion.
@@ -120,7 +91,7 @@ pub fn create_voucher(
     data: NewVoucherData,
     standard_definition: &VoucherStandardDefinition,
     creator_signing_key: &SigningKey
-) -> Result<Voucher, VoucherManagerError> {
+) -> Result<Voucher, VoucherCoreError> {
     let creation_date_str = get_current_timestamp();
     let creation_dt = DateTime::parse_from_rfc3339(&creation_date_str).unwrap().with_timezone(&Utc);
 
@@ -141,7 +112,7 @@ pub fn create_voucher(
                 "Initial validity ({}) is less than the required minimum ({}).",
                 initial_valid_until_dt.to_rfc3339(),
                 min_duration_dt.to_rfc3339()
-            )));
+            )).into());
         }
     }
 
@@ -306,17 +277,16 @@ pub fn create_split_transaction(
     sender_key: &SigningKey,
     recipient_id: &str,
     amount_to_send_str: &str,
-) -> Result<Voucher, VoucherManagerError> {
+) -> Result<Voucher, VoucherCoreError> {
     // 1. Prüfen, ob der Gutschein überhaupt teilbar ist.
     if !voucher.divisible {
-        return Err(VoucherManagerError::VoucherNotDivisible);
+        return Err(VoucherManagerError::VoucherNotDivisible.into());
     }
 
     let decimal_places = standard.validation.amount_decimal_places as u32;
 
     // 2. Aktuell verfügbares Guthaben für den Sender berechnen.
-    let spendable_balance = get_spendable_balance(voucher, sender_id, standard)
-        .map_err(|e| VoucherManagerError::ValidationError(e.to_string()))?;
+    let spendable_balance = get_spendable_balance(voucher, sender_id, standard)?;
 
     // 3. Zu sendenden Betrag parsen und mit dem Guthaben vergleichen.
     let mut amount_to_send = Decimal::from_str_exact(amount_to_send_str)?;
@@ -326,7 +296,7 @@ pub fn create_split_transaction(
         return Err(VoucherManagerError::InsufficientFunds {
             available: spendable_balance,
             needed: amount_to_send,
-        });
+        }.into());
     }
 
     // 4. Restbetrag für den Sender berechnen.

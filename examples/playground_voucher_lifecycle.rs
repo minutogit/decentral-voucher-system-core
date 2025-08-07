@@ -13,8 +13,12 @@
 use voucher_lib::{
     create_split_transaction, create_voucher, crypto_utils, get_spendable_balance,
     load_standard_definition, to_canonical_json, to_json, validate_voucher_against_standard,
-    Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue,
-    ValidationError, VoucherManagerError, VoucherStandardDefinition,
+    Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue, VoucherCoreError,
+    VoucherStandardDefinition,
+};
+// Importiere die spezifischen Fehlertypen direkt aus ihren Modulen für die `match`-Anweisungen.
+use voucher_lib::services::{
+    voucher_manager::VoucherManagerError, voucher_validation::ValidationError,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -64,13 +68,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         collateral: Collateral { type_: "".into(), unit: "".into(), amount: "".into(), abbreviation: "".into(), description: "".into(), redeem_condition: "".into() },
         creator: base_creator_data.clone(),
     };
-    match create_voucher(invalid_duration_data, &standard, &creator_priv) {
-        Err(VoucherManagerError::InvalidValidityDuration(reason)) => {
-            println!("✅ Erfolg! Erstellung wie erwartet fehlgeschlagen.");
-            println!("   Grund: {}", reason);
-        }
-        Ok(_) => eprintln!("❌ Fehler: Erstellung war unerwartet erfolgreich."),
-        Err(e) => eprintln!("❌ Fehler: Unerwarteter Fehler bei der Erstellung: {}", e),
+    if let Err(e) = create_voucher(invalid_duration_data, &standard, &creator_priv) {
+         match e {
+            VoucherCoreError::Manager(VoucherManagerError::InvalidValidityDuration(reason)) => {
+                println!("✅ Erfolg! Erstellung wie erwartet fehlgeschlagen.");
+                println!("   Grund: {}", reason);
+            },
+            _ => eprintln!("❌ Fehler: Unerwarteter Fehler bei der Erstellung: {}", e),
+         }
+    } else {
+        eprintln!("❌ Fehler: Erstellung war unerwartet erfolgreich.");
     }
 
     // --- SCHRITT 1: Gültigen Gutschein erstellen ---
@@ -110,12 +117,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- SCHRITT 2: Unvollständigen Gutschein validieren (erwarteter Fehler) ---
     println!("\n--- SCHRITT 2: Validiere unvollständigen Gutschein (erwarteter Fehler) ---");
     match validate_voucher_against_standard(&voucher, &standard) {
-        Err(ValidationError::GuarantorRequirementsNotMet(reason)) => {
+        Err(VoucherCoreError::Validation(ValidationError::GuarantorRequirementsNotMet(reason))) => {
             println!("✅ Erfolg! Validierung wie erwartet fehlgeschlagen.");
             println!("   Grund: {}", reason);
         }
         Ok(_) => eprintln!("❌ Fehler: Validierung war unerwartet erfolgreich."),
-        Err(e) => eprintln!("❌ Fehler: Unerwarteter Validierungsfehler: {}", e),
+        Err(e) => eprintln!("❌ Fehler: Unerwarteter Validierungsfehler: {:}", e),
     }
 
     // --- SCHRITT 3: Bürgen fügen ihre Signaturen nach dem neuen Schema hinzu ---
@@ -186,12 +193,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Der Name des ersten Bürgen wurde zu 'Betrüger' geändert.");
 
     match validate_voucher_against_standard(&tampered_voucher, &standard) {
-        Err(ValidationError::InvalidSignatureId(id)) => {
+        Err(VoucherCoreError::Validation(ValidationError::InvalidSignatureId(id))) => {
             println!("✅ Erfolg! Validierung wie erwartet fehlgeschlagen.");
             println!("   Grund: Die Metadaten der Signatur mit ID '{}' wurden manipuliert und passen nicht mehr zum Hash.", id);
         }
         Ok(_) => eprintln!("❌ Fehler: Validierung war unerwartet erfolgreich."),
-        Err(e) => eprintln!("❌ Fehler: Unerwarteter Validierungsfehler: {}", e),
+        Err(e) => eprintln!("❌ Fehler: Unerwarteter Validierungsfehler: {:}", e),
     }
 
     // --- SCHRITT 6: Eine Split-Transaktion durchführen ---
