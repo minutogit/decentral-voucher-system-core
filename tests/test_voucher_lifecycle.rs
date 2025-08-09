@@ -39,7 +39,11 @@ use voucher_lib::{
 use voucher_lib::services::{
     voucher_manager::VoucherManagerError, voucher_validation::ValidationError,
 };
-
+// Imports für den neuen Secure-Transfer-Test. `create_profile_from_mnemonic` wird nicht mehr benötigt.
+use voucher_lib::models::profile::{UserIdentity, UserProfile};
+use voucher_lib::services::profile_manager::{
+    add_voucher_to_profile, create_and_encrypt_transaction_bundle, process_encrypted_transaction_bundle,
+};
 use ed25519_dalek::SigningKey;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -745,4 +749,126 @@ fn test_double_spend_detection_logic() {
     assert_ne!(tx_to_bob.t_id, fraudulent_tx_to_frank.t_id, "Transaction IDs must be different");
 
     println!("Double Spend Test: OK. prev_hash für beide Transaktionen ist: {}", tx_to_bob.prev_hash);
+}
+
+#[test]
+fn test_secure_voucher_transfer_via_encrypted_bundle() {
+    // --- 1. SETUP ---
+    // Load the divisible "silver" standard, as it needs no guarantors
+    let standard_toml = std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+
+    // Alice and Bob create their profiles using the deterministic test key generator,
+    // which is faster and more direct than using mnemonics for testing.
+    let (alice_pub, alice_key) =
+        crypto_utils::generate_ed25519_keypair_for_tests(Some("alice_secure_transfer"));
+    let alice_user_id = crypto_utils::create_user_id(&alice_pub, Some("al")).unwrap();
+    let alice_identity = UserIdentity {
+        signing_key: alice_key,
+        public_key: alice_pub,
+        user_id: alice_user_id.clone(),
+    };
+    let mut alice_profile = UserProfile {
+        user_id: alice_user_id,
+        vouchers: Default::default(),
+        bundle_history: Default::default(),
+    };
+
+    let (bob_pub, bob_key) =
+        crypto_utils::generate_ed25519_keypair_for_tests(Some("bob_secure_transfer"));
+    let bob_user_id = crypto_utils::create_user_id(&bob_pub, Some("bo")).unwrap();
+    let bob_identity = UserIdentity {
+        signing_key: bob_key,
+        public_key: bob_pub,
+        user_id: bob_user_id.clone(),
+    };
+    let mut bob_profile = UserProfile {
+        user_id: bob_user_id,
+        vouchers: Default::default(),
+        bundle_history: Default::default(),
+    };
+
+    // --- 2. VOUCHER CREATION by Alice ---
+    let alice_creator = Creator {
+        id: alice_identity.user_id.clone(),
+        first_name: "Alice".to_string(),
+        last_name: "Sender".to_string(),
+        address: Address { street: ".".to_string(), house_number: ".".to_string(), zip_code: ".".to_string(), city: ".".to_string(), country: ".".to_string(), full_address: ".".to_string() },
+        email: Some("alice@test.com".to_string()),
+        gender: "2".to_string(),
+        signature: "".to_string(), // will be filled by create_voucher
+        coordinates: "0,0".to_string(),
+        organization: None,
+        community: None,
+        phone: None,
+        url: None,
+        service_offer: None,
+        needs: None
+    };
+
+    let voucher_data = NewVoucherData {
+        // Der silver_standard erfordert eine Mindestgültigkeit. P1Y (ein Jahr)
+        // ist zu kurz und führt zu einem Fehler. Wir erhöhen auf P3Y (drei Jahre),
+        // um die Anforderung sicher zu erfüllen.
+        validity_duration: Some("P3Y".to_string()),
+        non_redeemable_test_voucher: false,
+        nominal_value: NominalValue {
+            unit: "".to_string(),
+            amount: "500".to_string(),
+            abbreviation: "".to_string(),
+            description: "Test value".to_string(),
+        },
+        collateral: Collateral {
+            type_: "".to_string(),
+            unit: "".to_string(),
+            amount: "".to_string(),
+            abbreviation: "".to_string(),
+            description: "".to_string(),
+            redeem_condition: "".to_string(),
+        },
+        creator: alice_creator,
+    };
+
+    let voucher = create_voucher(voucher_data, &standard, &alice_identity.signing_key).unwrap();
+    let voucher_id = voucher.voucher_id.clone();
+
+    // Alice adds the new voucher to her profile
+    add_voucher_to_profile(&mut alice_profile, voucher).unwrap();
+    assert!(alice_profile.vouchers.contains_key(&voucher_id));
+    assert!(!bob_profile.vouchers.contains_key(&voucher_id));
+
+    // --- 3. SECURE TRANSFER from Alice to Bob ---
+    // Alice creates an encrypted bundle containing the voucher
+    let vouchers_to_send = vec![alice_profile.vouchers.get(&voucher_id).unwrap().clone()];
+
+    let encrypted_bundle_for_bob = create_and_encrypt_transaction_bundle(
+        &mut alice_profile,
+        &alice_identity,
+        vouchers_to_send,
+        &bob_identity.user_id,
+        Some("Here is the voucher I promised!".to_string()),
+    )
+        .unwrap();
+
+    assert!(!alice_profile.vouchers.contains_key(&voucher_id), "Voucher should be removed from Alice's profile after sending.");
+    assert_eq!(alice_profile.bundle_history.len(), 1, "Alice's bundle history should contain one entry.");
+
+    // --- 4. RECEIPT AND PROCESSING by Bob ---
+    process_encrypted_transaction_bundle(
+        &mut bob_profile,
+        &bob_identity,
+        &encrypted_bundle_for_bob,
+        &alice_identity.user_id,
+    )
+        .unwrap();
+
+    // --- 5. VERIFICATION ---
+    assert!(bob_profile.vouchers.contains_key(&voucher_id), "Voucher should now be in Bob's profile.");
+    assert_eq!(bob_profile.bundle_history.len(), 1, "Bob's bundle history should contain one entry.");
+    let received_voucher = bob_profile.vouchers.get(&voucher_id).unwrap();
+
+
+    // Füge die finale Überprüfung hinzu, ob der empfangene Gutschein auch wirklich gültig ist.
+    assert!(validate_voucher_against_standard(received_voucher, &standard).is_ok(), "Received voucher must be valid.");
+    println!("SUCCESS: Voucher was securely transferred from Alice to Bob via an encrypted bundle.");
 }

@@ -7,7 +7,7 @@
 use crate::models::voucher::Voucher;
 use ed25519_dalek::{SigningKey, VerifyingKey as EdPublicKey};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 use zeroize::ZeroizeOnDrop;
 
 /// Repräsentiert die kryptographische Identität eines Nutzers.
@@ -16,11 +16,13 @@ use zeroize::ZeroizeOnDrop;
 pub struct UserIdentity {
     /// Der private Ed25519-Schlüssel des Nutzers.
     /// **Wichtig:** Dieser Schlüssel wird nicht serialisiert und verlässt niemals das Profil.
-    #[zeroize]
+    /// `ed25519_dalek::SigningKey` implementiert `ZeroizeOnDrop` bereits von Haus aus.
     pub signing_key: SigningKey,
     /// Der öffentliche Ed25519-Schlüssel, abgeleitet vom privaten Schlüssel.
+    #[zeroize(skip)]
     pub public_key: EdPublicKey,
     /// Die öffentliche, teilbare User-ID, generiert aus dem Public Key.
+    #[zeroize(skip)]
     pub user_id: String,
 }
 
@@ -99,9 +101,6 @@ pub struct UserProfile {
     pub user_id: String,
     /// Der aktuelle Bestand an Gutscheinen, indiziert nach ihrer `voucher_id`.
     pub vouchers: HashMap<String, Voucher>,
-    /// Eine Menge von Tupeln `(voucher_id, prev_hash)`, um bereits gesehene Transaktionszustände
-    /// zu speichern. Dies dient als einfacher Mechanismus zur Erkennung von Double-Spending-Versuchen.
-    pub known_tx_refs: HashSet<(String, String)>,
     /// Eine Historie aller gesendeten und empfangenen Transaktionsbündel,
     /// indiziert nach der `bundle_id`.
     pub bundle_history: HashMap<String, TransactionBundleHeader>,
@@ -114,7 +113,6 @@ impl Default for UserProfile {
         Self {
             user_id: String::new(),
             vouchers: HashMap::new(),
-            known_tx_refs: HashSet::new(),
             bundle_history: HashMap::new(),
         }
     }

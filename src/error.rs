@@ -23,6 +23,10 @@ pub enum VoucherCoreError {
     #[error("Voucher Manager Error: {0}")]
     Manager(#[from] crate::services::voucher_manager::VoucherManagerError),
 
+    /// Ein Fehler, der während der Profil-Verwaltung (Speichern, Laden) aufgetreten ist.
+    #[error("Profile Manager Error: {0}")]
+    Profile(#[from] crate::services::profile_manager::ProfileManagerError),
+
     /// Ein Fehler bei der Verarbeitung von JSON (Serialisierung oder Deserialisierung).
     #[error("JSON Processing Error: {0}")]
     Json(#[from] serde_json::Error),
