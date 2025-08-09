@@ -5,6 +5,7 @@
 //! und zur automatischen Konvertierung von untergeordneten Fehlertypen.
 
 use thiserror::Error;
+use crate::services::crypto_utils::SymmetricEncryptionError;
 
 /// Der zentrale Fehlertyp für alle Operationen in der `voucher_core`-Bibliothek.
 ///
@@ -33,6 +34,11 @@ pub enum VoucherCoreError {
     /// Ein Fehler bei der Konvertierung oder Berechnung von Beträgen.
     #[error("Amount Conversion Error: {0}")]
     AmountConversion(#[from] rust_decimal::Error),
+
+    /// Ein Fehler bei der symmetrischen Ver- oder Entschlüsselung.
+    /// Kapselt den spezifischen `SymmetricEncryptionError`-Typ.
+    #[error("Symmetric Encryption Error: {0}")]
+    SymmetricEncryption(#[from] SymmetricEncryptionError),
 
     /// Ein Platzhalter für allgemeine kryptographische Fehler, die nicht von anderen Typen abgedeckt werden.
     #[error("Cryptography error: {0}")]

@@ -6,6 +6,12 @@ use rand_core::OsRng;
 // Kryptografische Hashes (SHA-2)
 use sha2::{Sha256, Sha512, Digest};
 
+// Symmetrische Verschlüsselung
+use chacha20poly1305::{
+    aead::{Aead, AeadCore, KeyInit},
+    ChaCha20Poly1305, Nonce,
+};
+
 // Ed25519 Signaturen
 use ed25519_dalek::{
     SigningKey,
@@ -17,7 +23,7 @@ use ed25519_dalek::{
 };
 
 // X25519 Schlüsselvereinbarung
-use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
+use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
 
 // BIP39 Mnemonic Phrase
 use bip39::{Mnemonic, Language};
@@ -105,9 +111,11 @@ pub fn derive_ed25519_keypair(
         100_000,
         &mut seed
     ).expect("PBKDF2 failed");
-    
+
     let hmac_context = b"DCVOUCHER-KDF-v1";
-    let mut hmac = Hmac::<Sha512>::new_from_slice(hmac_context)
+    // Explizite Angabe des Traits, um die Mehrdeutigkeit von `new_from_slice` aufzulösen,
+    // die in hmac v0.12 durch die Traits `Mac` und `KeyInit` entstehen kann.
+    let mut hmac = <Hmac<Sha512> as Mac>::new_from_slice(hmac_context)
         .expect("HMAC key error");
     hmac.update(&seed);
     let derived_seed = hmac.finalize().into_bytes();
@@ -185,6 +193,33 @@ pub fn ed25519_pub_to_x25519(ed_pub: &EdPublicKey) -> X25519PublicKey {
     X25519PublicKey::from(x25519_bytes)
 }
 
+/// Konvertiert einen Ed25519 Signaturschlüssel in einen X25519 geheimen Schlüssel für Diffie-Hellman.
+///
+/// Dies ist das Gegenstück zum öffentlichen Schlüssel `ed25519_pub_to_x25519`. Es ermöglicht die
+/// Ableitung eines Schlüssel-Vereinbarungsschlüssels (X25519) aus einem langfristigen
+/// Identitätsschlüssel (Ed25519).
+///
+/// # Arguments
+///
+/// * `ed_sk` - Der geheime Ed25519 Signaturschlüssel (`SigningKey`).
+///
+/// # Returns
+///
+/// Der entsprechende statische geheime X25519-Schlüssel (`StaticSecret`).
+///
+/// # Sicherheit
+///
+/// Die Konvertierung folgt der Standardmethode, bei der der Seed des privaten Ed25519-Schlüssels
+/// mit SHA-512 gehasht wird. Die unteren 32 Bytes des Hashes werden verwendet. Die Funktion
+/// `StaticSecret::from` führt anschließend das für X25519 erforderliche Clamping durch.
+pub fn ed25519_sk_to_x25519_sk(ed_sk: &SigningKey) -> StaticSecret {
+    let mut hasher = Sha512::new();
+    hasher.update(&ed_sk.to_bytes());
+    let hash = hasher.finalize();
+    // Wir müssen dem Compiler den Zieltyp für `try_into` explizit angeben.
+    let key_bytes: [u8; 32] = hash[..32].try_into().expect("SHA512 hash must be 64 bytes");
+    StaticSecret::from(key_bytes)
+}
 
 /// Generates a temporary X25519 key pair for Diffie-Hellman (Forward Secrecy).
 ///
@@ -223,6 +258,83 @@ pub fn perform_diffie_hellman(
     let mut output = [0u8; 32];
     hkdf.expand(b"key", &mut output).unwrap();
     output
+}
+
+/// Custom error type for symmetric encryption/decryption functions.
+#[derive(Debug, thiserror::Error)]
+pub enum SymmetricEncryptionError {
+    /// Indicates that the AEAD encryption process failed.
+    #[error("AEAD encryption failed.")]
+    EncryptionFailed,
+
+    /// Indicates that AEAD decryption failed, likely due to a wrong key or tampered data.
+    #[error("AEAD decryption failed. The key may be incorrect or the data may have been tampered with.")]
+    DecryptionFailed,
+
+    /// Indicates that the provided data slice has an invalid length (e.g., too short to contain a nonce).
+    #[error("Invalid data length: {0}")]
+    InvalidLength(String),
+}
+
+/// Symmetrically encrypts data using ChaCha20-Poly1305.
+///
+/// This function encapsulates AEAD (Authenticated Encryption with Associated Data)
+/// to provide both confidentiality and integrity. A random 12-byte nonce is generated
+/// for each encryption and prepended to the ciphertext.
+///
+/// # Arguments
+///
+/// * `key` - A 32-byte key for the encryption.
+/// * `data` - The plaintext data to encrypt.
+///
+/// # Returns
+///
+/// A `Result` containing a byte vector `[12-byte nonce | ciphertext]` or a `SymmetricEncryptionError`.
+pub fn encrypt_data(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, SymmetricEncryptionError> {
+    let cipher = ChaCha20Poly1305::new(key.into());
+    // `generate_nonce` uses a cryptographically secure RNG provided by the OS.
+    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+
+    // The `encrypt` method handles the authenticated encryption.
+    let ciphertext = cipher.encrypt(&nonce, data)
+        .map_err(|_| SymmetricEncryptionError::EncryptionFailed)?;
+
+    // Prepend the nonce to the ciphertext for use in decryption.
+    let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
+    result.extend_from_slice(&nonce);
+    result.extend_from_slice(&ciphertext);
+
+    Ok(result)
+}
+
+/// Symmetrically decrypts data encrypted with `encrypt_data`.
+///
+/// This function expects the input data to be in the format `[12-byte nonce | ciphertext]`.
+/// It uses the AEAD properties of ChaCha20-Poly1305 to verify the integrity and
+/// authenticity of the data before returning the plaintext.
+///
+/// # Arguments
+///
+/// * `key` - The 32-byte key used for the encryption.
+/// * `encrypted_data_with_nonce` - The combined nonce and ciphertext.
+///
+/// # Returns
+///
+/// A `Result` containing the original plaintext data or a `SymmetricEncryptionError` if decryption fails.
+pub fn decrypt_data(key: &[u8; 32], encrypted_data_with_nonce: &[u8]) -> Result<Vec<u8>, SymmetricEncryptionError> {
+    const NONCE_SIZE: usize = 12;
+    if encrypted_data_with_nonce.len() < NONCE_SIZE {
+        return Err(SymmetricEncryptionError::InvalidLength(format!(
+            "Encrypted data must be at least {} bytes long to contain a nonce.", NONCE_SIZE
+        )));
+    }
+
+    let cipher = ChaCha20Poly1305::new(key.into());
+    let (nonce_bytes, ciphertext) = encrypted_data_with_nonce.split_at(NONCE_SIZE);
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    // `decrypt` automatically verifies the authentication tag. If it fails, an error is returned.
+    cipher.decrypt(nonce, ciphertext).map_err(|_| SymmetricEncryptionError::DecryptionFailed)
 }
 
 /// Signs a message with an Ed25519 signing key.

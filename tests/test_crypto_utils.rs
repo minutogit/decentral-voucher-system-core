@@ -6,17 +6,24 @@ mod tests {
     use voucher_lib::services::crypto_utils::{
         generate_mnemonic,
         derive_ed25519_keypair,
+        generate_ed25519_keypair_for_tests,
         generate_ephemeral_x25519_keypair,
         perform_diffie_hellman,
         ed25519_pub_to_x25519,
+        ed25519_sk_to_x25519_sk,
+        encrypt_data,
+        decrypt_data,
         sign_ed25519,
         verify_ed25519,
         create_user_id,
         validate_user_id,
-        get_pubkey_from_user_id
+        get_pubkey_from_user_id,
     };
     use bip39::Language;
     use hex;
+    use x25519_dalek::PublicKey as X25519PublicKey;
+    use hkdf::Hkdf;
+    use sha2::Sha256;
 
     #[test]
     fn test_generate_mnemonic() -> Result<(), Box<dyn std::error::Error>> {
@@ -123,5 +130,60 @@ mod tests {
         assert!(is_valid_recovered);
         println!("Signature valid (using RECOVERED key)? {}", is_valid_recovered);
         Ok(())
+    }
+
+    #[test]
+    fn test_static_encryption_flow() {
+        // 1. Erzeuge zwei deterministische Identitäten für einen wiederholbaren Test.
+        let (alice_ed_pub, alice_ed_sk) = generate_ed25519_keypair_for_tests(Some("alice"));
+        let (bob_ed_pub, bob_ed_sk) = generate_ed25519_keypair_for_tests(Some("bob"));
+
+        // 2. Teste die Konvertierung des geheimen Schlüssels.
+        // Die Konvertierung muss konsistent sein: Der aus dem konvertierten geheimen Schlüssel
+        // abgeleitete öffentliche Schlüssel muss mit dem direkt konvertierten öffentlichen
+        // Schlüssel übereinstimmen.
+        let alice_x_sk_static = ed25519_sk_to_x25519_sk(&alice_ed_sk);
+        let alice_x_pub_from_sk = X25519PublicKey::from(&alice_x_sk_static);
+        let alice_x_pub_from_pub = ed25519_pub_to_x25519(&alice_ed_pub);
+        assert_eq!(alice_x_pub_from_sk.as_bytes(), alice_x_pub_from_pub.as_bytes());
+        println!("SUCCESS: Private key conversion (Ed25519 -> X25519) is consistent.");
+
+        // 3. Führe einen statischen Diffie-Hellman-Austausch durch.
+        // Alice verwendet ihren statischen geheimen Schlüssel und Bobs öffentlichen Schlüssel.
+        let bob_x_pub = ed25519_pub_to_x25519(&bob_ed_pub);
+        let shared_secret_alice = alice_x_sk_static.diffie_hellman(&bob_x_pub);
+
+        // Bob macht dasselbe mit seinem statischen geheimen Schlüssel und Alice' öffentlichem Schlüssel.
+        let bob_x_sk_static = ed25519_sk_to_x25519_sk(&bob_ed_sk);
+        let shared_secret_bob = bob_x_sk_static.diffie_hellman(&alice_x_pub_from_pub);
+
+        // Beide müssen zum selben Ergebnis kommen.
+        assert_eq!(shared_secret_alice.as_bytes(), shared_secret_bob.as_bytes());
+        println!("SUCCESS: Static Diffie-Hellman resulted in a matching shared secret.");
+
+        // 4. Leite einen sicheren Verschlüsselungsschlüssel aus dem gemeinsamen Geheimnis ab (Best Practice).
+        let hkdf = Hkdf::<Sha256>::new(None, shared_secret_alice.as_bytes());
+        let mut encryption_key = [0u8; 32];
+        hkdf.expand(b"voucher-p2p-encryption", &mut encryption_key).unwrap();
+
+        // 5. Teste die Ver- und Entschlüsselung.
+        let plaintext = b"This is a secret message for Bob.";
+        println!("Plaintext: '{}'", std::str::from_utf8(plaintext).unwrap());
+
+        let encrypted_data = encrypt_data(&encryption_key, plaintext).unwrap();
+        println!("Encrypted (hex, nonce prefixed): {}", hex::encode(&encrypted_data));
+        assert_ne!(plaintext, &encrypted_data[..]); // Sicherstellen, dass es kein Klartext ist.
+
+        let decrypted_data = decrypt_data(&encryption_key, &encrypted_data).unwrap();
+        println!("Decrypted: '{}'", std::str::from_utf8(&decrypted_data).unwrap());
+        assert_eq!(plaintext.to_vec(), decrypted_data);
+        println!("SUCCESS: Message was encrypted and decrypted correctly.");
+
+        // 6. Negativtest: Entschlüsselung mit falschem Schlüssel muss fehlschlagen.
+        let mut wrong_key = encryption_key;
+        wrong_key[0] ^= 0xff; // Einen Bit im Schlüssel ändern.
+        let result = decrypt_data(&wrong_key, &encrypted_data);
+        assert!(result.is_err(), "Decryption should fail with a wrong key");
+        println!("SUCCESS: Decryption correctly failed with the wrong key.");
     }
 }
