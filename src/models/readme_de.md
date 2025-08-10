@@ -39,8 +39,7 @@ Dies ist der entscheidende Baustein für die externe Validierung. Die Signatur d
 
 Der Hash dieses Objekts wird mit dem privaten Schlüssel des Senders signiert. Diese bewusste Auswahl der signierten Daten ist der Schlüssel, der die folgende anonymisierte Double-Spending-Erkennung ermöglicht und eine zeitliche Einordnung des Betrugsversuchs erlaubt.
 
-## 4\. Layer 2: Anonymisierte Double-Spending-Erkennung
-
+## 4. Layer 2: Anonymisierte Double-Spending-Erkennung
 Obwohl die `voucher_core`-Bibliothek selbst keine Serverlogik enthält, ist die Transaktionsstruktur so optimiert, dass eine übergeordnete Anwendung eine globale Datenbank (zentral oder dezentral) zur Betrugserkennung nutzen kann.
 
 ### Das Konzept des "Anonymen Fingerabdrucks"
