@@ -1,5 +1,4 @@
 # llm-context.md für decentral-voucher-system-core
-
 Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher_core`. Sie dient als "README für die KI", um ein umfassendes Verständnis des Projekts und seiner Anforderungen zu gewährleisten.
 
 ## 1. Projekt & Zweck
@@ -9,7 +8,6 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 - **Kernfunktionalität:** Erstellung, Verwaltung und Verifizierung von digitalen Gutscheinen und deren Transaktionshistorie.
 
 ## 2. Tech-Stack
-
 - **Sprache:** Rust
 - **Zielplattformen:** FFI-kompatibel (für Bindings zu anderen Sprachen) und WASM-kompatibel (für Web-Anwendungen).
 - **Kryptographie:** Standard-Rust-Kryptographie-Bibliotheken für digitale Signaturen und Hashing.
@@ -23,9 +21,7 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 - **Fokus auf Kernlogik:** Zunächst wird nur die grundlegende Funktionalität der Gutschein- und Transaktionsverwaltung implementiert. Die "Transaction Verification Layer" und "User Trust Verification Layer" (Layer 2 mit Servern) sollen *nicht* implementiert werden, aber die Struktur der Transaktionsketten sollte so optimiert werden, dass eine spätere Erweiterung um diese Layer möglich ist.
 - **FFI/WASM-Kompatibilität:** Rust-Typen und -Funktionen müssen so gestaltet sein, dass sie einfach über FFI und WASM exponiert werden können (z.B. durch Verwendung von `#[no_mangle]`, C-kompatiblen Datentypen und `wasm_bindgen`).
 
-
 ## 4. Coding-Standards & Wichtige Regeln
-
 - **Rust Best Practices:** Einhaltung der idiomatischen Rust-Programmierung, Fokus auf Sicherheit, Performance und Speichereffizienz.
 - **Fehlerbehandlung:** Robuste Fehlerbehandlung mit Rusts `Result`-Typ.
 - **Dokumentation:** Umfassende interne Dokumentation (Doc-Kommentare) für alle öffentlichen Funktionen und Strukturen.
@@ -139,7 +135,6 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
 ```
 
 ### Transaktionskette
-
 Die Transaktionen im `transactions`-Array bilden eine kryptographisch verkettete Liste, ähnlich einer Blockchain.
 
 - **Verkettung:** Jede Transaktion enthält ein `prev_hash`-Feld.
@@ -150,13 +145,11 @@ Die Transaktionen im `transactions`-Array bilden eine kryptographisch verkettete
 
 ### Double-Spending-Erkennung (Basis-Layer)
 Ein **Double Spend** liegt vor, wenn ein Nutzer von einem bestimmten Zustand des Gutscheins (repräsentiert durch den `prev_hash` der letzten gültigen Transaktion) zwei oder mehr unterschiedliche neue Transaktionen erstellt und diese an verschiedene Personen verteilt.
-
 - **Erkennung:** Der Betrug ist kryptographisch nachweisbar, weil mehrere unterschiedliche Transaktionen existieren, die alle vom selben Sender (`sender_id`) signiert wurden und sich auf denselben `prev_hash` beziehen. Obwohl jede dieser Transaktionen für sich genommen eine gültige Signatur hat, ist die Existenz mehrerer "gültiger" Folgezustände der Beweis für den Betrug. Ein übergeordnetes System (Layer 2) kann dies durch die Suche nach doppelten Paaren von (`prev_hash`, `sender_id`) leicht aufdecken.
 - **Beweisbarkeit:** Die digitale Signatur ermöglicht die eindeutige und unwiderlegbare Identifizierung des Betrügers.
 
 #### Erkennung ohne Layer-2-Server (durch Pfad-Vereinigung)
 Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich die aufgespaltenen Transaktionspfade bei einem späteren Nutzer wieder treffen. Da Gutscheine im System zirkulieren und oft beim Ersteller wieder eingelöst werden, ist dies ein praxisnaher Anwendungsfall.
-
 - **Mechanismus:** Ein Nutzer, der einen Gutschein erhält, kann dessen Transaktionshistorie mit den Historien von bereits erhaltenen oder archivierten Gutscheinen vergleichen.
 - **Beispiel:** Der ursprüngliche Ersteller eines Gutscheins erhält später zwei unterschiedliche Gutschein-Dateien zur Einlösung zurück. Beide leiten ihre Herkunft von seinem ursprünglichen Gutschein ab. Beim Vergleich der Historien stellt er fest, dass beide Dateien eine unterschiedliche Transaktion enthalten, die aber vom selben `prev_hash` abstammt. Damit ist der Double Spend bewiesen.
 - **Voraussetzung:** Diese Methode erfordert, dass Nutzer (insbesondere Akteure wie Ersteller, die Einlösungen akzeptieren) alte Gutschein-Zustände vorhalten, um eine Vergleichsbasis zu haben.
@@ -170,26 +163,30 @@ Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich
 
 ## 6. Aktueller Projektstrukturbaum
 ```
+.
 ├── Cargo.lock
 ├── Cargo.toml
 ├── examples
-│   ├── playground_crypto_utils.rs
-│   ├── playground_utils.rs
-│   └── playground_voucher_lifecycle.rs
+│   ├── playground_crypto_utils.rs
+│   ├── playground_utils.rs
+│   └── playground_voucher_lifecycle.rs
 ├── output.txt
 ├── README.md
 ├── src
+│   ├── error.rs
 │   ├── examples
 │   ├── lib.rs
 │   ├── main.rs
 │   ├── models
 │   │   ├── mod.rs
+│   │   ├── profile.rs
 │   │   ├── readme_de.md
 │   │   ├── voucher.rs
 │   │   └── voucher_standard_definition.rs
 │   ├── services
 │   │   ├── crypto_utils.rs
 │   │   ├── mod.rs
+│   │   ├── profile_manager.rs
 │   │   ├── utils.rs
 │   │   ├── voucher_manager.rs
 │   │   └── voucher_validation.rs
@@ -200,9 +197,9 @@ Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich
 │   └── test_voucher_lifecycle.rs
 ├── todo.md
 └── voucher_standards
-    ├── minuto_standard.toml
-    ├── silver_standard.toml
-    └── standard_template.toml
+    ├── minuto_standard.toml
+    ├── silver_standard.toml
+    └── standard_template.toml
 ```
 
 ## 7. Implementierte Kernfunktionen
@@ -238,6 +235,9 @@ Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierun
 - `pub fn ed25519_pub_to_x25519(ed_pub: &EdPublicKey) -> X25519PublicKey`
   - Konvertiert einen Ed25519 Public Key in einen X25519 Public Key für den Diffie-Hellman-Schlüsselaustausch.
 
+- `pub fn ed25519_sk_to_x25519_sk(ed_sk: &SigningKey) -> StaticSecret`
+  - Konvertiert einen Ed25519 Signing Key in einen X25519 Secret Key für den Diffie-Hellman-Schlüsselaustausch.
+
 - `pub fn generate_ephemeral_x25519_keypair() -> (X25519PublicKey, EphemeralSecret)`
   - Generiert ein temporäres X25519-Schlüsselpaar für Diffie-Hellman (Forward Secrecy).
 
@@ -248,12 +248,11 @@ Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierun
   - Signiert eine Nachricht mit einem Ed25519 Signing Key.
 
 - `pub fn verify_ed25519(public_key: &EdPublicKey, message: &[u8], signature: &Signature) -> bool`
-
   - Verifiziert eine Ed25519-Signatur.
 
 - `pub enum UserIdError`
-
   - Fehlertypen für die User ID-Erstellung.
+
 - `pub fn create_user_id(public_key: &EdPublicKey, user_prefix: Option<&str>) -> Result<String, UserIdError>`
   - Generiert eine User ID aus dem Public Key mit einem optionalen Präfix, Prüfsumme und Präfixlängenindikator.
 
@@ -278,7 +277,6 @@ Dieses Modul stellt die Kernlogik für die Erstellung und Verarbeitung von Gutsc
   - Erstellt und signiert die kryptographisch verkettete `init`-Transaktion.
 
 - `pub fn create_split_transaction(voucher: &Voucher, standard: &VoucherStandardDefinition, sender_id: &str, sender_key: &SigningKey, recipient_id: &str, amount_to_send_str: &str) -> Result<Voucher, VoucherManagerError>`
-
   - Erstellt eine Kopie des Gutscheins mit einer neuen, angehängten `split`-Transaktion.
   - Prüft, ob der Gutschein teilbar ist.
   - Verwendet `get_spendable_balance` zur Guthabenprüfung.
@@ -286,7 +284,6 @@ Dieses Modul stellt die Kernlogik für die Erstellung und Verarbeitung von Gutsc
   - Erzeugt und signiert die neue Transaktion.
 
 - `pub fn to_json(voucher: &Voucher) -> Result<String, VoucherManagerError>`
-
   - Serialisiert ein `Voucher`-Struct in einen formatierten JSON-String.
 
 - `pub fn from_json(json_str: &str) -> Result<Voucher, VoucherManagerError>`
@@ -307,8 +304,68 @@ Dieses Modul enthält die Logik zur Validierung eines `Voucher`-Objekts gegen di
   - **Transaktionskette:** Validiert die gesamte Kette von Transaktionen durch Überprüfung der `prev_hash`-Verkettung, der Integrität jeder `t_id`, der Signatur jedes Senders und der Geschäftslogik (z.B. ausreichende Deckung, korrekte Summen bei Splits).
 
 - `pub fn get_spendable_balance(voucher: &Voucher, user_id: &str, standard: &VoucherStandardDefinition) -> Result<Decimal, ValidationError>`
-
   - Berechnet das aktuell verfügbare Guthaben für einen Nutzer, indem es den Zustand nach der letzten Transaktion im Gutschein analysiert.
+
+### `src/error.rs` Modul
+Dieses Modul definiert den zentralen, einheitlichen Fehlertyp für die Bibliothek.
+
+- `pub enum VoucherCoreError`
+  - Ein `thiserror`-basiertes Enum, das alle spezifischen Fehler aus den verschiedenen Modulen (Manager, Validierung, Krypto etc.) bündelt. Dies vereinfacht die Fehlerbehandlung für die Nutzer der Bibliothek erheblich. Es deckt u.a. Fehler bei der Validierung, bei Manager-Operationen, bei der (De-)Serialisierung (JSON, TOML) und bei kryptographischen Operationen ab.
+
+### `src/models/profile.rs` Modul
+Definiert die Datenstrukturen für ein vollständiges Nutzerprofil ("Wallet"), das die Identität, den Gutschein-Bestand und die Transaktionshistorie verwaltet.
+
+- `pub struct UserIdentity`
+  - Hält das kryptographische Schlüsselpaar (`SigningKey`, `EdPublicKey`) und die daraus abgeleitete `user_id`. Der `SigningKey` wird bei Verlassen des Gültigkeitsbereichs automatisch genullt (`ZeroizeOnDrop`), um die Sicherheit zu erhöhen.
+
+- `pub enum TransactionDirection`
+  - Ein Enum (`Sent`, `Received`), das die Richtung einer Transaktion aus der Perspektive des Profilinhabers angibt.
+
+- `pub struct TransactionBundleHeader`
+  - Eine leichtgewichtige Zusammenfassung eines `TransactionBundle`, die für die Anzeige in der Transaktionshistorie verwendet wird. Enthält Metadaten und Gutschein-IDs anstelle der vollständigen Gutschein-Objekte.
+
+- `pub struct TransactionBundle`
+  - Repräsentiert ein vollständiges, signiertes Paket für den Austausch von Gutscheinen. Es enthält alle Metadaten sowie die vollständigen `Voucher`-Objekte, die übertragen werden. Dies ist die atomare Einheit, die zwischen Nutzern ausgetauscht wird.
+
+- `pub struct UserProfile`
+  - Die Hauptstruktur, die den serialisierbaren Zustand eines Nutzers repräsentiert. Sie enthält die `user_id`, eine `HashMap` der `Voucher` im Besitz des Nutzers und eine `HashMap` der `TransactionBundleHeader` als Transaktionshistorie.
+
+### `services::profile_manager` Modul
+Dieses Modul enthält die Logik zur Verwaltung des `UserProfile`. Es kümmert sich um die Erstellung von Profilen, die sichere Speicherung auf der Festplatte und den Austausch von Gutscheinen über Transaktionsbündel.
+
+- `pub enum ProfileManagerError`
+  - Spezifische Fehler, die bei der Profilverwaltung auftreten können, z. B. bei der Schlüsselableitung, bei I/O-Operationen oder bei ungültigen Signaturen in Bündeln.
+
+- `pub fn save_profile_encrypted(profile: &UserProfile, path: &Path, password: &str) -> Result<(), VoucherCoreError>`
+  - Serialisiert das `UserProfile` zu JSON, leitet mit Argon2 einen Verschlüsselungsschlüssel aus dem Passwort und einem Salt ab, verschlüsselt die Daten mit ChaCha20Poly1305 und schreibt das Ergebnis (Salt + verschlüsselte Daten) in eine Datei.
+
+- `pub fn load_profile_encrypted(path: &Path, password: &str) -> Result<UserProfile, VoucherCoreError>`
+  - Liest eine verschlüsselte Profildatei, leitet mit dem Passwort und dem aus der Datei gelesenen Salt den Schlüssel ab, entschlüsselt die Daten und deserialisiert das JSON zurück in ein `UserProfile`-Objekt.
+
+- `pub fn create_profile_from_mnemonic(mnemonic_phrase: &str, user_prefix: Option<&str>) -> Result<(UserProfile, UserIdentity), VoucherCoreError>`
+  - Erstellt ein neues, leeres `UserProfile` und die dazugehörige `UserIdentity` durch Ableitung des Schlüsselpaars aus einer Mnemonic-Phrase.
+
+- `pub fn add_voucher_to_profile(profile: &mut UserProfile, voucher: Voucher) -> Result<(), ProfileManagerError>`
+  - Fügt einen Gutschein zum `vouchers`-Bestand des Profils hinzu.
+
+- `pub fn create_and_encrypt_transaction_bundle(sender_profile: &mut UserProfile, sender_identity: &UserIdentity, vouchers: Vec<Voucher>, recipient_id: &str, notes: Option<String>) -> Result<Vec<u8>, VoucherCoreError>`
+  - Erstellt ein `TransactionBundle` mit den zu sendenden Gutscheinen.
+  - Erzeugt eine `bundle_id` aus dem Hash des kanonischen Bündel-JSONs.
+  - Signiert die `bundle_id` mit dem `SigningKey` des Senders.
+  - Führt einen Diffie-Hellman-Schlüsselaustausch (`X25519`) mit dem öffentlichen Schlüssel des Empfängers durch, um einen Shared Secret abzuleiten.
+  - Verwendet HKDF, um aus dem Shared Secret einen symmetrischen Schlüssel für die Verschlüsselung abzuleiten.
+  - Verschlüsselt das gesamte Bündel mit ChaCha20Poly1305.
+  - Aktualisiert das Senderprofil: entfernt die gesendeten Gutscheine und fügt einen `TransactionBundleHeader` zur Historie hinzu.
+  - Gibt das verschlüsselte Byte-Array zurück, das an den Empfänger gesendet werden kann.
+
+- `pub fn process_encrypted_transaction_bundle(recipient_profile: &mut UserProfile, recipient_identity: &UserIdentity, encrypted_bundle: &[u8], sender_id: &str) -> Result<(), VoucherCoreError>`
+  - Führt die umgekehrten Schritte von `create_and_encrypt_transaction_bundle` aus.
+  - Leitet denselben Shared Secret und Verschlüsselungsschlüssel unter Verwendung des eigenen privaten Schlüssels und des öffentlichen Schlüssels des Senders ab.
+  - Entschlüsselt das Bündel.
+  - Deserialisiert das Bündel-JSON.
+  - Verifiziert, dass die `sender_id` im Bündel mit der erwarteten ID übereinstimmt.
+  - Verifiziert die digitale Ed25519-Signatur des Senders über der `bundle_id`, um die Authentizität und Integrität des Bündels sicherzustellen.
+  - Bei Erfolg: Fügt die empfangenen Gutscheine zum Profil des Empfängers hinzu und legt einen entsprechenden Header in der Transaktionshistorie an.
 
 ### Beispiel-Playgrounds
 Die Dateien `playground_utils.rs` und `playground_crypto_utils.rs` demonstrieren die Nutzung von Hilfsfunktionen. Die Datei `playground_voucher_lifecycle.rs` ist ein umfassendes Beispiel, das den gesamten Lebenszyklus eines Gutscheins zeigt: Erstellung (mit Fehlerfall bei falscher Gültigkeit), Hinzufügen von Bürgen, Validierung, eine Split-Transaktion und die Simulation eines kryptographisch nachweisbaren Double-Spend-Betrugs. Diese Dateien sind nicht Teil der `voucher_core` API.
