@@ -858,7 +858,6 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
         &mut bob_profile,
         &bob_identity,
         &encrypted_bundle_for_bob,
-        &alice_identity.user_id,
     )
         .unwrap();
 

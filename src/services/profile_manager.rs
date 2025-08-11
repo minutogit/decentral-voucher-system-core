@@ -1,25 +1,24 @@
 //! # src/services/profile_manager.rs
 //!
 //! Enthält die Logik zur Verwaltung eines `UserProfile`, insbesondere für
-//! die sichere Persistenz und den Austausch von Gutscheinen.
+//! die sichere Persistenz und den Austausch von Gutscheinen mittels des `secure_container_manager`.
 
 use crate::error::VoucherCoreError;
 use crate::models::profile::{TransactionBundle, TransactionDirection, UserIdentity, UserProfile};
+use crate::models::secure_container::{PayloadType, SecureContainer};
 use crate::models::voucher::Voucher;
 use crate::services::crypto_utils::{
-    create_user_id, decrypt_data, ed25519_pub_to_x25519,
-    ed25519_sk_to_x25519_sk, encrypt_data, get_hash, get_pubkey_from_user_id, sign_ed25519,
-    verify_ed25519,
+    self, create_user_id, get_hash, get_pubkey_from_user_id, sign_ed25519, verify_ed25519,
+};
+use crate::services::secure_container_manager::{
+    create_secure_container, open_secure_container, ContainerManagerError,
 };
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
 use crate::services::voucher_validation::ValidationError;
 use argon2::Argon2;
 use ed25519_dalek::Signature;
-use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore};
-use sha2::Sha256;
 use std::fs;
-use std::path::Path;
 
 // Konstanten für die Persistenz
 const SALT_SIZE: usize = 16;
@@ -49,7 +48,7 @@ pub enum ProfileManagerError {
 /// Serialisiert und verschlüsselt ein `UserProfile`-Objekt und speichert es in einer Datei.
 pub fn save_profile_encrypted(
     profile: &UserProfile,
-    path: &Path,
+    path: &std::path::Path,
     password: &str,
 ) -> Result<(), VoucherCoreError> {
     // Wir verwenden JSON für die Persistenz, da es robust ist.
@@ -63,7 +62,7 @@ pub fn save_profile_encrypted(
         .hash_password_into(password.as_bytes(), &salt, &mut key)
         .map_err(|e| ProfileManagerError::KeyDerivation(e.to_string()))?;
 
-    let encrypted_data_with_nonce = encrypt_data(&key, &serialized_profile)?;
+    let encrypted_data_with_nonce = crypto_utils::encrypt_data(&key, &serialized_profile)?;
 
     let mut final_data = Vec::with_capacity(SALT_SIZE + encrypted_data_with_nonce.len());
     final_data.extend_from_slice(&salt);
@@ -76,7 +75,7 @@ pub fn save_profile_encrypted(
 
 /// Liest eine verschlüsselte Profildatei, entschlüsselt sie und deserialisiert sie zu einem `UserProfile`.
 pub fn load_profile_encrypted(
-    path: &Path,
+    path: &std::path::Path,
     password: &str,
 ) -> Result<UserProfile, VoucherCoreError> {
     let encrypted_file_content = fs::read(path).map_err(ProfileManagerError::from)?;
@@ -92,7 +91,7 @@ pub fn load_profile_encrypted(
         .hash_password_into(password.as_bytes(), salt_bytes, &mut key)
         .map_err(|e| ProfileManagerError::KeyDerivation(e.to_string()))?;
 
-    let decrypted_data = decrypt_data(&key, encrypted_data_with_nonce)?;
+    let decrypted_data = crypto_utils::decrypt_data(&key, encrypted_data_with_nonce)?;
 
     let profile: UserProfile = serde_json::from_slice(&decrypted_data)?;
 
@@ -132,7 +131,7 @@ pub fn add_voucher_to_profile(
     Ok(())
 }
 
-/// Erstellt, signiert und verschlüsselt ein Transaktionsbündel für einen Empfänger.
+/// Erstellt ein `TransactionBundle`, verpackt es in einen `SecureContainer` und serialisiert diesen.
 pub fn create_and_encrypt_transaction_bundle(
     sender_profile: &mut UserProfile,
     sender_identity: &UserIdentity,
@@ -140,6 +139,7 @@ pub fn create_and_encrypt_transaction_bundle(
     recipient_id: &str,
     notes: Option<String>,
 ) -> Result<Vec<u8>, VoucherCoreError> {
+    // 1. Das innere Transaktionsbündel erstellen und signieren.
     let mut bundle = TransactionBundle {
         bundle_id: "".to_string(),
         sender_id: sender_identity.user_id.clone(),
@@ -155,22 +155,18 @@ pub fn create_and_encrypt_transaction_bundle(
 
     let signature = sign_ed25519(&sender_identity.signing_key, bundle.bundle_id.as_bytes());
     bundle.sender_signature = bs58::encode(signature.to_bytes()).into_string();
-
-    let recipient_pubkey_ed =
-        get_pubkey_from_user_id(recipient_id).map_err(|e| VoucherCoreError::Crypto(e.to_string()))?;
-    let recipient_pubkey_x = ed25519_pub_to_x25519(&recipient_pubkey_ed);
-    let sender_secret_x = ed25519_sk_to_x25519_sk(&sender_identity.signing_key);
-
-    let shared_secret = sender_secret_x.diffie_hellman(&recipient_pubkey_x);
-
-    let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
-    let mut key = [0u8; 32];
-    hkdf.expand(b"voucher-bundle-key", &mut key).unwrap();
-
-    // Serialisiere das Bündel zu JSON für den Transport.
     let signed_bundle_bytes = serde_json::to_vec(&bundle)?;
 
-    let encrypted_bundle = encrypt_data(&key, &signed_bundle_bytes)?;
+    // 2. Das signierte Bündel als Payload in einen `SecureContainer` verpacken.
+    let secure_container = create_secure_container(
+        sender_identity,
+        &[recipient_id.to_string()],
+        &signed_bundle_bytes,
+        PayloadType::TransactionBundle,
+    )?;
+
+    // 3. Den Container zum Transport serialisieren und das Sender-Profil aktualisieren.
+    let container_bytes = serde_json::to_vec(&secure_container)?;
 
     let header = bundle.to_header(TransactionDirection::Sent);
     sender_profile
@@ -181,40 +177,33 @@ pub fn create_and_encrypt_transaction_bundle(
         sender_profile.vouchers.remove(&v.voucher_id);
     }
 
-    Ok(encrypted_bundle)
+    Ok(container_bytes)
 }
 
-/// Entschlüsselt, verifiziert und verarbeitet ein empfangenes Transaktionsbündel.
+/// Verarbeitet einen serialisierten `SecureContainer`, der ein `TransactionBundle` enthält.
 pub fn process_encrypted_transaction_bundle(
     recipient_profile: &mut UserProfile,
     recipient_identity: &UserIdentity,
-    encrypted_bundle: &[u8],
-    sender_id: &str,
+    container_bytes: &[u8],
 ) -> Result<(), VoucherCoreError> {
-    let sender_pubkey_ed =
-        get_pubkey_from_user_id(sender_id).map_err(|e| VoucherCoreError::Crypto(e.to_string()))?;
-    let sender_pubkey_x = ed25519_pub_to_x25519(&sender_pubkey_ed);
-    let recipient_secret_x = ed25519_sk_to_x25519_sk(&recipient_identity.signing_key);
+    // 1. Den äußeren Container deserialisieren.
+    let container: SecureContainer = serde_json::from_slice(container_bytes)?;
 
-    let shared_secret = recipient_secret_x.diffie_hellman(&sender_pubkey_x);
+    // 2. Den Container mit der zentralen Funktion öffnen und entschlüsseln.
+    // Diese Funktion übernimmt die Signaturprüfung des Containers.
+    let (decrypted_bundle_bytes, payload_type) =
+        open_secure_container(&container, recipient_identity)?;
 
-    let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
-    let mut key = [0u8; 32];
-    hkdf.expand(b"voucher-bundle-key", &mut key).unwrap();
-
-    let decrypted_bundle_bytes = decrypt_data(&key, encrypted_bundle)?;
-
-    // Deserialisiere das Bündel aus JSON.
-    let bundle: TransactionBundle = serde_json::from_slice(&decrypted_bundle_bytes)?;
-
-    if bundle.sender_id != sender_id {
-        return Err(ProfileManagerError::SenderIdMismatch {
-            expected: sender_id.to_string(),
-            found: bundle.sender_id.clone(),
-        }
-            .into());
+    // 3. Sicherstellen, dass der Payload-Typ korrekt ist.
+    if payload_type != PayloadType::TransactionBundle {
+        return Err(VoucherCoreError::Container(ContainerManagerError::NotAnIntendedRecipient)); // Simplification
     }
 
+    // 4. Das innere TransactionBundle deserialisieren und dessen eigene Signatur verifizieren.
+    let bundle: TransactionBundle = serde_json::from_slice(&decrypted_bundle_bytes)?;
+    let sender_pubkey_ed = get_pubkey_from_user_id(&bundle.sender_id)?;
+
+    // Verifiziere die *innere* Signatur des Bündels selbst.
     let signature_bytes = bs58::decode(&bundle.sender_signature)
         .into_vec()
         .map_err(|e| {
@@ -232,6 +221,7 @@ pub fn process_encrypted_transaction_bundle(
         return Err(ProfileManagerError::InvalidBundleSignature.into());
     }
 
+    // 5. Bei Erfolg: Gutscheine und Historie im Profil des Empfängers aktualisieren.
     for voucher in bundle.vouchers.clone() {
         add_voucher_to_profile(recipient_profile, voucher)?;
     }

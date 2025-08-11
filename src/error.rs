@@ -5,7 +5,12 @@
 //! und zur automatischen Konvertierung von untergeordneten Fehlertypen.
 
 use thiserror::Error;
-use crate::services::crypto_utils::SymmetricEncryptionError;
+use crate::services::{
+    crypto_utils::{GetPubkeyError, SymmetricEncryptionError},
+    profile_manager::ProfileManagerError,
+    secure_container_manager::ContainerManagerError,
+    voucher_manager::VoucherManagerError,
+};
 
 /// Der zentrale Fehlertyp für alle Operationen in der `voucher_core`-Bibliothek.
 ///
@@ -21,11 +26,15 @@ pub enum VoucherCoreError {
     /// Ein Fehler, der während der Gutschein-Verwaltung (Erstellung, Transaktionen) aufgetreten ist.
     /// Kapselt den spezifischeren `VoucherManagerError`-Typ.
     #[error("Voucher Manager Error: {0}")]
-    Manager(#[from] crate::services::voucher_manager::VoucherManagerError),
+    Manager(#[from] VoucherManagerError),
 
     /// Ein Fehler, der während der Profil-Verwaltung (Speichern, Laden) aufgetreten ist.
     #[error("Profile Manager Error: {0}")]
-    Profile(#[from] crate::services::profile_manager::ProfileManagerError),
+    Profile(#[from] ProfileManagerError),
+
+    /// Ein Fehler, der bei der Verarbeitung eines `SecureContainer` auftrat.
+    #[error("Secure Container Error: {0}")]
+    Container(#[from] ContainerManagerError),
 
     /// Ein Fehler bei der Verarbeitung von JSON (Serialisierung oder Deserialisierung).
     #[error("JSON Processing Error: {0}")]
@@ -43,6 +52,10 @@ pub enum VoucherCoreError {
     /// Kapselt den spezifischen `SymmetricEncryptionError`-Typ.
     #[error("Symmetric Encryption Error: {0}")]
     SymmetricEncryption(#[from] SymmetricEncryptionError),
+
+    /// Ein Fehler bei der Verarbeitung einer User ID oder eines Public Keys.
+    #[error("User ID or Key Error: {0}")]
+    KeyOrId(#[from] GetPubkeyError),
 
     /// Ein Platzhalter für allgemeine kryptographische Fehler, die nicht von anderen Typen abgedeckt werden.
     #[error("Cryptography error: {0}")]
