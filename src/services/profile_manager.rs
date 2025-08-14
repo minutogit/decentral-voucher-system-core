@@ -1,7 +1,9 @@
 //! # src/services/profile_manager.rs
 //!
 //! Enthält die Logik zur Verwaltung eines `UserProfile`, insbesondere für
-//! die sichere Persistenz und den Austausch von Gutscheinen mittels des `secure_container_manager`.
+//! die sichere Persistenz (Verschlüsselung, Laden, Speichern) und den
+//! Austausch von Gutscheinen. Implementiert eine Passwort-Wiederherstellung
+//! über die aus der Mnemonic-Phrase abgeleitete User-Identität.
 
 use crate::error::VoucherCoreError;
 use crate::models::profile::{TransactionBundle, TransactionDirection, UserIdentity, UserProfile, VoucherStore};
@@ -19,7 +21,7 @@ use argon2::Argon2;
 use ed25519_dalek::Signature;
 use rand_core::{OsRng, RngCore};
 use rust_decimal::Decimal;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
 // Konstanten für die Persistenz
@@ -27,6 +29,32 @@ const SALT_SIZE: usize = 16;
 const KEY_SIZE: usize = 32;
 const PROFILE_FILE_NAME: &str = "profile.enc";
 const VOUCHER_STORE_FILE_NAME: &str = "vouchers.enc";
+
+/// Container für das verschlüsselte Nutzerprofil, inklusive Key-Wrapping-Informationen.
+/// Diese Struktur wird nach `profile.enc` serialisiert.
+#[derive(Serialize, Deserialize)]
+struct ProfileStorageContainer {
+    /// Salt für die Ableitung des Verschlüsselungsschlüssels aus dem Passwort des Nutzers.
+    password_kdf_salt: [u8; SALT_SIZE],
+    /// Der Master-Dateischlüssel, verschlüsselt (gewrappt) mit dem vom Passwort abgeleiteten Schlüssel.
+    password_wrapped_key_with_nonce: Vec<u8>,
+
+    /// Salt für die Ableitung des Verschlüsselungsschlüssels aus der Identität des Nutzers (Mnemonic).
+    mnemonic_kdf_salt: [u8; SALT_SIZE],
+    /// Der Master-Dateischlüssel, verschlüsselt (gewrappt) mit dem von der Identität abgeleiteten Schlüssel.
+    mnemonic_wrapped_key_with_nonce: Vec<u8>,
+
+    /// Die verschlüsselte `UserProfile`-Nutzlast.
+    encrypted_profile_payload: Vec<u8>,
+}
+
+/// Container für den verschlüsselten Gutschein-Store.
+/// Diese Struktur wird nach `vouchers.enc` serialisiert.
+#[derive(Serialize, Deserialize)]
+struct VoucherStorageContainer {
+    /// Die verschlüsselte `VoucherStore`-Nutzlast.
+    encrypted_store_payload: Vec<u8>,
+}
 
 /// Definiert die Fehler, die im `profile_manager`-Modul auftreten können.
 #[derive(Debug, thiserror::Error)]
@@ -40,8 +68,9 @@ pub enum ProfileManagerError {
     #[error("Invalid profile file format or length.")]
     InvalidFileFormat,
 
-    // Der `Serialization`-Fehler wird nicht mehr benötigt, da `VoucherCoreError`
-    // bereits `serde_json::Error` verarbeiten kann.
+    #[error("Authentication failed. Invalid password or recovery identity.")]
+    AuthenticationFailed,
+
     #[error("Sender ID in bundle did not match. Expected: {expected}, Found: {found}")]
     SenderIdMismatch { expected: String, found: String },
 
@@ -52,96 +81,129 @@ pub enum ProfileManagerError {
     InvalidVoucherState(String),
 }
 
-/// Private Hilfsfunktion zum Verschlüsseln und Schreiben von Daten in eine Datei.
-/// Leitet einen Schlüssel von einem Passwort ab, verschlüsselt die Daten und schreibt
-/// das Salt zusammen mit den verschlüsselten Daten.
-fn encrypt_to_file<T: Serialize>(
-    data: &T,
-    path: &Path,
+/// Private Hilfsfunktion, die einen Verschlüsselungsschlüssel vom Passwort des Nutzers ableitet.
+fn derive_key_from_password(
     password: &str,
-) -> Result<(), VoucherCoreError> {
-    let serialized_data = serde_json::to_vec(data)?;
-    let mut salt = [0u8; SALT_SIZE];
-    OsRng.fill_bytes(&mut salt);
-
+    salt: &[u8; SALT_SIZE],
+) -> Result<[u8; KEY_SIZE], ProfileManagerError> {
     let mut key = [0u8; KEY_SIZE];
     Argon2::default()
-        .hash_password_into(password.as_bytes(), &salt, &mut key)
+        .hash_password_into(password.as_bytes(), salt, &mut key)
         .map_err(|e| ProfileManagerError::KeyDerivation(e.to_string()))?;
-
-    let encrypted_data_with_nonce = crypto_utils::encrypt_data(&key, &serialized_data)?;
-
-    let mut final_data = Vec::with_capacity(SALT_SIZE + encrypted_data_with_nonce.len());
-    final_data.extend_from_slice(&salt);
-    final_data.extend_from_slice(&encrypted_data_with_nonce);
-
-    fs::write(path, final_data).map_err(ProfileManagerError::from)?;
-    Ok(())
+    Ok(key)
 }
 
-/// Private Hilfsfunktion zum Lesen und Entschlüsseln von Daten aus einer Datei.
-fn decrypt_from_file<T: DeserializeOwned>(
-    path: &Path,
-    password: &str,
-) -> Result<T, VoucherCoreError> {
-    let encrypted_file_content = fs::read(path).map_err(ProfileManagerError::from)?;
-    if encrypted_file_content.len() < SALT_SIZE {
-        return Err(ProfileManagerError::InvalidFileFormat.into());
-    }
-    let (salt_bytes, encrypted_data_with_nonce) = encrypted_file_content.split_at(SALT_SIZE);
-
+/// Private Hilfsfunktion, die einen Verschlüsselungsschlüssel von der Identität des Nutzers ableitet.
+/// Dies ist der "Master"-Wiederherstellungspfad.
+fn derive_key_from_identity(
+    identity: &UserIdentity,
+    salt: &[u8; SALT_SIZE],
+) -> Result<[u8; KEY_SIZE], ProfileManagerError> {
     let mut key = [0u8; KEY_SIZE];
+    // Die Bytes des Signierschlüssels dienen als deterministisches Geheimnis.
     Argon2::default()
-        .hash_password_into(password.as_bytes(), salt_bytes, &mut key)
+        .hash_password_into(identity.signing_key.to_bytes().as_ref(), salt, &mut key)
         .map_err(|e| ProfileManagerError::KeyDerivation(e.to_string()))?;
-    let decrypted_data = crypto_utils::decrypt_data(&key, encrypted_data_with_nonce)?;
-    let deserialized: T = serde_json::from_slice(&decrypted_data)?;
-    Ok(deserialized)
+    Ok(key)
 }
 
 /// Speichert das `UserProfile` und den `VoucherStore` sicher in zwei getrennten,
-/// verschlüsselten Dateien. Der Vorgang ist atomar gestaltet, um Datenverlust zu vermeiden.
+/// verschlüsselten Dateien. Implementiert eine "Zwei-Schloss"-Mechanik für Passwort und Wiederherstellung.
 ///
 /// # Arguments
 /// * `profile` - Das zu speichernde Nutzerprofil.
 /// * `store` - Der zu speichernde Gutschein-Store.
 /// * `path_dir` - Das Verzeichnis, in dem die Dateien gespeichert werden.
-/// * `password` - Das Passwort zur Verschlüsselung.
+/// * `password` - Das Passwort zur Verschlüsselung (Alltagszugriff).
+/// * `identity` - Die Identität des Nutzers, zur Erstellung des Wiederherstellungs-Schlosses.
 pub fn save_profile_and_store_encrypted(
     profile: &UserProfile,
     store: &VoucherStore,
     path_dir: &Path,
     password: &str,
+    identity: &UserIdentity,
 ) -> Result<(), VoucherCoreError> {
-    // Temporäre Dateinamen verwenden, um Atomarität zu gewährleisten.
+    let profile_path = path_dir.join(PROFILE_FILE_NAME);
+    let store_path = path_dir.join(VOUCHER_STORE_FILE_NAME);
+
+    let file_key: [u8; KEY_SIZE];
+    let profile_container: ProfileStorageContainer;
+
+    if !profile_path.exists() {
+        // Erster Speicher-Vorgang: Generiere einen neuen Master-Dateischlüssel und beide Schlösser.
+        let mut new_file_key = [0u8; KEY_SIZE];
+        OsRng.fill_bytes(&mut new_file_key);
+        file_key = new_file_key;
+
+        // Schloss 1: Passwort-basiert
+        let mut pw_salt = [0u8; SALT_SIZE];
+        OsRng.fill_bytes(&mut pw_salt);
+        let password_key = derive_key_from_password(password, &pw_salt)?;
+        let pw_wrapped_key = crypto_utils::encrypt_data(&password_key, &file_key)?;
+
+        // Schloss 2: Mnemonic/Identitäts-basiert
+        let mut mn_salt = [0u8; SALT_SIZE];
+        OsRng.fill_bytes(&mut mn_salt);
+        let mnemonic_key = derive_key_from_identity(identity, &mn_salt)?;
+        let mn_wrapped_key = crypto_utils::encrypt_data(&mnemonic_key, &file_key)?;
+
+        let profile_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(profile)?)?;
+
+        profile_container = ProfileStorageContainer {
+            password_kdf_salt: pw_salt,
+            password_wrapped_key_with_nonce: pw_wrapped_key,
+            mnemonic_kdf_salt: mn_salt,
+            mnemonic_wrapped_key_with_nonce: mn_wrapped_key,
+            encrypted_profile_payload: profile_payload,
+        };
+    } else {
+        // Folgender Speicher-Vorgang: Lade existierende Schlüssel, entschlüssele FileKey und verschlüssele neue Daten.
+        let existing_container_bytes = fs::read(&profile_path).map_err(ProfileManagerError::from)?;
+        let mut existing_container: ProfileStorageContainer =
+            serde_json::from_slice(&existing_container_bytes)?;
+
+        let password_key =
+            derive_key_from_password(password, &existing_container.password_kdf_salt)?;
+        let decrypted_file_key = crypto_utils::decrypt_data(
+            &password_key,
+            &existing_container.password_wrapped_key_with_nonce,
+        )
+            .map_err(|_| ProfileManagerError::AuthenticationFailed)?;
+
+        file_key = decrypted_file_key
+            .try_into()
+            .map_err(|_| ProfileManagerError::InvalidFileFormat)?;
+
+        // Verschlüssele nur die neuen Profildaten. Die Schlüssel bleiben gleich.
+        existing_container.encrypted_profile_payload =
+            crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(profile)?)?;
+        profile_container = existing_container;
+    }
+
+    // Erstelle den Voucher-Container mit den verschlüsselten Store-Daten.
+    let store_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(store)?)?;
+    let store_container = VoucherStorageContainer {
+        encrypted_store_payload: store_payload,
+    };
+
+    // Schreibe beide Container atomar auf die Festplatte.
     let profile_tmp_path = path_dir.join(format!("{}.tmp", PROFILE_FILE_NAME));
     let store_tmp_path = path_dir.join(format!("{}.tmp", VOUCHER_STORE_FILE_NAME));
 
-    // Schritt 1: In temporäre Dateien schreiben.
-    encrypt_to_file(profile, &profile_tmp_path, password)?;
-    encrypt_to_file(store, &store_tmp_path, password)?;
+    fs::write(&profile_tmp_path, serde_json::to_vec(&profile_container)?)?;
+    fs::write(&store_tmp_path, serde_json::to_vec(&store_container)?)?;
 
-    // Schritt 2: Temporäre Dateien atomar umbenennen. Dies geschieht nur, wenn beide
-    // Schreibvorgänge erfolgreich waren.
-    let final_profile_path = path_dir.join(PROFILE_FILE_NAME);
-    let final_store_path = path_dir.join(VOUCHER_STORE_FILE_NAME);
-    fs::rename(&profile_tmp_path, final_profile_path)?;
-    fs::rename(&store_tmp_path, final_store_path)?;
+    fs::rename(&profile_tmp_path, &profile_path)?;
+    fs::rename(&store_tmp_path, &store_path)?;
 
     Ok(())
 }
 
-/// Lädt und entschlüsselt das `UserProfile` und den `VoucherStore` aus ihrem
-/// jeweiligen Speicherort.
+/// Lädt und entschlüsselt das `UserProfile` und den `VoucherStore` mittels Passwort.
 ///
 /// # Arguments
 /// * `path_dir` - Das Verzeichnis, aus dem die Dateien geladen werden.
 /// * `password` - Das Passwort zur Entschlüsselung.
-///
-/// # Returns
-/// Ein Tupel, das das `UserProfile` und den `VoucherStore` enthält.
-/// Wenn die `vouchers.enc` Datei nicht existiert (z.B. bei einem neuen Profil),
-/// wird ein leerer `VoucherStore` zurückgegeben.
 pub fn load_profile_and_store_encrypted(
     path_dir: &Path,
     password: &str,
@@ -149,16 +211,137 @@ pub fn load_profile_and_store_encrypted(
     let profile_path = path_dir.join(PROFILE_FILE_NAME);
     let store_path = path_dir.join(VOUCHER_STORE_FILE_NAME);
 
-    // Lade immer das Profil.
-    let profile: UserProfile = decrypt_from_file(&profile_path, password)?;
+    // 1. Lade den Profil-Container
+    let profile_container_bytes = fs::read(profile_path).map_err(ProfileManagerError::from)?;
+    let profile_container: ProfileStorageContainer =
+        serde_json::from_slice(&profile_container_bytes)?;
 
-    // Lade den VoucherStore nur, wenn er existiert, ansonsten erstelle einen leeren.
+    // 2. Leite den Schlüssel vom Passwort ab und entschlüssele den FileKey
+    let password_key = derive_key_from_password(password, &profile_container.password_kdf_salt)?;
+    let file_key_bytes = crypto_utils::decrypt_data(
+        &password_key,
+        &profile_container.password_wrapped_key_with_nonce,
+    )
+        .map_err(|_| ProfileManagerError::AuthenticationFailed)?;
+    let file_key: [u8; KEY_SIZE] = file_key_bytes
+        .try_into()
+        .map_err(|_| ProfileManagerError::InvalidFileFormat)?;
+
+    // 3. Entschlüssele die Profil-Nutzlast
+    let profile_bytes =
+        crypto_utils::decrypt_data(&file_key, &profile_container.encrypted_profile_payload)?;
+    let profile: UserProfile = serde_json::from_slice(&profile_bytes)?;
+
+    // 4. Lade und entschlüssele den VoucherStore (falls vorhanden)
     let store = if store_path.exists() {
-        decrypt_from_file(&store_path, password)?
+        let store_container_bytes = fs::read(store_path).map_err(ProfileManagerError::from)?;
+        let store_container: VoucherStorageContainer =
+            serde_json::from_slice(&store_container_bytes)?;
+        let store_bytes =
+            crypto_utils::decrypt_data(&file_key, &store_container.encrypted_store_payload)?;
+        serde_json::from_slice(&store_bytes)?
     } else {
         VoucherStore::default()
     };
+
     Ok((profile, store))
+}
+
+/// Stellt den Zugriff auf das Profil über die Identität (Mnemonic) wieder her.
+/// Diese Funktion wird verwendet, wenn der Benutzer sein Passwort vergessen hat.
+///
+/// # Arguments
+/// * `path_dir` - Das Verzeichnis, in dem sich die Profildateien befinden.
+/// * `identity` - Die `UserIdentity`, abgeleitet aus der Mnemonic-Phrase des Benutzers.
+///
+/// # Returns
+/// Ein Tupel, das das wiederhergestellte `UserProfile` und den `VoucherStore` enthält.
+pub fn load_profile_for_recovery(
+    path_dir: &Path,
+    identity: &UserIdentity,
+) -> Result<(UserProfile, VoucherStore), VoucherCoreError> {
+    let profile_path = path_dir.join(PROFILE_FILE_NAME);
+    let store_path = path_dir.join(VOUCHER_STORE_FILE_NAME);
+
+    // 1. Lade den Profil-Container
+    let profile_container_bytes = fs::read(profile_path).map_err(ProfileManagerError::from)?;
+    let profile_container: ProfileStorageContainer =
+        serde_json::from_slice(&profile_container_bytes)?;
+
+    // 2. Leite den Schlüssel von der Identität ab und entschlüssele den FileKey
+    let mnemonic_key = derive_key_from_identity(identity, &profile_container.mnemonic_kdf_salt)?;
+    let file_key_bytes = crypto_utils::decrypt_data(
+        &mnemonic_key,
+        &profile_container.mnemonic_wrapped_key_with_nonce,
+    )
+        .map_err(|_| ProfileManagerError::AuthenticationFailed)?; // Sollte nicht passieren, es sei denn die Identität ist falsch
+    let file_key: [u8; KEY_SIZE] = file_key_bytes
+        .try_into()
+        .map_err(|_| ProfileManagerError::InvalidFileFormat)?;
+
+    // 3. Entschlüssele die Profil-Nutzlast
+    let profile_bytes =
+        crypto_utils::decrypt_data(&file_key, &profile_container.encrypted_profile_payload)?;
+    let profile: UserProfile = serde_json::from_slice(&profile_bytes)?;
+
+    // 4. Lade und entschlüssle den VoucherStore
+    let store = if store_path.exists() {
+        let store_container_bytes = fs::read(store_path).map_err(ProfileManagerError::from)?;
+        let store_container: VoucherStorageContainer =
+            serde_json::from_slice(&store_container_bytes)?;
+        let store_bytes =
+            crypto_utils::decrypt_data(&file_key, &store_container.encrypted_store_payload)?;
+        serde_json::from_slice(&store_bytes)?
+    } else {
+        VoucherStore::default()
+    };
+
+    Ok((profile, store))
+}
+
+/// Setzt das Passwort für den Profilzugriff zurück.
+/// Diese Funktion wird nach einer erfolgreichen Wiederherstellung mit der Mnemonic-Phrase aufgerufen.
+/// Sie erstellt ein neues "Passwort-Schloss" für den existierenden Dateischlüssel.
+///
+/// # Arguments
+/// * `path_dir` - Das Verzeichnis der Profildateien.
+/// * `identity` - Die Identität des Nutzers, um den Dateischlüssel zu entschlüsseln.
+/// * `new_password` - Das neue Passwort, das festgelegt werden soll.
+pub fn reset_password(
+    path_dir: &Path,
+    identity: &UserIdentity,
+    new_password: &str,
+) -> Result<(), VoucherCoreError> {
+    let profile_path = path_dir.join(PROFILE_FILE_NAME);
+
+    // Lade den existierenden Container
+    let container_bytes = fs::read(&profile_path).map_err(ProfileManagerError::from)?;
+    let mut container: ProfileStorageContainer = serde_json::from_slice(&container_bytes)?;
+
+    // Entschlüssele den FileKey mit dem Wiederherstellungsschlüssel (Mnemonic)
+    let mnemonic_key = derive_key_from_identity(identity, &container.mnemonic_kdf_salt)?;
+    let file_key = crypto_utils::decrypt_data(
+        &mnemonic_key,
+        &container.mnemonic_wrapped_key_with_nonce,
+    )
+        .map_err(|_| ProfileManagerError::AuthenticationFailed)?;
+
+    // Erstelle ein neues Passwort-Schloss
+    let mut new_pw_salt = [0u8; SALT_SIZE];
+    OsRng.fill_bytes(&mut new_pw_salt);
+    let new_password_key = derive_key_from_password(new_password, &new_pw_salt)?;
+    let new_pw_wrapped_key = crypto_utils::encrypt_data(&new_password_key, &file_key)?;
+
+    // Aktualisiere den Container mit dem neuen Schloss
+    container.password_kdf_salt = new_pw_salt;
+    container.password_wrapped_key_with_nonce = new_pw_wrapped_key;
+
+    // Schreibe den aktualisierten Container atomar zurück
+    let profile_tmp_path = path_dir.join(format!("{}.tmp", PROFILE_FILE_NAME));
+    fs::write(&profile_tmp_path, serde_json::to_vec(&container)?)?;
+    fs::rename(&profile_tmp_path, &profile_path)?;
+
+    Ok(())
 }
 
 /// Erstellt ein neues Nutzerprofil samt Identität aus einer Mnemonic-Phrase.
