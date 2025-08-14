@@ -92,6 +92,15 @@ impl TransactionBundle {
     }
 }
 
+/// Repräsentiert den persistenten Speicher für alle Gutscheine eines Nutzers.
+/// Diese Struktur wird separat vom `UserProfile` gehalten, um die Metadaten
+/// leichtgewichtig zu halten und die Gutscheinsammlung effizient zu verwalten.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct VoucherStore {
+    /// Der Bestand an Gutscheinen, indiziert nach ihrer lokalen Instanz-ID (`local_voucher_instance_id`).
+    pub vouchers: HashMap<String, Voucher>,
+}
+
 /// Die Hauptstruktur, die den gesamten Zustand eines Nutzer-Wallets repräsentiert.
 /// Sie enthält die Identität, den Bestand an Gutscheinen und die Transaktionshistorie.
 /// Diese Struktur wird serialisiert und verschlüsselt auf der Festplatte gespeichert.
@@ -99,8 +108,6 @@ impl TransactionBundle {
 pub struct UserProfile {
     /// Die öffentliche User-ID. Wird aus `identity` abgeleitet und hier für einfachen Zugriff dupliziert.
     pub user_id: String,
-    /// Der aktuelle Bestand an Gutscheinen, indiziert nach ihrer `voucher_id`.
-    pub vouchers: HashMap<String, Voucher>,
     /// Eine Historie aller gesendeten und empfangenen Transaktionsbündel,
     /// indiziert nach der `bundle_id`.
     pub bundle_history: HashMap<String, TransactionBundleHeader>,
@@ -112,7 +119,6 @@ impl Default for UserProfile {
     fn default() -> Self {
         Self {
             user_id: String::new(),
-            vouchers: HashMap::new(),
             bundle_history: HashMap::new(),
         }
     }

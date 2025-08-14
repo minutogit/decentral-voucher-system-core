@@ -47,7 +47,7 @@ pub struct Collateral {
 }
 
 /// Detaillierte Adressinformationen.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Address {
     /// Straße.
     pub street: String,
