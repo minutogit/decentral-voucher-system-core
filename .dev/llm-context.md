@@ -44,7 +44,6 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
 - **`[template]`**: Definiert Werte (z.B. die `unit` des Nennwerts), die bei der Erstellung eines neuen Gutscheins direkt in diesen kopiert werden.
 - **`[validation]`**: Beinhaltet Regeln (z.B. `required_voucher_fields`, `guarantor_rules`), die zur Überprüfung eines Gutscheins verwendet werden.
 
-
 ```
 {
   "voucher_standard": {
@@ -215,6 +214,7 @@ Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich
 │   └── utilities
 ├── tests
 │   ├── test_crypto_utils.rs
+│   ├── test_profile_management.rs
 │   ├── test_secure_container.rs
 │   ├── test_utils.rs
 │   └── test_voucher_lifecycle.rs
@@ -366,27 +366,24 @@ Dieses Modul definiert den zentralen, einheitlichen Fehlertyp für die Bibliothe
 
 ### `src/models/profile.rs` Modul
 
-Definiert die Datenstrukturen für ein vollständiges Nutzerprofil ("Wallet"), das die Identität, den Gutschein-Bestand und die Transaktionshistorie verwaltet.
+Definiert die Datenstrukturen für ein vollständiges Nutzerprofil ("Wallet"). Die Architektur trennt leichtgewichtige Profil-Metadaten von der eigentlichen Gutschein-Sammlung, um Skalierbarkeit und Effizienz zu verbessern.
 
 - `pub struct UserIdentity`
 
   - Hält das kryptographische Schlüsselpaar (`SigningKey`, `EdPublicKey`) und die daraus abgeleitete `user_id`. Der `SigningKey` wird bei Verlassen des Gültigkeitsbereichs automatisch genullt (`ZeroizeOnDrop`), um die Sicherheit zu erhöhen.
 
-- `pub enum TransactionDirection`
+- `pub struct TransactionBundle` und `TransactionBundleHeader`
 
-  - Ein Enum (`Sent`, `Received`), das die Richtung einer Transaktion aus der Perspektive des Profilinhabers angibt.
+  - Repräsentiert ein vollständiges, signiertes Paket (`TransactionBundle`) für den Austausch von Gutscheinen. Dies ist die atomare Einheit, die zwischen Nutzern ausgetauscht wird.
+  - Der `TransactionBundleHeader` ist eine leichtgewichtige Zusammenfassung für die Anzeige in der Transaktionshistorie.
 
-- `pub struct TransactionBundleHeader`
+- `pub struct VoucherStore`
 
-  - Eine leichtgewichtige Zusammenfassung eines `TransactionBundle`, die für die Anzeige in der Transaktionshistorie verwendet wird. Enthält Metadaten und Gutschein-IDs anstelle der vollständigen Gutschein-Objekte.
-
-- `pub struct TransactionBundle`
-
-  - Repräsentiert ein vollständiges, signiertes Paket für den Austausch von Gutscheinen. Es enthält alle Metadaten sowie die vollständigen `Voucher`-Objekte, die übertragen werden. Dies ist die atomare Einheit, die zwischen Nutzern ausgetauscht wird.
+  - Repräsentiert den persistenten Speicher für alle Gutscheine eines Nutzers. Diese Struktur wird separat vom `UserProfile` in einer eigenen verschlüsselten Datei (`vouchers.enc`) gehalten. Gutscheine werden über eine deterministische, lokale Instanz-ID indiziert, die den Zustand eines Gutscheins im Besitz des Nutzers eindeutig identifiziert.
 
 - `pub struct UserProfile`
 
-  - Die Hauptstruktur, die den serialisierbaren Zustand eines Nutzers repräsentiert. Sie enthält die `user_id`, eine `HashMap` der `Voucher` im Besitz des Nutzers und eine `HashMap` der `TransactionBundleHeader` als Transaktionshistorie.
+  - Die leichtgewichtige Hauptstruktur, die den serialisierbaren Zustand der Nutzer-Metadaten repräsentiert. Sie enthält nur die `user_id` und die `bundle_history`. Die eigentlichen Gutscheine befinden sich im `VoucherStore`.
 
 ### `src/models/secure_container.rs` Modul
 
@@ -402,50 +399,48 @@ Definiert die Datenstruktur für einen generischen, für mehrere Empfänger vers
 
 ### `services/profile_manager` Modul
 
-Dieses Modul enthält die Logik zur Verwaltung des `UserProfile`.
+Dieses Modul enthält die Logik zur Verwaltung des `UserProfile` und des `VoucherStore`. Es implementiert eine robuste, passwortgeschützte Persistenz mit einer Wiederherstellungsoption über die Mnemonic-Phrase.
 
-- `pub enum ProfileManagerError`
+- **Persistenz-Architektur:**
 
-  - Spezifische Fehler, die bei der Profilverwaltung auftreten können.
+  - `UserProfile` (Metadaten) und `VoucherStore` (Gutscheine) werden in zwei separaten Dateien gespeichert (`profile.enc`, `vouchers.enc`), um die Ladezeiten für reine Metadaten-Operationen gering zu halten.
+  - **Key-Wrapping für Sicherheit und Wiederherstellung:** Ein Master-Dateischlüssel verschlüsselt die eigentlichen Daten. Dieser Dateischlüssel wird wiederum *zweimal* verschlüsselt ("gewrappt"): einmal mit einem vom **Passwort** abgeleiteten Schlüssel (für den normalen Zugriff) und einmal mit einem von der **User-Identität (Mnemonic)** abgeleiteten Schlüssel (für die Passwort-Wiederherstellung).
 
-- `pub fn save_profile_encrypted(profile: &UserProfile, path: &Path, password: &str) -> Result<(), VoucherCoreError>`
+- `pub fn save_profile_and_store_encrypted(profile: &UserProfile, store: &VoucherStore, path_dir: &Path, password: &str, identity: &UserIdentity) -> Result<(), VoucherCoreError>`
 
-  - Serialisiert und verschlüsselt ein `UserProfile` und speichert es in einer Datei (mit Argon2 zur Schlüsselableitung).
+  - Speichert und verschlüsselt `UserProfile` und `VoucherStore` atomar in ihren jeweiligen Dateien.
 
-- `pub fn load_profile_encrypted(path: &Path, password: &str) -> Result<UserProfile, VoucherCoreError>`
+- `pub fn load_profile_and_store_encrypted(path_dir: &Path, password: &str) -> Result<(UserProfile, VoucherStore), VoucherCoreError>`
 
-  - Liest und entschlüsselt eine Profildatei.
+  - Lädt und entschlüsselt Profil und Store mit dem Passwort des Nutzers.
 
-- `pub fn create_profile_from_mnemonic(mnemonic_phrase: &str, user_prefix: Option<&str>) -> Result<(UserProfile, UserIdentity), VoucherCoreError>`
+- `pub fn load_profile_for_recovery(path_dir: &Path, identity: &UserIdentity) -> Result<(UserProfile, VoucherStore), VoucherCoreError>`
 
-  - Erstellt ein neues, leeres `UserProfile` und die dazugehörige `UserIdentity` aus einer Mnemonic-Phrase.
+  - Lädt und entschlüsselt Profil und Store mithilfe der `UserIdentity`, wenn das Passwort vergessen wurde.
 
-- `pub fn add_voucher_to_profile(profile: &mut UserProfile, voucher: Voucher) -> Result<(), ProfileManagerError>`
+- `pub fn reset_password(path_dir: &Path, identity: &UserIdentity, new_password: &str) -> Result<(), VoucherCoreError>`
 
-  - Fügt einen Gutschein zum `vouchers`-Bestand des Profils hinzu.
+  - Setzt das Passwort zurück, indem nach einer erfolgreichen Wiederherstellung ein neues "Passwort-Schloss" für den existierenden Master-Dateischlüssel erstellt wird.
 
-- `pub fn create_and_encrypt_transaction_bundle(sender_profile: &mut UserProfile, ...) -> Result<Vec<u8>, VoucherCoreError>`
+- `pub fn create_profile_from_mnemonic(mnemonic_phrase: &str, user_prefix: Option<&str>) -> Result<(UserProfile, VoucherStore, UserIdentity), VoucherCoreError>`
+
+  - Erstellt ein neues, leeres `UserProfile`, einen leeren `VoucherStore` und die dazugehörige `UserIdentity` aus einer Mnemonic-Phrase.
+
+- `pub fn create_and_encrypt_transaction_bundle(...) -> Result<Vec<u8>, VoucherCoreError>`
 
   - Erstellt ein `TransactionBundle`.
-  - **Ruft `secure_container_manager::create_secure_container` auf**, um das Bündel in einen `SecureContainer` zu verpacken.
-  - Serialisiert den resultierenden `SecureContainer` zu einem Byte-Array für den Transport.
-  - Aktualisiert das Senderprofil (entfernt Gutscheine, fügt Historie hinzu).
+  - **Delegiert an `secure_container_manager::create_secure_container`**, um das Bündel in einen `SecureContainer` zu verpacken.
+  - Serialisiert den `SecureContainer` zu einem Byte-Array für den Transport und aktualisiert das Sender-Profil.
 
-- `pub fn process_encrypted_transaction_bundle(recipient_profile: &mut UserProfile, ...) -> Result<(), VoucherCoreError>`
+- `pub fn process_encrypted_transaction_bundle(...) -> Result<(), VoucherCoreError>`
 
   - Nimmt die Bytes eines serialisierten `SecureContainer` entgegen.
-  - Deserialisiert den Container.
-  - **Ruft `secure_container_manager::open_secure_container` auf**, um den Container zu verifizieren und den inneren Payload (das `TransactionBundle`) zu entschlüsseln.
-  - Verifiziert die innere Signatur des `TransactionBundle`.
-  - Bei Erfolg: Fügt die empfangenen Gutscheine zum Profil hinzu und aktualisiert die Historie.
+  - **Delegiert an `secure_container_manager::open_secure_container`**, um den Container zu verifizieren und zu entschlüsseln.
+  - Verifiziert das innere `TransactionBundle` und aktualisiert bei Erfolg das Empfänger-Profil.
 
 ### `services/secure_container_manager.rs` Modul
 
-Dieses Modul implementiert die Kernlogik für den `SecureContainer`.
-
-- `pub enum ContainerManagerError`
-
-  - Spezifische Fehler für den Container, z.B. ungültige Signatur oder wenn ein Nutzer kein berechtigter Empfänger ist.
+Dieses Modul implementiert die Kernlogik für den `SecureContainer` und entkoppelt die Kryptographie vom `profile_manager`.
 
 - `pub fn create_secure_container(sender_identity: &UserIdentity, recipient_ids: &[String], payload: &[u8], payload_type: PayloadType) -> Result<SecureContainer, VoucherCoreError>`
 
