@@ -159,6 +159,7 @@ pub fn create_voucher(
             .template.fixed.guarantor_info
             .description
             .clone(),
+        footnote: standard_definition.template.fixed.footnote.clone().unwrap_or_default(),
         guarantor_signatures: vec![],
         needed_guarantors: standard_definition.template.fixed.guarantor_info.needed_count,
         transactions: vec![], // Wichtig: Transaktionen sind hier leer!

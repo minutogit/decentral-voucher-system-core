@@ -16,6 +16,7 @@ abbreviation = "Minuto"                # Gängige Abkürzung.
 [template.fixed]
 # Die Beschreibung kann den Platzhalter {{amount}} enthalten, der zur Laufzeit ersetzt wird.
 description = "Ein Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Minuten qualitativer Leistung."
+footnote = "Gutschein-Nutzung nur für Mitspieler/innen."
 primary_redemption_type = "goods_or_services"
 is_divisible = true
 round_up_validity_to = "P1Y" # Gültigkeit auf Jahresende aufrunden.

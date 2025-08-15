@@ -52,6 +52,10 @@ abbreviation = "RT"
 # Nennwert des Gutscheins ersetzt.
 description = "Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Einheiten."
 
+# (String, Optional) Ein kurzer Fußnotentext, der auf dem Gutschein angezeigt wird.
+# z.B. "Nur für Community-Mitglieder."
+footnote = "Optionaler Fußnotentext."
+
 # (String) Definiert den primären Zweck, für den der Gutschein eingelöst werden kann.
 # z.B. "goods_or_services", "specific_product", "community_work"
 primary_redemption_type = "goods_or_services"

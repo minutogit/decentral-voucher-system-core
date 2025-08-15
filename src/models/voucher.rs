@@ -216,6 +216,8 @@ pub struct Voucher {
     pub creator: Creator,
     /// Eine menschenlesbare Beschreibung der Bürgenanforderungen, übernommen vom Standard.
     pub guarantor_requirements_description: String,
+    /// Ein optionaler Fußnotentext, der vom Standard vorgegeben wird.
+    pub footnote: String,
     /// Ein Array von Signaturen der Bürgen.
     pub guarantor_signatures: Vec<GuarantorSignature>,
     /// Die Anzahl der für diesen Gutschein benötigten Bürgen.

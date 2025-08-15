@@ -39,6 +39,9 @@ pub struct TemplateGuarantorInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TemplateFixed {
     pub description: Option<String>,
+    /// Ein optionaler Fußnotentext, der vom Standard vorgegeben wird.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footnote: Option<String>,
     pub primary_redemption_type: String,
     pub is_divisible: bool,
     pub nominal_value: TemplateNominalValue,
