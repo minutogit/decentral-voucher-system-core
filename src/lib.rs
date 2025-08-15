@@ -7,6 +7,8 @@
 // Deklariert die Hauptmodule der Bibliothek und macht sie öffentlich.
 pub mod models;
 pub mod error;
+pub mod storage;
+pub mod wallet;
 pub mod services;
 
 // Re-exportiert die wichtigsten öffentlichen Typen für eine einfachere Nutzung.
@@ -20,7 +22,13 @@ pub use models::voucher::{
 pub use models::voucher_standard_definition::{
     VoucherStandardDefinition,
 };
+pub use models::profile::{UserIdentity, UserProfile, VoucherStore};
 pub use error::VoucherCoreError;
+
+// Wallet & Storage Fassaden
+pub use wallet::Wallet;
+pub use storage::{Storage, AuthMethod, StorageError};
+pub use storage::file_storage::FileStorage;
 
 // Services
 pub use services::crypto_utils;

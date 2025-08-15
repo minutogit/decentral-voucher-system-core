@@ -29,7 +29,7 @@ pub struct NominalValue {
 }
 
 /// Enthält Informationen zur Besicherung des Gutscheins.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Collateral {
     /// Die Art der Besicherung (z.B. "Physisches Edelmetall").
     #[serde(rename = "type")]

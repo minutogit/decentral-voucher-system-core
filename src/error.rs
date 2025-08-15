@@ -5,11 +5,12 @@
 //! und zur automatischen Konvertierung von untergeordneten Fehlertypen.
 
 use thiserror::Error;
-use crate::services::{
-    crypto_utils::{GetPubkeyError, SymmetricEncryptionError},
-    profile_manager::ProfileManagerError,
-    secure_container_manager::ContainerManagerError,
-    voucher_manager::VoucherManagerError,
+use crate::{
+    services::{
+        crypto_utils::{GetPubkeyError, SymmetricEncryptionError},
+        secure_container_manager::ContainerManagerError, voucher_manager::VoucherManagerError,
+    },
+    storage::StorageError,
 };
 
 /// Der zentrale Fehlertyp für alle Operationen in der `voucher_core`-Bibliothek.
@@ -28,9 +29,9 @@ pub enum VoucherCoreError {
     #[error("Voucher Manager Error: {0}")]
     Manager(#[from] VoucherManagerError),
 
-    /// Ein Fehler, der während der Profil-Verwaltung (Speichern, Laden) aufgetreten ist.
-    #[error("Profile Manager Error: {0}")]
-    Profile(#[from] ProfileManagerError),
+    /// Ein Fehler, der während einer Speicheroperation (Laden, Speichern) aufgetreten ist.
+    #[error("Storage Error: {0}")]
+    Storage(#[from] StorageError),
 
     /// Ein Fehler, der bei der Verarbeitung eines `SecureContainer` auftrat.
     #[error("Secure Container Error: {0}")]
@@ -64,4 +65,8 @@ pub enum VoucherCoreError {
     /// Ein Fehler bei I/O-Operationen (z.B. beim zukünftigen Speichern/Laden von Profilen).
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Ein allgemeiner Fehler, der für verschiedene Zwecke verwendet werden kann.
+    #[error("Generic error: {0}")]
+    Generic(String),
 }

@@ -32,18 +32,15 @@
 use voucher_lib::{
     create_split_transaction, create_voucher, crypto_utils, from_json, get_spendable_balance,
     load_standard_definition, to_canonical_json, to_json, validate_voucher_against_standard,
-    Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue, Voucher,
-    VoucherCoreError, VoucherStandardDefinition,
+    Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue, Transaction,
+    Voucher, VoucherCoreError, VoucherStandardDefinition, Wallet,
 };
 // Importiere die spezifischen Fehlertypen direkt aus ihren Modulen für die `matches!`-Makros.
 use voucher_lib::services::{
     voucher_manager::VoucherManagerError, voucher_validation::ValidationError,
 };
-// Imports für den neuen Secure-Transfer-Test. `create_profile_from_mnemonic` wird nicht mehr benötigt.
-use voucher_lib::models::profile::{UserIdentity, UserProfile};
-use voucher_lib::services::profile_manager::{
-    add_voucher_to_profile, create_and_encrypt_transaction_bundle, process_encrypted_transaction_bundle,
-};
+use voucher_lib::crypto_utils::get_hash;
+use voucher_lib::models::profile::{UserIdentity, UserProfile, VoucherStore};
 use ed25519_dalek::SigningKey;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -751,121 +748,149 @@ fn test_double_spend_detection_logic() {
     println!("Double Spend Test: OK. prev_hash für beide Transaktionen ist: {}", tx_to_bob.prev_hash);
 }
 
+// --- Hilfsfunktionen für den Transfer-Test, um private Logik der Wallet-Fassade zu simulieren ---
+
+/// Berechnet das Guthaben eines bestimmten Nutzers nach einer spezifischen Transaktionshistorie.
+fn get_balance_at_transaction(
+    history: &[Transaction],
+    user_id: &str,
+    initial_amount: &str,
+) -> Decimal {
+    let mut current_balance = Decimal::ZERO;
+    let total_amount = Decimal::from_str_exact(initial_amount).unwrap_or_default();
+
+    for tx in history {
+        let tx_amount = Decimal::from_str_exact(&tx.amount).unwrap_or_default();
+        if tx.recipient_id == user_id {
+            if tx.t_type == "init" {
+                current_balance = total_amount;
+            } else {
+                current_balance += tx_amount;
+            }
+        } else if tx.sender_id == user_id {
+            if let Some(remaining_str) = &tx.sender_remaining_amount {
+                if let Ok(remaining_amount) = Decimal::from_str_exact(remaining_str) {
+                    current_balance = remaining_amount;
+                } else {
+                    current_balance = Decimal::ZERO;
+                }
+            } else {
+                current_balance = Decimal::ZERO;
+            }
+        }
+    }
+    current_balance
+}
+
+/// Berechnet eine deterministische, lokale ID für eine Gutschein-Instanz.
+fn calculate_local_instance_id(voucher: &Voucher, profile_owner_id: &str) -> String {
+    let mut defining_transaction_id: Option<String> = None;
+
+    for i in (0..voucher.transactions.len()).rev() {
+        let history_slice = &voucher.transactions[..=i];
+        let balance =
+            get_balance_at_transaction(history_slice, profile_owner_id, &voucher.nominal_value.amount);
+
+        if balance > Decimal::ZERO {
+            defining_transaction_id = Some(voucher.transactions[i].t_id.clone());
+            break;
+        }
+    }
+
+    let t_id = defining_transaction_id.expect("Voucher must be owned by the user.");
+    let combined_string = format!("{}{}{}", voucher.voucher_id, t_id, profile_owner_id);
+    get_hash(combined_string)
+}
+
 #[test]
 fn test_secure_voucher_transfer_via_encrypted_bundle() {
     // --- 1. SETUP ---
-    // Load the divisible "silver" standard, as it needs no guarantors
     let standard_toml = std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
     let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
 
-    // Alice and Bob create their profiles using the deterministic test key generator,
-    // which is faster and more direct than using mnemonics for testing.
     let (alice_pub, alice_key) =
         crypto_utils::generate_ed25519_keypair_for_tests(Some("alice_secure_transfer"));
     let alice_user_id = crypto_utils::create_user_id(&alice_pub, Some("al")).unwrap();
     let alice_identity = UserIdentity {
-        signing_key: alice_key,
+        signing_key: alice_key.clone(),
         public_key: alice_pub,
         user_id: alice_user_id.clone(),
     };
-    let mut alice_profile = UserProfile {
-        user_id: alice_user_id,
-        vouchers: Default::default(),
-        bundle_history: Default::default(),
+    let mut alice_wallet = Wallet {
+        profile: UserProfile { user_id: alice_user_id, bundle_history: Default::default() },
+        store: VoucherStore::default(),
     };
 
     let (bob_pub, bob_key) =
         crypto_utils::generate_ed25519_keypair_for_tests(Some("bob_secure_transfer"));
     let bob_user_id = crypto_utils::create_user_id(&bob_pub, Some("bo")).unwrap();
-    let bob_identity = UserIdentity {
-        signing_key: bob_key,
-        public_key: bob_pub,
-        user_id: bob_user_id.clone(),
-    };
-    let mut bob_profile = UserProfile {
-        user_id: bob_user_id,
-        vouchers: Default::default(),
-        bundle_history: Default::default(),
+    let bob_identity = UserIdentity { signing_key: bob_key, public_key: bob_pub, user_id: bob_user_id.clone() };
+    let mut bob_wallet = Wallet {
+        profile: UserProfile { user_id: bob_user_id, bundle_history: Default::default() },
+        store: VoucherStore::default(),
     };
 
     // --- 2. VOUCHER CREATION by Alice ---
     let alice_creator = Creator {
         id: alice_identity.user_id.clone(),
         first_name: "Alice".to_string(),
-        last_name: "Sender".to_string(),
-        address: Address { street: ".".to_string(), house_number: ".".to_string(), zip_code: ".".to_string(), city: ".".to_string(), country: ".".to_string(), full_address: ".".to_string() },
-        email: Some("alice@test.com".to_string()),
-        gender: "2".to_string(),
-        signature: "".to_string(), // will be filled by create_voucher
-        coordinates: "0,0".to_string(),
-        organization: None,
-        community: None,
-        phone: None,
-        url: None,
-        service_offer: None,
-        needs: None
+        // Restliche Felder für den Test gekürzt
+        ..setup_creator().1
     };
 
     let voucher_data = NewVoucherData {
-        // Der silver_standard erfordert eine Mindestgültigkeit. P1Y (ein Jahr)
-        // ist zu kurz und führt zu einem Fehler. Wir erhöhen auf P3Y (drei Jahre),
-        // um die Anforderung sicher zu erfüllen.
         validity_duration: Some("P3Y".to_string()),
         non_redeemable_test_voucher: false,
-        nominal_value: NominalValue {
-            unit: "".to_string(),
-            amount: "500".to_string(),
-            abbreviation: "".to_string(),
-            description: "Test value".to_string(),
-        },
-        collateral: Collateral {
-            type_: "".to_string(),
-            unit: "".to_string(),
-            amount: "".to_string(),
-            abbreviation: "".to_string(),
-            description: "".to_string(),
-            redeem_condition: "".to_string(),
-        },
+        nominal_value: NominalValue { amount: "500".to_string(), ..create_minuto_voucher_data(alice_creator.clone()).nominal_value },
+        collateral: Collateral::default(),
         creator: alice_creator,
     };
 
-    let voucher = create_voucher(voucher_data, &standard, &alice_identity.signing_key).unwrap();
-    let voucher_id = voucher.voucher_id.clone();
-
-    // Alice adds the new voucher to her profile
-    add_voucher_to_profile(&mut alice_profile, voucher).unwrap();
-    assert!(alice_profile.vouchers.contains_key(&voucher_id));
-    assert!(!bob_profile.vouchers.contains_key(&voucher_id));
+    let voucher = create_voucher(voucher_data, &standard, &alice_key).unwrap();
+    let local_id = calculate_local_instance_id(&voucher, &alice_identity.user_id);
+    
+    // Alice adds the new voucher to her wallet's store
+    alice_wallet.store.vouchers.insert(local_id.clone(), voucher.clone());
+    assert!(alice_wallet.store.vouchers.contains_key(&local_id));
 
     // --- 3. SECURE TRANSFER from Alice to Bob ---
-    // Alice creates an encrypted bundle containing the voucher
-    let vouchers_to_send = vec![alice_profile.vouchers.get(&voucher_id).unwrap().clone()];
+    // Zuerst muss eine Transaktion auf dem Gutschein erstellt werden, die den Besitz überträgt.
+    let voucher_to_transfer = alice_wallet.store.vouchers.get(&local_id).unwrap();
+    let updated_voucher = create_split_transaction(
+        voucher_to_transfer,
+        &standard,
+        &alice_identity.user_id,
+        &alice_identity.signing_key,
+        &bob_identity.user_id,
+        &voucher_to_transfer.nominal_value.amount, // Transfer the full amount
+    )
+    .expect("Failed to create transfer transaction");
 
-    let encrypted_bundle_for_bob = create_and_encrypt_transaction_bundle(
-        &mut alice_profile,
+    // Sende den Gutschein mit der neuen Transaktion im Bündel.
+    let vouchers_to_send = vec![updated_voucher];
+    let encrypted_bundle_for_bob = alice_wallet.create_and_encrypt_transaction_bundle(
         &alice_identity,
         vouchers_to_send,
         &bob_identity.user_id,
         Some("Here is the voucher I promised!".to_string()),
-    )
-        .unwrap();
+    ).unwrap();
 
-    assert!(!alice_profile.vouchers.contains_key(&voucher_id), "Voucher should be removed from Alice's profile after sending.");
-    assert_eq!(alice_profile.bundle_history.len(), 1, "Alice's bundle history should contain one entry.");
+    assert!(!alice_wallet.store.vouchers.contains_key(&local_id), "Voucher should be removed from Alice's wallet after sending.");
+    assert_eq!(alice_wallet.profile.bundle_history.len(), 1, "Alice's bundle history should contain one entry.");
 
     // --- 4. RECEIPT AND PROCESSING by Bob ---
-    process_encrypted_transaction_bundle(
-        &mut bob_profile,
-        &bob_identity,
-        &encrypted_bundle_for_bob,
-    )
+    bob_wallet
+        .process_encrypted_transaction_bundle(&bob_identity, &encrypted_bundle_for_bob)
         .unwrap();
 
     // --- 5. VERIFICATION ---
-    assert!(bob_profile.vouchers.contains_key(&voucher_id), "Voucher should now be in Bob's profile.");
-    assert_eq!(bob_profile.bundle_history.len(), 1, "Bob's bundle history should contain one entry.");
-    let received_voucher = bob_profile.vouchers.get(&voucher_id).unwrap();
+    assert_eq!(bob_wallet.store.vouchers.len(), 1, "Bob's wallet should now have one voucher.");
+    assert_eq!(bob_wallet.profile.bundle_history.len(), 1, "Bob's bundle history should contain one entry.");
 
+    // Berechne die lokale ID für Bobs Instanz des Gutscheins.
+    let received_voucher = bob_wallet.store.vouchers.values().next().unwrap();
+    let bob_local_id = calculate_local_instance_id(received_voucher, &bob_identity.user_id);
+    assert!(bob_wallet.store.vouchers.contains_key(&bob_local_id), "Voucher with correct local ID should be in Bob's wallet.");
 
     // Füge die finale Überprüfung hinzu, ob der empfangene Gutschein auch wirklich gültig ist.
     assert!(validate_voucher_against_standard(received_voucher, &standard).is_ok(), "Received voucher must be valid.");

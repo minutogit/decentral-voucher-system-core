@@ -17,7 +17,7 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 
 ## 3. Architektur & Designprinzipien
 
-- **Modulare Architektur:** Die Bibliothek soll in logische Module unterteilt werden (z.B. für Gutschein-Struktur, Transaktionen, Signaturen, Validierung).
+- **Modulare Architektur:** Die Bibliothek ist in logische Module unterteilt. Die Architektur trennt klar die Geschäftslogik (in einer `Wallet`-Fassade) von der Persistenz (hinter einem `Storage`-Trait), um Flexibilität und Testbarkeit zu maximieren.
 - **Dezentraler Ansatz:** Das System basiert auf dezentralen Gutscheinen (Textdateien), die eine verkettete Liste der Transaktionshistorie enthalten (eine Art "Mini-Blockchain pro Gutschein").
 - **Kein globales Ledger:** Im Gegensatz zu traditionellen Blockchains wird bewusst auf ein globales, verteiltes Ledger verzichtet. Die Integrität wird durch digitale Signaturen und soziale Kontrolle gewährleistet.
 - **Offline-Fähigkeit:** Transaktionen sollen auch offline durchgeführt werden können, indem die aktualisierte Gutschein-Datei direkt an den neuen Halter übergeben wird.
@@ -193,31 +193,34 @@ Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich
 ├── README.md
 ├── src
 │   ├── error.rs
-│   ├── examples
-│   ├── lib.rs
-│   ├── main.rs
-│   ├── models
-│   │   ├── mod.rs
-│   │   ├── profile.rs
-│   │   ├── readme_de.md
-│   │   ├── secure_container.rs
-│   │   ├── voucher.rs
-│   │   └── voucher_standard_definition.rs
-│   ├── services
-│   │   ├── crypto_utils.rs
-│   │   ├── mod.rs
-│   │   ├── profile_manager.rs
-│   │   ├── secure_container_manager.rs
-│   │   ├── utils.rs
-│   │   ├── voucher_manager.rs
-│   │   └── voucher_validation.rs
-│   └── utilities
+│   ├── examples
+│   ├── lib.rs
+│   ├── main.rs
+│   ├── models
+│   │   ├── mod.rs
+│   │   ├── profile.rs
+│   │   ├── readme_de.md
+│   │   ├── secure_container.rs
+│   │   ├── voucher.rs
+│   │   └── voucher_standard_definition.rs
+│   ├── services
+│   │   ├── crypto_utils.rs
+│   │   ├── mod.rs
+│   │   ├── secure_container_manager.rs
+│   │   ├── utils.rs
+│   │   ├── voucher_manager.rs
+│   │   └── voucher_validation.rs
+│   ├── storage
+│   │   ├── file_storage.rs
+│   │   └── mod.rs
+│   ├── utilities
+│   └── wallet.rs
 ├── tests
-│   ├── test_crypto_utils.rs
-│   ├── test_profile_management.rs
-│   ├── test_secure_container.rs
-│   ├── test_utils.rs
-│   └── test_voucher_lifecycle.rs
+│   ├── test_crypto_utils.rs
+│   ├── test_file_storage.rs
+│   ├── test_secure_container.rs
+│   ├── test_utils.rs
+│   └── test_voucher_lifecycle.rs
 ├── todo.md
 └── voucher_standards
     ├── minuto_standard.toml
@@ -228,6 +231,56 @@ Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich
 ## 7. Implementierte Kernfunktionen
 
 Basierend auf den bereitgestellten Dateien:
+
+### `src/wallet.rs` Modul
+
+Definiert die `Wallet`-Fassade, die die zentrale, öffentliche Schnittstelle der Bibliothek darstellt. Sie kapselt den In-Memory-Zustand des Nutzerprofils und orchestriert alle Operationen wie das Erstellen von Transaktionen oder das Speichern von Daten.
+
+- `pub struct Wallet`
+
+  - Hält `UserProfile` und `VoucherStore` als In-Memory-Zustand.
+
+- `pub fn new_from_mnemonic(mnemonic_phrase: &str, user_prefix: Option<&str>) -> Result<(Self, UserIdentity), VoucherCoreError>`
+
+  - Erstellt ein brandneues, leeres Wallet und die dazugehörige `UserIdentity` (mit privatem Schlüssel) aus einer Mnemonic-Phrase.
+
+- `pub fn load<S: Storage>(storage: &S, auth: &AuthMethod, identity: UserIdentity) -> Result<Self, VoucherCoreError>`
+
+  - Lädt ein existierendes Wallet aus einer `Storage`-Implementierung.
+  - Verwendet `AuthMethod` (Passwort oder Identität) zur Entschlüsselung.
+  - Verifiziert, dass die `user_id` des geladenen Profils mit der übergebenen `UserIdentity` übereinstimmt.
+
+- `pub fn save<S: Storage>(&self, storage: &mut S, identity: &UserIdentity, password: &str) -> Result<(), StorageError>`
+
+  - Speichert den aktuellen Zustand des Wallets in einer `Storage`-Implementierung.
+
+- `pub fn reset_password<S: Storage>(storage: &mut S, identity: &UserIdentity, new_password: &str) -> Result<(), StorageError>`
+
+  - Eine Wrapper-Funktion, die die Passwort-Zurücksetzung im `Storage`-Layer aufruft.
+
+- `pub fn create_and_encrypt_transaction_bundle(...) -> Result<Vec<u8>, VoucherCoreError>`
+
+  - Kapselt die Geschäftslogik zum Senden von Gutscheinen.
+  - Erstellt ein `TransactionBundle`, verpackt es in einen `SecureContainer` und aktualisiert den Zustand des Sender-Wallets (Historie, Gutschein-Entfernung).
+
+- `pub fn process_encrypted_transaction_bundle(...) -> Result<(), VoucherCoreError>`
+
+  - Kapselt die Geschäftslogik zum Empfangen von Gutscheinen.
+  - Öffnet einen `SecureContainer`, verifiziert das enthaltene `TransactionBundle` und aktualisiert bei Erfolg den Zustand des Empfänger-Wallets.
+
+### `src/storage` Modul (`mod.rs`, `file_storage.rs`)
+
+Definiert die Abstraktion für die persistente Speicherung und stellt eine Standardimplementierung für das Dateisystem bereit.
+
+- `pub trait Storage`
+
+  - Definiert die Schnittstelle für Speicheroperationen (`load`, `save`, `reset_password`, `profile_exists`).
+
+- `pub struct FileStorage`
+
+  - Implementiert den `Storage`-Trait.
+  - Verwaltet die Ver- und Entschlüsselung von `UserProfile` und `VoucherStore` in zwei separaten Dateien (`profile.enc`, `vouchers.enc`).
+  - Implementiert die "Zwei-Schloss"-Mechanik mit Key-Wrapping für den Passwort-Zugriff und die Mnemonic-Wiederherstellung.
 
 ### `services::utils` Modul
 
@@ -396,47 +449,6 @@ Definiert die Datenstruktur für einen generischen, für mehrere Empfänger vers
 - `pub struct SecureContainer`
 
   - Die Hauptstruktur für den sicheren Datenaustausch. Implementiert ein "Key-Wrapping"-Muster: Der eigentliche Inhalt (`encrypted_payload`) wird mit einem symmetrischen Schlüssel verschlüsselt. Dieser Schlüssel wird dann für jeden Empfänger einzeln mit einem via Diffie-Hellman abgeleiteten Schlüssel verschlüsselt und in der `recipient_key_map` gespeichert.
-
-### `services/profile_manager` Modul
-
-Dieses Modul enthält die Logik zur Verwaltung des `UserProfile` und des `VoucherStore`. Es implementiert eine robuste, passwortgeschützte Persistenz mit einer Wiederherstellungsoption über die Mnemonic-Phrase.
-
-- **Persistenz-Architektur:**
-
-  - `UserProfile` (Metadaten) und `VoucherStore` (Gutscheine) werden in zwei separaten Dateien gespeichert (`profile.enc`, `vouchers.enc`), um die Ladezeiten für reine Metadaten-Operationen gering zu halten.
-  - **Key-Wrapping für Sicherheit und Wiederherstellung:** Ein Master-Dateischlüssel verschlüsselt die eigentlichen Daten. Dieser Dateischlüssel wird wiederum *zweimal* verschlüsselt ("gewrappt"): einmal mit einem vom **Passwort** abgeleiteten Schlüssel (für den normalen Zugriff) und einmal mit einem von der **User-Identität (Mnemonic)** abgeleiteten Schlüssel (für die Passwort-Wiederherstellung).
-
-- `pub fn save_profile_and_store_encrypted(profile: &UserProfile, store: &VoucherStore, path_dir: &Path, password: &str, identity: &UserIdentity) -> Result<(), VoucherCoreError>`
-
-  - Speichert und verschlüsselt `UserProfile` und `VoucherStore` atomar in ihren jeweiligen Dateien.
-
-- `pub fn load_profile_and_store_encrypted(path_dir: &Path, password: &str) -> Result<(UserProfile, VoucherStore), VoucherCoreError>`
-
-  - Lädt und entschlüsselt Profil und Store mit dem Passwort des Nutzers.
-
-- `pub fn load_profile_for_recovery(path_dir: &Path, identity: &UserIdentity) -> Result<(UserProfile, VoucherStore), VoucherCoreError>`
-
-  - Lädt und entschlüsselt Profil und Store mithilfe der `UserIdentity`, wenn das Passwort vergessen wurde.
-
-- `pub fn reset_password(path_dir: &Path, identity: &UserIdentity, new_password: &str) -> Result<(), VoucherCoreError>`
-
-  - Setzt das Passwort zurück, indem nach einer erfolgreichen Wiederherstellung ein neues "Passwort-Schloss" für den existierenden Master-Dateischlüssel erstellt wird.
-
-- `pub fn create_profile_from_mnemonic(mnemonic_phrase: &str, user_prefix: Option<&str>) -> Result<(UserProfile, VoucherStore, UserIdentity), VoucherCoreError>`
-
-  - Erstellt ein neues, leeres `UserProfile`, einen leeren `VoucherStore` und die dazugehörige `UserIdentity` aus einer Mnemonic-Phrase.
-
-- `pub fn create_and_encrypt_transaction_bundle(...) -> Result<Vec<u8>, VoucherCoreError>`
-
-  - Erstellt ein `TransactionBundle`.
-  - **Delegiert an `secure_container_manager::create_secure_container`**, um das Bündel in einen `SecureContainer` zu verpacken.
-  - Serialisiert den `SecureContainer` zu einem Byte-Array für den Transport und aktualisiert das Sender-Profil.
-
-- `pub fn process_encrypted_transaction_bundle(...) -> Result<(), VoucherCoreError>`
-
-  - Nimmt die Bytes eines serialisierten `SecureContainer` entgegen.
-  - **Delegiert an `secure_container_manager::open_secure_container`**, um den Container zu verifizieren und zu entschlüsseln.
-  - Verifiziert das innere `TransactionBundle` und aktualisiert bei Erfolg das Empfänger-Profil.
 
 ### `services/secure_container_manager.rs` Modul
 
