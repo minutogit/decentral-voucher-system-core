@@ -215,7 +215,7 @@ impl Wallet {
     }
 
     /// Berechnet eine deterministische, lokale ID für eine Gutschein-Instanz.
-    fn calculate_local_instance_id(
+    pub fn calculate_local_instance_id(
         voucher: &Voucher,
         profile_owner_id: &str,
     ) -> Result<String, VoucherCoreError> {
@@ -247,7 +247,7 @@ impl Wallet {
     }
 
     /// Berechnet das Guthaben eines bestimmten Nutzers nach einer spezifischen Transaktionshistorie.
-    fn get_balance_at_transaction(
+    pub fn get_balance_at_transaction(
         history: &[crate::models::voucher::Transaction],
         user_id: &str,
         initial_amount: &str,
