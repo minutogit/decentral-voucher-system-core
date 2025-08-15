@@ -4,6 +4,7 @@
 //! Dies ermöglicht es, die Kernlogik von der konkreten Speichermethode zu entkoppeln.
 
 use crate::models::profile::{UserIdentity, UserProfile, VoucherStore};
+use crate::models::fingerprint::FingerprintStore;
 pub mod file_storage;
 use thiserror::Error;
 
@@ -34,6 +35,16 @@ pub enum AuthMethod<'a> {
     RecoveryIdentity(&'a UserIdentity),
 }
 
+impl<'a> AuthMethod<'a> {
+    /// Extrahiert das Passwort als `&str`, wenn die Methode `Password` ist.
+    pub fn get_password(&self) -> Result<&'a str, StorageError> {
+        match self {
+            AuthMethod::Password(p) => Ok(p),
+            _ => Err(StorageError::Generic("Password not available for this auth method".to_string())),
+        }
+    }
+}
+
 /// Die Schnittstelle für persistente Speicherung.
 /// Jede Methode ist eine atomare Operation für ein komplettes Wallet.
 pub trait Storage {
@@ -59,4 +70,15 @@ pub trait Storage {
 
     /// Prüft, ob bereits ein Profil am Speicherort existiert.
     fn profile_exists(&self) -> bool;
+
+    /// Lädt und entschlüsselt den FingerprintStore.
+    fn load_fingerprints(&self, user_id: &str, auth: &AuthMethod) -> Result<FingerprintStore, StorageError>;
+
+    /// Speichert und verschlüsselt den FingerprintStore.
+    fn save_fingerprints(
+        &mut self,
+        user_id: &str,
+        password: &str,
+        fingerprint_store: &FingerprintStore,
+    ) -> Result<(), StorageError>;
 }

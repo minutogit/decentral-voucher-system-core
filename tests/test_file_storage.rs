@@ -5,7 +5,8 @@
 
 use rust_decimal::Decimal;
 use voucher_lib::error::VoucherCoreError;
-use voucher_lib::models::profile::{UserIdentity, UserProfile, VoucherStore};
+use voucher_lib::models::fingerprint::FingerprintStore;
+use voucher_lib::models::profile::{UserIdentity, UserProfile, VoucherStatus, VoucherStore};
 use voucher_lib::models::voucher::{Collateral, Creator, NominalValue, Transaction, Voucher};
 use voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition;
 use voucher_lib::services::{crypto_utils, voucher_manager};
@@ -30,7 +31,8 @@ fn create_new_wallet_and_identity(prefix: &str, seed: &str) -> (Wallet, UserIden
             user_id,
             bundle_history: Default::default(),
         },
-        store: VoucherStore::default(),
+        voucher_store: VoucherStore::default(),
+        fingerprint_store: FingerprintStore::default(),
     };
     (wallet, identity)
 }
@@ -45,7 +47,8 @@ fn load_test_standard() -> VoucherStandardDefinition {
 /// dass ein Ersteller seinen eigenen Gutschein zum Wallet hinzufügt.
 fn add_voucher_to_wallet(wallet: &mut Wallet, voucher: Voucher, owner_id: &str) {
     let local_id = calculate_local_instance_id(&voucher, owner_id);
-    wallet.store.vouchers.insert(local_id, voucher);
+    // Der Store erwartet jetzt ein Tupel (Voucher, VoucherStatus)
+    wallet.voucher_store.vouchers.insert(local_id, (voucher, VoucherStatus::Active));
 }
 
 /// Hilfsfunktion, um einen einfachen Test-Gutschein zu erstellen.
@@ -100,7 +103,7 @@ fn test_wallet_creation_save_and_load() {
     let loaded_wallet = Wallet::load(&storage, &AuthMethod::Password(password), identity_for_load)
         .expect("Failed to load wallet");
     assert_eq!(wallet.profile.user_id, loaded_wallet.profile.user_id);
-    assert!(loaded_wallet.store.vouchers.is_empty());
+    assert!(loaded_wallet.voucher_store.vouchers.is_empty());
 
     // 4. Fehlerfall: Falsches Passwort
     let (_, identity_for_fail) = create_new_wallet_and_identity("al", "save_load_seed");
@@ -120,7 +123,7 @@ fn test_password_recovery_and_reset_with_data() {
     let local_id = calculate_local_instance_id(&voucher, &identity.user_id);
 
     add_voucher_to_wallet(&mut wallet, voucher, &identity.user_id);
-    assert_eq!(wallet.store.vouchers.len(), 1);
+    assert_eq!(wallet.voucher_store.vouchers.len(), 1);
 
     wallet.save(&mut storage, &identity, initial_password).expect("Initial save failed");
 
@@ -136,8 +139,8 @@ fn test_password_recovery_and_reset_with_data() {
 
     // Überprüfe, ob die wiederhergestellten Daten (inkl. Gutschein) korrekt sind.
     assert_eq!(wallet.profile.user_id, recovered_wallet.profile.user_id);
-    assert_eq!(recovered_wallet.store.vouchers.len(), 1, "Voucher should be present after recovery");
-    assert!(recovered_wallet.store.vouchers.contains_key(&local_id));
+    assert_eq!(recovered_wallet.voucher_store.vouchers.len(), 1, "Voucher should be present after recovery");
+    assert!(recovered_wallet.voucher_store.vouchers.contains_key(&local_id));
 
     // 3. Passwort zurücksetzen.
     let new_password = "my-new-strong-password-456";
@@ -157,8 +160,8 @@ fn test_password_recovery_and_reset_with_data() {
         .expect("Login with new password should succeed");
 
     assert_eq!(wallet.profile.user_id, final_wallet.profile.user_id);
-    assert_eq!(final_wallet.store.vouchers.len(), 1, "Voucher should still be present after reset");
-    assert!(final_wallet.store.vouchers.contains_key(&local_id));
+    assert_eq!(final_wallet.voucher_store.vouchers.len(), 1, "Voucher should still be present after reset");
+    assert!(final_wallet.voucher_store.vouchers.contains_key(&local_id));
 
     // 5. Fehlerfall: Wiederherstellung mit der falschen Identität.
     let (_imposter_wallet, imposter_identity) = create_new_wallet_and_identity("im", "imposter_seed");
@@ -187,7 +190,7 @@ fn test_load_with_missing_voucher_store() {
         .expect("Loading with missing voucher store should succeed");
 
     assert_eq!(wallet.profile.user_id, loaded_wallet.profile.user_id);
-    assert!(loaded_wallet.store.vouchers.is_empty(), "Voucher store should be empty by default");
+    assert!(loaded_wallet.voucher_store.vouchers.is_empty(), "Voucher store should be empty by default");
 }
 
 #[test]

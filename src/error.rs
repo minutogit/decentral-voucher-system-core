@@ -8,7 +8,9 @@ use thiserror::Error;
 use crate::{
     services::{
         crypto_utils::{GetPubkeyError, SymmetricEncryptionError},
-        secure_container_manager::ContainerManagerError, voucher_manager::VoucherManagerError,
+        // ContainerManagerError wird wieder benötigt
+        secure_container_manager::ContainerManagerError,
+        voucher_manager::VoucherManagerError, 
     },
     storage::StorageError,
 };
@@ -69,4 +71,16 @@ pub enum VoucherCoreError {
     /// Ein allgemeiner Fehler, der für verschiedene Zwecke verwendet werden kann.
     #[error("Generic error: {0}")]
     Generic(String),
+
+    /// Der im `SecureContainer` gefundene Payload-Typ entspricht nicht dem erwarteten Typ.
+    #[error("Invalid payload type in secure container.")]
+    InvalidPayloadType,
+
+    /// Es wurde versucht, eine Aktion mit einem Gutschein durchzuführen, der unter Quarantäne steht.
+    #[error("Action aborted: The voucher is quarantined due to a detected double-spend conflict.")]
+    VoucherInQuarantine,
+
+    /// Eine Funktion oder ein Codepfad ist noch nicht implementiert.
+    #[error("Feature not implemented yet: {0}")]
+    NotImplemented(String),
 }

@@ -40,7 +40,8 @@ use voucher_lib::services::{
     voucher_manager::VoucherManagerError, voucher_validation::ValidationError,
 };
 use voucher_lib::crypto_utils::get_hash;
-use voucher_lib::models::profile::{UserIdentity, UserProfile, VoucherStore};
+use voucher_lib::models::fingerprint::FingerprintStore;
+use voucher_lib::models::profile::{UserIdentity, UserProfile, VoucherStatus, VoucherStore};
 use ed25519_dalek::SigningKey;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -820,7 +821,8 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     };
     let mut alice_wallet = Wallet {
         profile: UserProfile { user_id: alice_user_id, bundle_history: Default::default() },
-        store: VoucherStore::default(),
+        voucher_store: VoucherStore::default(),
+        fingerprint_store: FingerprintStore::default(),
     };
 
     let (bob_pub, bob_key) =
@@ -829,7 +831,8 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     let bob_identity = UserIdentity { signing_key: bob_key, public_key: bob_pub, user_id: bob_user_id.clone() };
     let mut bob_wallet = Wallet {
         profile: UserProfile { user_id: bob_user_id, bundle_history: Default::default() },
-        store: VoucherStore::default(),
+        voucher_store: VoucherStore::default(),
+        fingerprint_store: FingerprintStore::default(),
     };
 
     // --- 2. VOUCHER CREATION by Alice ---
@@ -852,12 +855,12 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     let local_id = calculate_local_instance_id(&voucher, &alice_identity.user_id);
     
     // Alice adds the new voucher to her wallet's store
-    alice_wallet.store.vouchers.insert(local_id.clone(), voucher.clone());
-    assert!(alice_wallet.store.vouchers.contains_key(&local_id));
+    alice_wallet.voucher_store.vouchers.insert(local_id.clone(), (voucher, VoucherStatus::Active));
+    assert!(alice_wallet.voucher_store.vouchers.contains_key(&local_id));
 
     // --- 3. SECURE TRANSFER from Alice to Bob ---
     // Zuerst muss eine Transaktion auf dem Gutschein erstellt werden, die den Besitz überträgt.
-    let voucher_to_transfer = alice_wallet.store.vouchers.get(&local_id).unwrap();
+    let (voucher_to_transfer, _) = alice_wallet.voucher_store.vouchers.get(&local_id).unwrap();
     let updated_voucher = create_transaction(
         voucher_to_transfer,
         &standard,
@@ -877,7 +880,9 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
         Some("Here is the voucher I promised!".to_string()),
     ).unwrap();
 
-    assert!(!alice_wallet.store.vouchers.contains_key(&local_id), "Voucher should be removed from Alice's wallet after sending.");
+    // Der Gutschein wird nicht entfernt, sondern archiviert. Wir prüfen den Status.
+    let (_, status) = alice_wallet.voucher_store.vouchers.get(&local_id).expect("Voucher should still be in wallet");
+    assert_eq!(*status, VoucherStatus::Archived, "Voucher status should be Archived after sending.");
     assert_eq!(alice_wallet.profile.bundle_history.len(), 1, "Alice's bundle history should contain one entry.");
 
     // --- 4. RECEIPT AND PROCESSING by Bob ---
@@ -886,13 +891,13 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
         .unwrap();
 
     // --- 5. VERIFICATION ---
-    assert_eq!(bob_wallet.store.vouchers.len(), 1, "Bob's wallet should now have one voucher.");
+    assert_eq!(bob_wallet.voucher_store.vouchers.len(), 1, "Bob's wallet should now have one voucher.");
     assert_eq!(bob_wallet.profile.bundle_history.len(), 1, "Bob's bundle history should contain one entry.");
 
     // Berechne die lokale ID für Bobs Instanz des Gutscheins.
-    let received_voucher = bob_wallet.store.vouchers.values().next().unwrap();
+    let (received_voucher, _) = bob_wallet.voucher_store.vouchers.values().next().unwrap();
     let bob_local_id = calculate_local_instance_id(received_voucher, &bob_identity.user_id);
-    assert!(bob_wallet.store.vouchers.contains_key(&bob_local_id), "Voucher with correct local ID should be in Bob's wallet.");
+    assert!(bob_wallet.voucher_store.vouchers.contains_key(&bob_local_id), "Voucher with correct local ID should be in Bob's wallet.");
 
     // Füge die finale Überprüfung hinzu, ob der empfangene Gutschein auch wirklich gültig ist.
     assert!(validate_voucher_against_standard(received_voucher, &standard).is_ok(), "Received voucher must be valid.");

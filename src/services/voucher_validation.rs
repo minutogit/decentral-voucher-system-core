@@ -57,6 +57,8 @@ pub enum ValidationError {
     // Fehler bei der Konvertierung von Beträgen wird jetzt in VoucherCoreError behandelt.
     /// Ein Fehler bei der Dekodierung einer Signatur (z.B. Base58).
     SignatureDecodeError(String),
+    /// Die Signatur eines Transaktionsbündels (`TransactionBundle`) ist ungültig.
+    InvalidBundleSignature,
 }
 
 impl fmt::Display for ValidationError {
@@ -79,6 +81,7 @@ impl fmt::Display for ValidationError {
             Self::ValidityDurationTooShort { required, actual } => write!(f, "Actual voucher validity duration is too short. Required at least: {}, Actual: {}", required, actual),
             Self::DateParseError(e) => write!(f, "Failed to parse date: {}", e),
             Self::SignatureDecodeError(e) => write!(f, "Failed to decode signature: {}", e),
+            Self::InvalidBundleSignature => write!(f, "The transaction bundle signature is invalid"),
         }
     }
 }
