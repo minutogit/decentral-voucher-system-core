@@ -347,33 +347,32 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
         // 3. Geschäftslogik validieren (Guthaben, Splits etc.).
         let sender_id = &transaction.sender_id;
         let sender_balance = *balances.get(sender_id).unwrap_or(&Decimal::ZERO);
-
+        
         let mut amount_sent = Decimal::from_str(&transaction.amount)?;
         amount_sent.set_scale(decimal_places)?;
-
+        
         // Geschäftslogik für die 'init' Transaktion.
         if i == 0 && transaction.t_type == "init" {
             // Die 'init' Transaktion setzt das Startguthaben für den Ersteller.
             balances.insert(sender_id.clone(), amount_sent);
         } else {
             // Geschäftslogik für alle nachfolgenden Transaktionen.
-            if amount_sent > sender_balance {
-                return Err(ValidationError::InsufficientFunds.into());
-            }
-
-            // Spezifische Logik für 'split' Transaktionen
-            if transaction.t_type == "split" {
+            // Unterscheidung zwischen Split und vollem Transfer anhand von sender_remaining_amount
+            if let Some(remaining_str) = &transaction.sender_remaining_amount {
+                // --- Fall 1: Dies ist eine SPLIT-Transaktion ---
                 if !voucher.divisible {
                     return Err(ValidationError::InvalidTransaction("Voucher is not divisible.".to_string()).into());
                 }
-                let remaining_str = transaction.sender_remaining_amount.as_deref()
-                    .ok_or_else(|| ValidationError::InvalidTransaction("split transaction must have a sender_remaining_amount.".to_string()))?;
-
+                if transaction.t_type != "split" {
+                    return Err(ValidationError::InvalidTransaction("Transaction with remaining amount must be of type 'split'.".to_string()).into());
+                }
+                
                 let mut remaining_amount = Decimal::from_str(remaining_str)?;
                 remaining_amount.set_scale(decimal_places)?;
 
                 // Prüfe die Erhaltung des Wertes.
-                if amount_sent + remaining_amount != sender_balance {
+                // Toleranz für Rundungsfehler einbauen, falls nötig, aber exakter Vergleich ist besser.
+                if amount_sent + remaining_amount != sender_balance{
                     return Err(ValidationError::AmountMismatchOnSplit.into());
                 }
 
@@ -382,8 +381,14 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
                 *balances.entry(transaction.recipient_id.clone()).or_insert(Decimal::ZERO) += amount_sent;
 
             } else {
-                // Hier könnte Logik für andere Transaktionstypen wie "transfer" stehen.
-                // Bei einem vollen Transfer:
+                // --- Fall 2: Dies ist ein VOLLER TRANSFER ---
+                // Bei einem vollen Transfer muss der gesendete Betrag exakt dem Guthaben des Senders entsprechen.
+                if amount_sent > sender_balance {
+                     return Err(ValidationError::InsufficientFunds.into());
+                }
+                if amount_sent < sender_balance {
+                    return Err(ValidationError::InvalidTransaction("Full transfer amount is less than the available sender balance.".to_string()).into());
+                }
                 *balances.entry(sender_id.clone()).or_insert(Decimal::ZERO) -= amount_sent;
                 *balances.entry(transaction.recipient_id.clone()).or_insert(Decimal::ZERO) += amount_sent;
             }

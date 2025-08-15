@@ -35,7 +35,7 @@ pub use services::crypto_utils;
 pub use services::utils::to_canonical_json;
 pub use services::utils;
 pub use services::voucher_manager::{
-    create_split_transaction, create_voucher, from_json, to_json, load_standard_definition, NewVoucherData
+    create_transaction, create_voucher, from_json, to_json, load_standard_definition, NewVoucherData
 };
 pub use services::voucher_validation::{
     get_spendable_balance, validate_voucher_against_standard

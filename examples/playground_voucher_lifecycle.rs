@@ -11,8 +11,8 @@
 // Ausführen mit: cargo run --example playground_voucher_lifecycle
 
 use voucher_lib::{
-    create_split_transaction, create_voucher, crypto_utils, get_spendable_balance,
-    load_standard_definition, to_canonical_json, to_json, validate_voucher_against_standard,
+    create_transaction, create_voucher, crypto_utils, get_spendable_balance, load_standard_definition,
+    to_canonical_json, to_json, validate_voucher_against_standard,
     Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue, VoucherCoreError,
     VoucherStandardDefinition,
 };
@@ -211,7 +211,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Empfänger-ID erstellen
     let recipient_id = crypto_utils::create_user_id(&recipient_pub, Some("rc"))?;
 
-    let voucher_after_split = create_split_transaction(
+    let voucher_after_split = create_transaction(
         &voucher, // der letzte gültige Zustand
         &standard,
         &voucher.creator.id, // Der ursprüngliche Ersteller ist der Sender
@@ -252,7 +252,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n -> Pfad A: Alice sendet ihren Restbetrag (35) an Carol...");
     let carol_id = crypto_utils::create_user_id(&carol_pub, Some("ca"))?;
 
-    let voucher_version_alice = create_split_transaction(
+    let voucher_version_alice = create_transaction(
         &voucher_after_split,
         &standard,
         &voucher.creator.id, // Alice's ID
@@ -268,7 +268,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n -> Pfad B: Bob sendet sein Guthaben (25) an David...");
     let david_id = crypto_utils::create_user_id(&david_pub, Some("da"))?;
 
-    let voucher_version_bob = create_split_transaction(
+    let voucher_version_bob = create_transaction(
         &voucher_after_split, // Basiert auf dem SELBEN Zustand wie Alices Transaktion
         &standard,
         &recipient_id, // Bob's ID
@@ -286,8 +286,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("und verwendet den Gutschein-Zustand DAVOR, um ihr ursprüngliches Guthaben von 60 erneut auszugeben.");
     let frank_id = crypto_utils::create_user_id(&frank_pub, Some("fr"))?;
 
-    let fraudulent_voucher =
-        create_split_transaction(&voucher, &standard, &voucher.creator.id, &creator_priv, &frank_id, "60")?;
+    let fraudulent_voucher = create_transaction(&voucher, &standard, &voucher.creator.id, &creator_priv, &frank_id, "60")?;
     println!("✅ Alices betrügerische Transaktion wurde technisch korrekt erstellt.");
 
     println!("\n--- ERGEBNIS DES BETRUGSVERSUCHS ---");

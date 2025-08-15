@@ -255,23 +255,24 @@ fn round_up_date(date: DateTime<Utc>, rounding_str: &str) -> Result<DateTime<Utc
     }
 }
 
-/// Erstellt eine 'split'-Transaktion und hängt sie an eine neue Kopie des Gutscheins an.
+/// Erstellt eine neue Transaktion und hängt sie an eine Kopie des Gutscheins an.
 ///
-/// Diese Funktion nimmt einen Gutschein, prüft, ob ein Split erlaubt und das Guthaben ausreichend ist,
-/// und erzeugt dann eine neue, signierte Transaktion. Das Ergebnis ist eine neue `Voucher`-Instanz
-/// mit der erweitereierten Transaktionshistorie.
+/// Die Funktion ermittelt automatisch, ob es sich um einen **vollen Transfer** oder einen **Split** handelt,
+/// basierend auf dem Vergleich des zu sendenden Betrags mit dem verfügbaren Guthaben.
+/// - Bei einem **vollen Transfer** werden `t_type` und `sender_remaining_amount` weggelassen.
+/// - Bei einem **Split** wird `t_type` auf "split" gesetzt und `sender_remaining_amount` enthält den Restbetrag.
 ///
 /// # Arguments
-/// * `voucher` - Der aktuelle Zustand des Gutscheins vor dem Split.
+/// * `voucher` - Der aktuelle Zustand des Gutscheins vor der Transaktion.
 /// * `standard` - Die Definition des Standards, um Regeln wie `amount_decimal_places` zu prüfen.
-/// * `sender_id` - Die ID des Nutzers, der den Split durchführt.
+/// * `sender_id` - Die ID des Nutzers, der die Transaktion durchführt.
 /// * `sender_key` - Der Signierschlüssel des Senders.
 /// * `recipient_id` - Die ID des Empfängers des Teilbetrags.
 /// * `amount_to_send_str` - Der zu sendende Betrag als String.
 ///
 /// # Returns
 /// Ein `Result`, das entweder den neuen, aktualisierten `Voucher` oder einen `VoucherManagerError` enthält.
-pub fn create_split_transaction(
+pub fn create_transaction(
     voucher: &Voucher,
     standard: &VoucherStandardDefinition,
     sender_id: &str,
@@ -279,47 +280,55 @@ pub fn create_split_transaction(
     recipient_id: &str,
     amount_to_send_str: &str,
 ) -> Result<Voucher, VoucherCoreError> {
-    // 1. Prüfen, ob der Gutschein überhaupt teilbar ist.
-    if !voucher.divisible {
-        return Err(VoucherManagerError::VoucherNotDivisible.into());
-    }
-
     let decimal_places = standard.validation.amount_decimal_places as u32;
 
-    // 2. Aktuell verfügbares Guthaben für den Sender berechnen.
+    // 1. Aktuell verfügbares Guthaben für den Sender berechnen.
     let spendable_balance = get_spendable_balance(voucher, sender_id, standard)?;
 
-    // 3. Zu sendenden Betrag parsen und mit dem Guthaben vergleichen.
+    // 2. Zu sendenden Betrag parsen und mit dem Guthaben vergleichen.
     let mut amount_to_send = Decimal::from_str_exact(amount_to_send_str)?;
     amount_to_send.set_scale(decimal_places)?;
 
-    if amount_to_send <= Decimal::ZERO || amount_to_send > spendable_balance {
+    if amount_to_send <= Decimal::ZERO {
+        return Err(VoucherManagerError::Generic("Transaction amount must be positive.".to_string()).into());
+    }
+    if amount_to_send > spendable_balance {
         return Err(VoucherManagerError::InsufficientFunds {
             available: spendable_balance,
             needed: amount_to_send,
         }.into());
     }
 
-    // 4. Restbetrag für den Sender berechnen.
-    let sender_remaining_amount = spendable_balance - amount_to_send;
+    // 3. Fallunterscheidung: Split oder voller Transfer?
+    let (t_type, sender_remaining_amount) = if amount_to_send < spendable_balance {
+        // Dies ist ein Split.
+        if !voucher.divisible {
+            return Err(VoucherManagerError::VoucherNotDivisible.into());
+        }
+        let remaining = spendable_balance - amount_to_send;
+        ("split".to_string(), Some(remaining.to_string()))
+    } else {
+        // Dies ist ein voller Transfer.
+        ("".to_string(), None)
+    };
 
-    // 5. Neue Transaktion erstellen.
+    // 4. Neue Transaktion erstellen.
     let prev_hash = get_hash(to_canonical_json(voucher.transactions.last().unwrap())?);
     let t_time = get_current_timestamp();
 
     let mut new_transaction = Transaction {
         t_id: "".to_string(), // Wird später berechnet
         prev_hash,
-        t_type: "split".to_string(),
+        t_type,
         t_time,
         sender_id: sender_id.to_string(),
         recipient_id: recipient_id.to_string(),
         amount: amount_to_send.to_string(),
-        sender_remaining_amount: Some(sender_remaining_amount.to_string()),
+        sender_remaining_amount,
         sender_signature: "".to_string(), // Wird später berechnet
     };
 
-    // 6. t_id und Signatur für die neue Transaktion generieren.
+    // 5. t_id und Signatur für die neue Transaktion generieren.
     let tx_json_for_id = to_canonical_json(&new_transaction)?;
     new_transaction.t_id = get_hash(tx_json_for_id);
 
@@ -333,7 +342,7 @@ pub fn create_split_transaction(
     let signature = sign_ed25519(sender_key, signature_payload_hash.as_bytes());
     new_transaction.sender_signature = bs58::encode(signature.to_bytes()).into_string();
 
-    // 7. Neuen Gutschein-Zustand erstellen.
+    // 6. Neuen Gutschein-Zustand erstellen.
     let mut new_voucher = voucher.clone();
     new_voucher.transactions.push(new_transaction);
 

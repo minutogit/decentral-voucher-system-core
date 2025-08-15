@@ -30,8 +30,8 @@
 
 // Wir importieren die öffentlichen Typen, die in lib.rs re-exportiert wurden.
 use voucher_lib::{
-    create_split_transaction, create_voucher, crypto_utils, from_json, get_spendable_balance,
-    load_standard_definition, to_canonical_json, to_json, validate_voucher_against_standard,
+    create_transaction, create_voucher, crypto_utils, from_json, get_spendable_balance, load_standard_definition,
+    to_canonical_json, to_json, validate_voucher_against_standard,
     Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue, Transaction,
     Voucher, VoucherCoreError, VoucherStandardDefinition, Wallet,
 };
@@ -470,7 +470,7 @@ fn test_split_transaction_cycle_and_balance_check() {
 
     // 5. Führe eine Split-Transaktion durch: Sende 30.5000 an den Empfänger
     let split_amount = "30.5000";
-    let voucher_after_split = create_split_transaction(
+    let voucher_after_split = create_transaction(
         &initial_voucher,
         &standard,
         &sender_id,
@@ -518,7 +518,7 @@ fn test_split_fails_on_insufficient_funds() {
     let initial_voucher = create_voucher(voucher_data, &standard, &sender_key).unwrap();
 
     // Versuche, 50.1 zu senden (mehr als vorhanden)
-    let split_result = create_split_transaction(
+    let split_result = create_transaction(
         &initial_voucher,
         &standard,
         &sender_id,
@@ -547,10 +547,12 @@ fn test_split_fails_on_non_divisible_voucher() {
     let (recipient_pub, _) = crypto_utils::generate_ed25519_keypair_for_tests(Some("recipient3"));
     let recipient_id = crypto_utils::create_user_id(&recipient_pub, Some("rc")).unwrap();
 
-    let voucher_data = create_minuto_voucher_data(sender_creator);
+    // Passe die Testdaten an den Silver-Standard an (4 Dezimalstellen), um Konsistenz zu gewährleisten.
+    let mut voucher_data = create_minuto_voucher_data(sender_creator);
+    voucher_data.nominal_value.amount = "60.0000".to_string();
     let initial_voucher = create_voucher(voucher_data, &standard, &sender_key).unwrap();
 
-    let split_result = create_split_transaction(
+    let split_result = create_transaction(
         &initial_voucher,
         &standard,
         &sender_id,
@@ -721,14 +723,14 @@ fn test_double_spend_detection_logic() {
     assert!(validate_voucher_against_standard(&initial_voucher, &standard).is_ok());
 
     // 3. Alice führt eine erste, legitime Transaktion durch: Sie sendet 40 an Bob.
-    let voucher_after_split = create_split_transaction(
+    let voucher_after_split = create_transaction(
         &initial_voucher, &standard, &alice_id, &alice_key, &bob_id, "40"
     ).unwrap();
     assert!(validate_voucher_against_standard(&voucher_after_split, &standard).is_ok());
 
     // 4. Alice betrügt: Sie nimmt den Zustand VOR der Transaktion an Bob (`initial_voucher`)
     //    und versucht, ihr ursprüngliches Guthaben von 100 erneut auszugeben, indem sie 60 an Frank sendet.
-    let fraudulent_voucher = create_split_transaction(
+    let fraudulent_voucher = create_transaction(
         &initial_voucher, &standard, &alice_id, &alice_key, &frank_id, "60"
     ).unwrap();
     assert!(validate_voucher_against_standard(&fraudulent_voucher, &standard).is_ok());
@@ -856,7 +858,7 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     // --- 3. SECURE TRANSFER from Alice to Bob ---
     // Zuerst muss eine Transaktion auf dem Gutschein erstellt werden, die den Besitz überträgt.
     let voucher_to_transfer = alice_wallet.store.vouchers.get(&local_id).unwrap();
-    let updated_voucher = create_split_transaction(
+    let updated_voucher = create_transaction(
         voucher_to_transfer,
         &standard,
         &alice_identity.user_id,

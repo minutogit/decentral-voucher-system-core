@@ -119,12 +119,12 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
     { // Jede Transaktion ist ein in sich geschlossenes, signiertes Objekt.
       "t_id": "STRING",                 // Eindeutige ID der Transaktion, erzeugt durch Hashing der Transaktionsdaten (ohne t_id und Signatur).
       "prev_hash": "STRING",            // Der Hash der vorherigen Transaktion (oder der voucher_id bei der "init"-Transaktion), der die Kette kryptographisch sichert.
-      "t_type": "STRING",               // Art der Transaktion (z.B. "init" für Initialisierung, "split" für Teilung, "redeem" für Einlösung).
+      "t_type": "STRING",               // Art der Transaktion: "init" für Initialisierung, "split" für Teilung. Bei einem vollen Transfer wird das Feld weggelassen.
       "t_time": "YYYY-MM-DDTHH:MM:SS.SSSSSSZ", // Zeitpunkt der Transaktion.
       "sender_id": "STRING",            // ID des Senders der Transaktion.
       "recipient_id": "STRING",         // ID des Empfängers der Transaktion.
       "amount": "STRING",               // Der Betrag, der bei dieser Transaktion bewegt wurde.
-      "sender_remaining_amount": "STRING",// Der Restbetrag beim Sender nach einer Teilung (nur bei "split").
+      "sender_remaining_amount": "STRING",// Der Restbetrag beim Sender. Dieses Feld existiert nur bei "split"-Transaktionen.
       "sender_signature": "STRING"      // Digitale Signatur des Senders. Signiert ein Objekt, das aus prev_hash, sender_id, t_id und t_time besteht.
     }
   ],
@@ -374,12 +374,12 @@ Dieses Modul stellt die Kernlogik für die Erstellung und Verarbeitung von Gutsc
   - Erstellt und signiert die kryptographisch verkettete `init`-Transaktion.
 
 - `pub fn create_split_transaction(voucher: &Voucher, standard: &VoucherStandardDefinition, sender_id: &str, sender_key: &SigningKey, recipient_id: &str, amount_to_send_str: &str) -> Result<Voucher, VoucherManagerError>`
-
-  - Erstellt eine Kopie des Gutscheins mit einer neuen, angehängten `split`-Transaktion.
-  - Prüft, ob der Gutschein teilbar ist.
-  - Verwendet `get_spendable_balance` zur Guthabenprüfung.
-  - Berechnet den `prev_hash` aus der letzten Transaktion, um die Kette fortzusetzen.
-  - Erzeugt und signiert die neue Transaktion.
+- `pub fn create_transaction(voucher: &Voucher, standard: &VoucherStandardDefinition, sender_id: &str, sender_key: &SigningKey, recipient_id: &str, amount_to_send_str: &str) -> Result<Voucher, VoucherCoreError>`
+  - Erstellt eine Kopie des Gutscheins mit einer neuen Transaktion.
+  - Ermittelt automatisch, ob es sich um einen **vollen Transfer** oder einen **Split** handelt.
+  - Bei einem Split wird `t_type` auf `"split"` gesetzt, `sender_remaining_amount` berechnet und der Gutschein muss teilbar sein.
+  - Bei einem vollen Transfer werden `t_type` und `sender_remaining_amount` für eine kompaktere Darstellung weggelassen.
+  - Führt alle notwendigen Prüfungen durch, berechnet den `prev_hash` und signiert die neue Transaktion.
 
 - `pub fn to_json(voucher: &Voucher) -> Result<String, VoucherManagerError>`
 

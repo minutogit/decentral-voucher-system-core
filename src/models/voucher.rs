@@ -150,7 +150,9 @@ pub struct GuarantorSignature {
 pub struct Transaction {
     /// Eindeutige ID der Transaktion.
     pub t_id: String,
-    /// Art der Transaktion (z.B. "init", "split", "redeem").
+    /// Art der Transaktion. Leer für einen vollen Transfer, "init" für die Erstellung, "split" für Teilbeträge.
+    /// Das Feld wird bei der Serialisierung weggelassen, wenn es leer ist.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub t_type: String,
     /// Zeitpunkt der Transaktion im ISO 8601-Format.
     pub t_time: String,
@@ -160,7 +162,7 @@ pub struct Transaction {
     pub recipient_id: String,
     /// Der Betrag, der bei dieser Transaktion bewegt wurde.
     pub amount: String,
-    /// Der Restbetrag beim Sender nach einer Teilung (nur bei "split"-Transaktionen relevant).
+    /// Der Restbetrag beim Sender nach einer Teilung. Nur bei `t_type: "split"` vorhanden.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_remaining_amount: Option<String>,
     /// Digitale Signatur des Senders für diese Transaktion.
