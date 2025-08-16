@@ -21,9 +21,11 @@ use crate::services::utils::{get_current_timestamp, to_canonical_json};
 use crate::services::voucher_validation::ValidationError;
 use crate::storage::{AuthMethod, Storage, StorageError};
 use ed25519_dalek::Signature;
-use rust_decimal::Decimal;
+use chrono::{DateTime, Duration, Utc};
+use crate::models::voucher_standard_definition::VoucherStandardDefinition;
+use crate::services::voucher_manager;
+
 use std::collections::HashMap;
-use std::str::FromStr;
 
 /// Die zentrale Verwaltungsstruktur für ein Nutzer-Wallet.
 /// Hält den In-Memory-Zustand und interagiert mit dem Speichersystem.
@@ -251,101 +253,189 @@ impl Wallet {
         profile_owner_id: &str,
     ) -> Result<String, VoucherCoreError> {
         let mut ownership_defining_tx_id: Option<String> = None;
-        println!("\n[Debug ID Calc] Starte Berechnung für Gutschein '{}', Owner '{}'", voucher.voucher_id, profile_owner_id);
 
-        // Iteriere rückwärts durch die Transaktionen, um den ANFANG der letzten
-        // Besitz-Periode zu finden.
-        for i in (0..voucher.transactions.len()).rev() {
-            let history_slice = &voucher.transactions[..=i];
-            let current_tx_id = &voucher.transactions[i].t_id;
-            println!("[Debug ID Calc] Prüfe Tx #{} (ID: {})", i, current_tx_id);
+        // Iteriere rückwärts durch die Transaktionen. Die erste Transaktion, die den
+        // `profile_owner_id` zum Besitzer macht, ist die maßgebliche Transaktion
+        // für die ID dieser spezifischen Gutschein-Instanz.
+        for tx in voucher.transactions.iter().rev() {
+            let is_recipient = tx.recipient_id == profile_owner_id;
 
-            let balance = Self::get_balance_at_transaction(
-                history_slice,
-                profile_owner_id,
-                &voucher.nominal_value.amount,
-            );
-            println!("[Debug ID Calc] -> Guthaben nach dieser Tx: {}", balance);
+            // Der Sender wird (wieder) zum Besitzer, wenn es einen Restbetrag gibt (Split).
+            let is_sender_with_remainder = tx.sender_id == profile_owner_id && tx.sender_remaining_amount.is_some();
 
-            if balance > rust_decimal::Decimal::ZERO {
-                // Diese Transaktion ist Teil einer Besitz-Periode. Wir merken uns ihre ID
-                // als potenziellen Startpunkt. Da wir rückwärts iterieren, wird der
-                // gemerkte Wert immer der früheste Punkt der aktuellen Besitz-Periode sein.
-                ownership_defining_tx_id = Some(voucher.transactions[i].t_id.clone());
-                println!("[Debug ID Calc] -> Guthaben > 0. Setze definierende Tx-ID auf: '{}'", ownership_defining_tx_id.as_ref().unwrap());
-            } else {
-                // Der Kontostand ist null. Das bedeutet, die letzte Besitz-Periode ist hier zu Ende.
-                // Wenn wir bereits einen Kandidaten gefunden haben, ist das der definitive Startpunkt.
-                // Wir können die Suche beenden.
-                if ownership_defining_tx_id.is_some() {
-                    break;
-                }
+            if is_recipient || is_sender_with_remainder {
+                ownership_defining_tx_id = Some(tx.t_id.clone());
+                break; // Die erste gefundene Transaktion ist die richtige.
             }
         }
 
-        println!("[Debug ID Calc] Finale definierende Tx-ID für Instanz: {:?}", ownership_defining_tx_id);
         match ownership_defining_tx_id {
-            Some(t_id) => {
-                // Die zuletzt gemerkte ID ist somit die der Transaktion, die deine letzte Besitz-Periode gestartet hat.
-                let combined_string = format!("{}{}{}", voucher.voucher_id, t_id, profile_owner_id);
-                Ok(get_hash(combined_string))
-            }
-            None => {
-                Err(VoucherCoreError::Generic(
-                    "Voucher instance never owned by profile holder.".to_string(),
-                ))
-            }
+            Some(t_id) => Ok(get_hash(format!("{}{}{}", voucher.voucher_id, t_id, profile_owner_id))),
+            None => Err(VoucherCoreError::Generic(format!(
+                "Voucher instance '{}' was never owned by profile holder '{}'.",
+                voucher.voucher_id,
+                profile_owner_id
+            ))),
         }
     }
 
-    /// Berechnet das Guthaben eines bestimmten Nutzers nach einer spezifischen Transaktionshistorie.
-    /// Diese Funktion ist bewusst einfach gehalten und validiert die Transaktionen nicht;
-    /// sie wendet sie lediglich mechanisch an, um einen Kontostand zu einem bestimmten Zeitpunkt zu ermitteln.
-    pub fn get_balance_at_transaction(
-        history: &[crate::models::voucher::Transaction],
-        user_id: &str,
-        initial_amount: &str,
-    ) -> Decimal {
-        let mut balances: HashMap<String, Decimal> = HashMap::new();
-        if history.is_empty() {
-            return Decimal::ZERO;
+    /// Erstellt eine Transaktion, um einen Gutschein oder einen Teilbetrag davon zu überweisen.
+    /// Dies ist die zentrale, sichere Methode für Client-Anwendungen, um einen Transfer zu initiieren.
+    /// Sie kapselt die Geschäftslogik, Sicherheitsprüfungen und die Zustandsverwaltung.
+    ///
+    /// # Arguments
+    /// * `identity` - Die Identität des Senders.
+    /// * `standard_definition` - Die Standard-Definition, die für den Gutschein gilt.
+    /// * `local_instance_id` - Die lokale ID der zu verwendenden Gutschein-Instanz im Wallet.
+    /// * `recipient_id` - Die ID des Empfängers.
+    /// * `amount_to_send` - Der zu sendende Betrag als String.
+    /// * `notes` - Optionale Notizen für das Transaktionsbündel.
+    ///
+    /// # Returns
+    /// Ein `Result`, das entweder die serialisierten Bytes des `SecureContainer` für den
+    /// Transfer oder einen `VoucherCoreError` enthält.
+    pub fn create_transfer(
+        &mut self,
+        identity: &UserIdentity,
+        standard_definition: &VoucherStandardDefinition,
+        local_instance_id: &str,
+        recipient_id: &str,
+        amount_to_send: &str,
+        notes: Option<String>,
+    ) -> Result<Vec<u8>, VoucherCoreError> {
+        // 1. Gutschein-Instanz klonen, um Borrowing-Konflikte zu vermeiden, und Status prüfen.
+        let (voucher_to_spend, status) = self
+            .voucher_store
+            .vouchers
+            .get(local_instance_id)
+            .ok_or(VoucherCoreError::VoucherNotFound(local_instance_id.to_string()))?;
+
+        if *status != VoucherStatus::Active {
+            return Err(VoucherCoreError::VoucherNotActive(status.clone()));
+        }
+        let voucher_to_spend = voucher_to_spend.clone();
+
+        // Phase 3: Proaktive Double-Spend-Prüfung.
+        let last_tx = voucher_to_spend.transactions.last()
+            .ok_or_else(|| VoucherCoreError::Generic("Cannot spend voucher with no transactions.".to_string()))?;
+        let prev_hash = get_hash(to_canonical_json(last_tx)?);
+        let fingerprint_hash = get_hash(format!("{}{}", prev_hash, identity.user_id));
+
+        if self.fingerprint_store.own_fingerprints.contains_key(&fingerprint_hash) {
+            return Err(VoucherCoreError::DoubleSpendAttemptBlocked);
         }
 
-        // 1. Initialisiere den Kontostand mit der 'init'-Transaktion.
-        let init_tx = &history[0];
-        if init_tx.t_type == "init" {
-            let initial_dec = Decimal::from_str(initial_amount).unwrap_or_default();
-            balances.insert(init_tx.sender_id.clone(), initial_dec);
-        }
+        // 2. Erzeuge den neuen Gutschein-Zustand durch Aufruf der `voucher_manager`-Funktion.
+        let new_voucher_state = voucher_manager::create_transaction(
+            &voucher_to_spend,
+            standard_definition,
+            &identity.user_id,
+            &identity.signing_key,
+            recipient_id,
+            amount_to_send,
+        )?;
 
-        // 2. Wende alle nachfolgenden Transaktionen an.
-        for tx in history.iter().skip(1) {
-            let sender_id = &tx.sender_id;
-            let recipient_id = &tx.recipient_id;
+        // Phase 4: Wallet-Zustandsverwaltung aktualisieren.
+        // Die alte Instanz wird archiviert.
+        self.voucher_store.vouchers.get_mut(local_instance_id).unwrap().1 = VoucherStatus::Archived;
 
-            if let Some(remaining_str) = &tx.sender_remaining_amount {
-                // --- FALL 1: SPLIT (Teilzahlung) ---
-                let tx_amount = Decimal::from_str(&tx.amount).unwrap_or_default();
-                let remaining_amount = Decimal::from_str(remaining_str).unwrap_or_default();
-
-                // Setze das Guthaben des Senders auf den expliziten Restbetrag.
-                balances.insert(sender_id.clone(), remaining_amount);
-                // Füge den gesendeten Betrag dem Empfänger hinzu.
-                *balances.entry(recipient_id.clone()).or_default() += tx_amount;
-            } else {
-                // --- FALL 2: VOLLER TRANSFER ---
-                // Der gesamte bisherige Kontostand des Senders wird übertragen.
-                let sender_balance_before = balances.get(sender_id).cloned().unwrap_or_default();
-
-                // Füge das Guthaben des Senders dem Empfänger hinzu.
-                *balances.entry(recipient_id.clone()).or_default() += sender_balance_before;
-                // Das Guthaben des Senders wird auf 0 gesetzt.
-                balances.insert(sender_id.clone(), Decimal::ZERO);
+        // Wenn es ein Split war, wird eine neue, aktive Instanz für den Restbetrag des Senders erstellt.
+        if let Some(last_tx) = new_voucher_state.transactions.last() {
+            if last_tx.sender_id == identity.user_id && last_tx.sender_remaining_amount.is_some() {
+                let new_local_id = Self::calculate_local_instance_id(&new_voucher_state, &identity.user_id)?;
+                self.voucher_store.vouchers.insert(new_local_id, (new_voucher_state.clone(), VoucherStatus::Active));
             }
         }
 
-        // Gib das finale Guthaben für den angefragten Nutzer zurück.
-        *balances.get(user_id).unwrap_or(&Decimal::ZERO)
+        // 3. Erstelle das `TransactionBundle` und den `SecureContainer`.
+        // Diese Logik wird von `create_and_encrypt_transaction_bundle` hierher verschoben,
+        // um die Zustandsverwaltung an einem Ort zu zentralisieren.
+        let vouchers_for_bundle = vec![new_voucher_state];
+        let mut bundle = TransactionBundle {
+            bundle_id: "".to_string(),
+            sender_id: identity.user_id.clone(),
+            recipient_id: recipient_id.to_string(),
+            vouchers: vouchers_for_bundle.clone(),
+            timestamp: get_current_timestamp(),
+            notes,
+            sender_signature: "".to_string(),
+        };
+
+        let bundle_json_for_id = to_canonical_json(&bundle)?;
+        bundle.bundle_id = get_hash(bundle_json_for_id);
+
+        let signature = sign_ed25519(&identity.signing_key, bundle.bundle_id.as_bytes());
+        bundle.sender_signature = bs58::encode(signature.to_bytes()).into_string();
+        let signed_bundle_bytes = serde_json::to_vec(&bundle)?;
+
+        let secure_container = create_secure_container(
+            identity,
+            &[recipient_id.to_string()],
+            &signed_bundle_bytes,
+            PayloadType::TransactionBundle,
+        )?;
+
+        let container_bytes = serde_json::to_vec(&secure_container)?;
+
+        let header = bundle.to_header(TransactionDirection::Sent);
+        self.profile
+            .bundle_history
+            .insert(header.bundle_id.clone(), header);
+
+        // Nach dem Erstellen des signierten Bündels den Fingerprint der soeben erstellten
+        // Transaktion zum eigenen Store hinzufügen. Dies ist die proaktive Schutzmaßnahme.
+        let created_tx = vouchers_for_bundle[0].transactions.last().unwrap();
+        let fingerprint = TransactionFingerprint {
+            prvhash_senderid_hash: fingerprint_hash.clone(),
+            t_id: created_tx.t_id.clone(),
+            t_time: created_tx.t_time.clone(),
+            sender_signature: created_tx.sender_signature.clone(),
+            valid_until: vouchers_for_bundle[0].valid_until.clone(),
+        };
+
+        self.fingerprint_store
+            .own_fingerprints
+            .entry(fingerprint_hash)
+            .or_default()
+            .push(fingerprint);
+
+        Ok(container_bytes)
+    }
+
+    /// Führt Wartungsarbeiten am Wallet-Speicher durch, um veraltete Daten zu entfernen.
+    ///
+    /// Diese Funktion sollte periodisch aufgerufen werden (z.B. beim Start der Anwendung),
+    /// um die Größe der Speicherdateien zu kontrollieren.
+    ///
+    /// # Tasks
+    /// - Entfernt alle abgelaufenen Fingerprints (sowohl eigene als auch fremde).
+    /// - Entfernt archivierte Gutschein-Instanzen, deren Gültigkeitsdatum eine
+    ///   bestimmte Schonfrist (`archive_grace_period_years`) überschritten hat.
+    ///
+    /// # Arguments
+    /// * `archive_grace_period_years` - Die Anzahl der Jahre, die ein archivierter Gutschein
+    ///   nach seinem Ablaufdatum aufbewahrt werden soll, bevor er endgültig gelöscht wird.
+    pub fn cleanup_storage(&mut self, archive_grace_period_years: i64) {
+        // 1. Veraltete Fingerprints entfernen (existierende Funktion wiederverwenden).
+        self.cleanup_expired_fingerprints();
+
+        // 2. Veraltete archivierte Gutscheine entfernen.
+        let now = Utc::now();
+        let grace_period = Duration::days(archive_grace_period_years * 365); // Vereinfachung
+
+        self.voucher_store.vouchers.retain(|_, (voucher, status)| {
+            if *status != VoucherStatus::Archived {
+                return true; // Behalte alle nicht-archivierten Gutscheine.
+            }
+
+            // Versuche, das Ablaufdatum zu parsen.
+            if let Ok(valid_until) = DateTime::parse_from_rfc3339(&voucher.valid_until) {
+                let purge_date = valid_until.with_timezone(&Utc) + grace_period;
+                // Behalte den Gutschein, wenn das Löschdatum noch nicht erreicht ist.
+                return now < purge_date;
+            }
+            true // Behalte den Gutschein, wenn das Datum nicht geparst werden kann.
+        });
     }
 }
 
@@ -427,37 +517,50 @@ impl Wallet {
         result
     }
 
-    /// Versucht, einen Konflikt zu beweisen und setzt bei Erfolg den Gutschein unter Quarantäne.
+    /// Versucht, einen Konflikt zu beweisen und setzt bei Erfolg ALLE betroffenen Gutscheine unter Quarantäne.
     fn verify_conflict_and_quarantine(
         &mut self,
         conflict_hash: &str,
         _fingerprints: &[TransactionFingerprint],
     ) -> Result<bool, VoucherCoreError> {
-        if let Some((local_id, _)) = self.find_local_voucher_by_conflict_hash(conflict_hash) {
-            let local_id_clone = local_id.clone();
-            if let Some(entry) = self.voucher_store.vouchers.get_mut(&local_id_clone) {
+        // Finde ALLE vom Konflikt betroffenen Gutschein-Instanzen im Wallet.
+        let ids_to_quarantine = self.find_all_local_vouchers_by_conflict_hash(conflict_hash);
+        if ids_to_quarantine.is_empty() {
+            return Ok(false);
+        }
+
+        let mut quarantined_at_least_one = false;
+        // Stelle jede gefundene Instanz unter Quarantäne.
+        for local_id in ids_to_quarantine {
+            if let Some(entry) = self.voucher_store.vouchers.get_mut(&local_id) {
                 entry.1 = VoucherStatus::Quarantined;
-                return Ok(true);
+                quarantined_at_least_one = true;
             }
         }
-        Ok(false)
+        Ok(quarantined_at_least_one)
     }
 
-    /// Findet die lokale ID und eine Referenz auf einen Gutschein basierend auf einem Konflikt-Hash.
-    fn find_local_voucher_by_conflict_hash(
+    /// Findet die lokalen IDs aller Gutschein-Instanzen, die einen bestimmten Konflikt-Hash enthalten.
+    fn find_all_local_vouchers_by_conflict_hash(
         &self,
         conflict_hash: &str,
-    ) -> Option<(String, &Voucher)> {
+    ) -> Vec<String> {
+        let mut matching_ids = Vec::new();
         for (local_id, (voucher, _)) in &self.voucher_store.vouchers {
-            for tx in voucher.transactions.iter().rev() {
+            // Wir müssen nur prüfen, ob die betrügerische Transaktion in der Kette ist.
+            for tx in &voucher.transactions {
                 let current_hash = get_hash(format!("{}{}", tx.prev_hash, tx.sender_id));
                 if current_hash == conflict_hash {
-                    return Some((local_id.clone(), voucher));
+                    matching_ids.push(local_id.clone());
+                    // Sobald ein Gutschein als betroffen identifiziert ist,
+                    // können wir die Prüfung seiner restlichen Transaktionen abbrechen.
+                    break;
                 }
             }
         }
-        None
+        matching_ids
     }
+
 
     /// Entfernt alle abgelaufenen Fingerprints aus dem Speicher.
     pub fn cleanup_expired_fingerprints(&mut self) {

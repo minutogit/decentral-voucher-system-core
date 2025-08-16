@@ -14,6 +14,7 @@ use crate::{
     },
     storage::StorageError,
 };
+use crate::models::profile::VoucherStatus;
 
 /// Der zentrale Fehlertyp für alle Operationen in der `voucher_core`-Bibliothek.
 ///
@@ -83,4 +84,16 @@ pub enum VoucherCoreError {
     /// Eine Funktion oder ein Codepfad ist noch nicht implementiert.
     #[error("Feature not implemented yet: {0}")]
     NotImplemented(String),
+
+    /// Der angeforderte Gutschein wurde im Wallet-Speicher nicht gefunden.
+    #[error("Voucher with local instance ID '{0}' not found in wallet.")]
+    VoucherNotFound(String),
+
+    /// Es wurde versucht, eine Aktion mit einem Gutschein durchzuführen, der nicht den Status 'Active' hat.
+    #[error("Action requires an active voucher, but its status is {0:?}.")]
+    VoucherNotActive(VoucherStatus),
+
+    /// Die proaktive, lokale Prüfung hat einen versuchten Double Spend verhindert.
+    #[error("Double spend attempt blocked: A transaction has already been issued from this voucher state.")]
+    DoubleSpendAttemptBlocked,
 }

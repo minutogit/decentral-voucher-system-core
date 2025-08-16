@@ -208,6 +208,64 @@ fn test_cleanup_expired_fingerprints() {
 }
 
 // ===================================================================================
+// PROACTIVE PREVENTION TEST
+// ===================================================================================
+
+#[test]
+fn test_proactive_double_spend_prevention_in_wallet() {
+    // ### Setup ###
+    // Erstellt einen Sender und zwei potenzielle Empfänger.
+    let temp_dir = tempfile::tempdir().unwrap();
+    let storage_path = temp_dir.path();
+    let standard = load_test_standard();
+
+    let (mut sender_wallet, sender_identity) = setup_actor("sender", storage_path);
+    let (_, recipient1_identity) = setup_actor("recipient1", storage_path);
+    let (_, recipient2_identity) = setup_actor("recipient2", storage_path);
+
+    // Sender erhält einen initialen Gutschein.
+    let voucher_data = new_test_voucher_data(sender_identity.user_id.clone());
+    let initial_voucher = voucher_manager::create_voucher(voucher_data, &standard, &sender_identity.signing_key).unwrap();
+    sender_wallet.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &sender_identity.user_id).unwrap();
+    let initial_local_id = sender_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
+
+    // ### Akt 1: Legitime Transaktion ###
+    // Sender sendet den Gutschein an Empfänger 1.
+    // Dies sollte erfolgreich sein und den Fingerprint der Transaktion im Wallet des Senders speichern.
+    let transfer1_result = sender_wallet.create_transfer(
+        &sender_identity,
+        &standard,
+        &initial_local_id,
+        &recipient1_identity.user_id,
+        "100",
+        None,
+    );
+    assert!(transfer1_result.is_ok(), "Die erste Transaktion sollte erfolgreich sein.");
+    assert_eq!(sender_wallet.fingerprint_store.own_fingerprints.len(), 1, "Ein Fingerprint sollte nach der ersten Transaktion existieren.");
+
+    // ### Akt 2: Manuelle Manipulation für den Betrugsversuch ###
+    // Wir simulieren, dass der Sender versucht, denselben Gutschein erneut auszugeben.
+    // Dafür setzen wir den Status des archivierten Gutscheins manuell zurück auf 'Active'.
+    // Dies ahmt einen Angreifer oder einen Wallet-Bug nach.
+    sender_wallet.voucher_store.vouchers.get_mut(&initial_local_id).unwrap().1 = VoucherStatus::Active;
+
+    // ### Akt 3: Der blockierte Double-Spend-Versuch ###
+    // Sender versucht, den "wiederhergestellten" Gutschein an Empfänger 2 zu senden.
+    // Dies MUSS fehlschlagen, weil `create_transfer` den existierenden Fingerprint erkennt.
+    let transfer2_result = sender_wallet.create_transfer(
+        &sender_identity,
+        &standard,
+        &initial_local_id, // Wichtig: Dieselbe lokale ID wird wiederverwendet
+        &recipient2_identity.user_id,
+        "100",
+        None,
+    );
+
+    assert!(transfer2_result.is_err(), "Die zweite Transaktion von demselben Zustand aus muss fehlschlagen.");
+    matches!(transfer2_result.err().unwrap(), voucher_lib::VoucherCoreError::DoubleSpendAttemptBlocked);
+}
+
+// ===================================================================================
 // INTEGRATIONSTEST
 // ===================================================================================
 
@@ -227,16 +285,17 @@ fn test_local_double_spend_detection_lifecycle() {
     let initial_voucher = voucher_manager::create_voucher(voucher_data, &standard, &alice_identity.signing_key).unwrap();
     alice_wallet.add_voucher_to_store(initial_voucher.clone(), VoucherStatus::Active, &alice_identity.user_id).unwrap();
 
-    let voucher_for_bob = voucher_manager::create_transaction(
-        &initial_voucher,
+    // Alice verwendet die neue, korrekte Methode, um den Gutschein an Bob zu senden.
+    // Wir klonen die ID, um den immutable borrow auf alice_wallet sofort zu beenden.
+    let alice_initial_local_id = alice_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
+    let bundle_to_bob = alice_wallet.create_transfer(
+        &alice_identity,
         &standard,
-        &alice_identity.user_id,
-        &alice_identity.signing_key,
+        &alice_initial_local_id,
         &bob_identity.user_id,
         "100",
+        None,
     ).unwrap();
-
-    let bundle_to_bob = alice_wallet.create_and_encrypt_transaction_bundle(&alice_identity, vec![voucher_for_bob], &bob_identity.user_id, None).unwrap();
     bob_wallet.process_encrypted_transaction_bundle(&bob_identity, &bundle_to_bob).unwrap();
 
     assert_eq!(alice_wallet.voucher_store.vouchers.len(), 1, "Alices Wallet muss den gesendeten Gutschein als 'Archived' behalten.");
@@ -251,12 +310,16 @@ fn test_local_double_spend_detection_lifecycle() {
     let (mut david_wallet, david_identity) = setup_actor("david", storage_path);
     let voucher_from_bob = get_voucher_from_wallet(&bob_wallet);
 
+    // Bob agiert böswillig. Er umgeht die Schutzmechanismen seines Wallets (create_transfer würde das blockieren)
+    // und erstellt manuell zwei widersprüchliche Transaktionen aus demselben Zustand.
     let voucher_for_charlie = voucher_manager::create_transaction(&voucher_from_bob, &standard, &bob_identity.user_id, &bob_identity.signing_key, &charlie_identity.user_id, "100").unwrap();
     let voucher_for_david = voucher_manager::create_transaction(&voucher_from_bob, &standard, &bob_identity.user_id, &bob_identity.signing_key, &david_identity.user_id, "100").unwrap();
 
+    // Er verpackt und sendet die erste betrügerische Version an Charlie.
     let bundle_to_charlie = bob_wallet.create_and_encrypt_transaction_bundle(&bob_identity, vec![voucher_for_charlie.clone()], &charlie_identity.user_id, None).unwrap();
     charlie_wallet.process_encrypted_transaction_bundle(&charlie_identity, &bundle_to_charlie).unwrap();
 
+    // Um den zweiten Betrug zu ermöglichen, setzt er den Zustand seines Wallets künstlich zurück.
     bob_wallet.add_voucher_to_store(voucher_from_bob, VoucherStatus::Active, &bob_identity.user_id).unwrap();
     let bundle_to_david = bob_wallet.create_and_encrypt_transaction_bundle(&bob_identity, vec![voucher_for_david.clone()], &david_identity.user_id, None).unwrap();
     david_wallet.process_encrypted_transaction_bundle(&david_identity, &bundle_to_david).unwrap();
@@ -267,11 +330,18 @@ fn test_local_double_spend_detection_lifecycle() {
     // ### Akt 3: Die Rückkehr (Teil 1) ###
     println!("--- Akt 3: Charlie sendet seine Version zurück an Alice ---");
 
-    let voucher_from_charlie_to_alice = voucher_manager::create_transaction(
-        &voucher_for_charlie, &standard, &charlie_identity.user_id, &charlie_identity.signing_key, &alice_identity.user_id, "100"
+    // Charlie handelt legitim und verwendet die korrekte `create_transfer` Methode.
+    // Wir klonen die ID, um den immutable borrow auf charlie_wallet sofort zu beenden.
+    let charlie_local_id = charlie_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
+    let bundle_to_alice_1 = charlie_wallet.create_transfer(
+        &charlie_identity,
+        &standard,
+        &charlie_local_id,
+        &alice_identity.user_id,
+        "100",
+        None
     ).unwrap();
-    let bundle_to_alice_1 = charlie_wallet.create_and_encrypt_transaction_bundle(&charlie_identity, vec![voucher_from_charlie_to_alice], &alice_identity.user_id, None).unwrap();
-
+    
     println!("\n[Debug Test] Alices Wallet VOR dem Empfang von Charlie:");
     for (id, (voucher, status)) in &alice_wallet.voucher_store.vouchers {
         println!("  -> Vorhanden: ID={}, Status={:?}, Tx-Anzahl={}", id, status, voucher.transactions.len());
@@ -285,29 +355,42 @@ fn test_local_double_spend_detection_lifecycle() {
     // ### Akt 4: Die Aufdeckung ###
     println!("--- Akt 4: David sendet seine widersprüchliche Version an Alice. Der Betrug wird aufgedeckt. ---");
 
-    let (active_local_id, _) = alice_wallet.voucher_store.vouchers.iter()
+    // Wir merken uns die ID der Instanz, die Alice von Charlie erhalten hat.
+    let (active_local_id_from_charlie, _) = alice_wallet.voucher_store.vouchers.iter()
         .find(|(_, (_, status))| *status == VoucherStatus::Active)
-        .expect("Alice sollte einen aktiven Gutschein haben.").clone();
-    let active_local_id_clone = active_local_id.clone();
+        .expect("Alice sollte einen aktiven Gutschein haben.");
+    let id_to_be_quarantined = active_local_id_from_charlie.clone();
 
-    let voucher_from_david_to_alice = voucher_manager::create_transaction(
-        &voucher_for_david, &standard, &david_identity.user_id, &david_identity.signing_key, &alice_identity.user_id, "100"
+    // David handelt ebenfalls legitim (aus seiner Sicht) und verwendet `create_transfer`.
+    // Wir klonen die ID, um den immutable borrow auf david_wallet sofort zu beenden.
+    let david_local_id = david_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
+    let bundle_to_alice_2 = david_wallet.create_transfer(
+        &david_identity,
+        &standard, &david_local_id,
+        &alice_identity.user_id,
+        "100", None
     ).unwrap();
-    let bundle_to_alice_2 = david_wallet.create_and_encrypt_transaction_bundle(&david_identity, vec![voucher_from_david_to_alice], &alice_identity.user_id, None).unwrap();
 
     let result2 = alice_wallet.process_encrypted_transaction_bundle(&alice_identity, &bundle_to_alice_2).unwrap();
 
     // Assertions
     assert_eq!(result2.check_result.verifiable_conflicts.len(), 1, "Ein verifizierbarer Konflikt MUSS erkannt worden sein.");
 
-    let (_final_voucher, final_status) = alice_wallet.voucher_store.vouchers.get(&active_local_id_clone).unwrap();
+    // Die Instanz, die den Konflikt ausgelöst hat (die von Charlie), muss unter Quarantäne stehen.
+    let (_final_voucher, final_status) = alice_wallet.voucher_store.vouchers.get(&id_to_be_quarantined).unwrap();
     assert_eq!(*final_status, VoucherStatus::Quarantined, "Der ursprünglich von Charlie erhaltene Gutschein MUSS jetzt unter Quarantäne stehen!");
 
     assert_eq!(alice_wallet.voucher_store.vouchers.len(), 3, "Alices Wallet sollte am Ende drei Instanzen des Gutscheins enthalten.");
 
-    let quarantined_voucher = alice_wallet.voucher_store.vouchers.get(&active_local_id_clone).unwrap().0.clone();
-    let transfer_attempt = alice_wallet.create_and_encrypt_transaction_bundle(&alice_identity, vec![quarantined_voucher], &bob_identity.user_id, None);
-    assert!(transfer_attempt.is_err(), "Die Verwendung eines unter Quarantäne stehenden Gutscheins muss fehlschlagen.");
+    // Der Versuch, den unter Quarantäne stehenden Gutschein auszugeben, muss fehlschlagen.
+    let transfer_attempt = alice_wallet.create_transfer(
+        &alice_identity,
+        &standard,
+        &id_to_be_quarantined,
+        &bob_identity.user_id,
+        "100", None
+    );
+    assert!(transfer_attempt.is_err(), "Die Verwendung eines unter Quarantäne stehenden Gutscheins via create_transfer muss fehlschlagen.");
 
     println!("Test erfolgreich: Double Spend wurde erkannt und der kompromittierte Gutschein gesperrt.");
 }
