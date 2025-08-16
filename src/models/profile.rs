@@ -122,6 +122,15 @@ pub struct VoucherStore {
     pub vouchers: HashMap<String, (Voucher, VoucherStatus)>,
 }
 
+/// Repräsentiert den persistenten Speicher für die Metadaten von Transaktionsbündeln.
+/// Diese Struktur wird separat vom `UserProfile` in einer eigenen verschlüsselten Datei gehalten.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct BundleMetadataStore {
+    /// Eine Historie aller gesendeten und empfangenen Transaktionsbündel,
+    /// indiziert nach der `bundle_id`.
+    pub history: HashMap<String, TransactionBundleHeader>,
+}
+
 /// Die Hauptstruktur, die den gesamten Zustand eines Nutzer-Wallets repräsentiert.
 /// Sie enthält die Identität, den Bestand an Gutscheinen und die Transaktionshistorie.
 /// Diese Struktur wird serialisiert und verschlüsselt auf der Festplatte gespeichert.
@@ -129,18 +138,12 @@ pub struct VoucherStore {
 pub struct UserProfile {
     /// Die öffentliche User-ID. Wird aus `identity` abgeleitet und hier für einfachen Zugriff dupliziert.
     pub user_id: String,
-    /// Eine Historie aller gesendeten und empfangenen Transaktionsbündel,
-    /// indiziert nach der `bundle_id`.
-    pub bundle_history: HashMap<String, TransactionBundleHeader>,
 }
 
 // Implementiere `Default` für UserProfile, um eine leere Instanz zu erzeugen, die dann gefüllt wird.
 // Die `identity` wird nach der Erstellung separat hinzugefügt.
 impl Default for UserProfile {
     fn default() -> Self {
-        Self {
-            user_id: String::new(),
-            bundle_history: HashMap::new(),
-        }
+        Self { user_id: String::new() }
     }
 }

@@ -12,7 +12,7 @@ use std::fs;
 use lazy_static::lazy_static;
 use std::path::Path;
 use voucher_lib::models::fingerprint::TransactionFingerprint;
-use voucher_lib::models::profile::{UserIdentity, VoucherStatus};
+use voucher_lib::models::profile::{BundleMetadataStore, UserIdentity, VoucherStatus};
 use voucher_lib::models::voucher::{Address, Collateral, Creator, NominalValue, Voucher};
 use voucher_lib::services::crypto_utils::{create_user_id, get_hash};
 use voucher_lib::services::utils::get_current_timestamp;
@@ -73,7 +73,12 @@ fn setup_test_wallet(identity: &UserIdentity, _name: &str, _storage_dir: &Path) 
     };
     // Das Wallet muss nicht gespeichert und neu geladen werden, ein In-Memory-Wallet reicht für die Tests.
     // Dies vermeidet das komplexe Cloning-Problem der UserIdentity.
-    Wallet { profile, voucher_store: Default::default(), fingerprint_store: Default::default() }
+    Wallet {
+        profile,
+        voucher_store: Default::default(),
+        bundle_meta_store: BundleMetadataStore::default(),
+        fingerprint_store: Default::default(),
+    }
 }
 
 /// Extrahiert den einzigen Gutschein aus dem Wallet eines Akteurs.

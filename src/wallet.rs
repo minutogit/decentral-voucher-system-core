@@ -7,9 +7,9 @@
 
 use crate::error::VoucherCoreError;
 use crate::models::fingerprint::{FingerprintStore, TransactionFingerprint};
-use crate::models::profile::{
-    TransactionBundle, TransactionBundleHeader, TransactionDirection, UserIdentity, UserProfile,
-    VoucherStatus, VoucherStore,
+use crate::models::profile::{ 
+    BundleMetadataStore, TransactionBundle, TransactionBundleHeader, TransactionDirection,
+    UserIdentity, UserProfile, VoucherStatus, VoucherStore,
 };
 use crate::models::secure_container::{PayloadType, SecureContainer};
 use crate::models::voucher::Voucher;
@@ -34,6 +34,8 @@ pub struct Wallet {
     pub profile: UserProfile,
     /// Der Bestand an Gutscheinen des Nutzers.
     pub voucher_store: VoucherStore,
+    /// Die Historie der Transaktions-Metadaten.
+    pub bundle_meta_store: BundleMetadataStore,
     /// Der Speicher für Transaktions-Fingerprints zur Double-Spending-Erkennung.
     pub fingerprint_store: FingerprintStore,
 }
@@ -55,18 +57,17 @@ impl Wallet {
             user_id: user_id.clone(),
         };
 
-        let profile = UserProfile {
-            user_id,
-            bundle_history: Default::default(),
-        };
+        let profile = UserProfile { user_id };
 
         let voucher_store = VoucherStore::default();
+        let bundle_meta_store = BundleMetadataStore::default();
         let fingerprint_store = FingerprintStore::default();
 
         let wallet = Wallet {
             profile,
             voucher_store,
-            fingerprint_store,
+            bundle_meta_store,
+            fingerprint_store, 
         };
 
         Ok((wallet, identity))
@@ -78,7 +79,8 @@ impl Wallet {
         auth: &AuthMethod,
         identity: UserIdentity,
     ) -> Result<Self, VoucherCoreError> {
-        let (profile, voucher_store) = storage.load(auth)?;
+        let (profile, voucher_store) = storage.load_wallet(auth)?;
+        let bundle_meta_store = storage.load_bundle_metadata(&identity.user_id, auth)?;
         let fingerprint_store = storage.load_fingerprints(&identity.user_id, auth)?;
 
         if profile.user_id != identity.user_id {
@@ -87,7 +89,8 @@ impl Wallet {
 
         Ok(Wallet {
             profile,
-            voucher_store,
+            voucher_store, 
+            bundle_meta_store,
             fingerprint_store,
         })
     }
@@ -99,7 +102,12 @@ impl Wallet {
         identity: &UserIdentity,
         password: &str,
     ) -> Result<(), StorageError> {
-        storage.save(&self.profile, &self.voucher_store, identity, password)?;
+        storage.save_wallet(&self.profile, &self.voucher_store, identity, password)?;
+        storage.save_bundle_metadata(
+            &identity.user_id,
+            password,
+            &self.bundle_meta_store,
+        )?;
         storage.save_fingerprints(
             &identity.user_id,
             password,
@@ -161,8 +169,8 @@ impl Wallet {
         let container_bytes = serde_json::to_vec(&secure_container)?;
 
         let header = bundle.to_header(TransactionDirection::Sent);
-        self.profile
-            .bundle_history
+        self.bundle_meta_store
+            .history
             .insert(header.bundle_id.clone(), header);
 
         for voucher in vouchers {
@@ -199,8 +207,8 @@ impl Wallet {
         }
 
         let header = bundle.to_header(TransactionDirection::Received);
-        self.profile
-            .bundle_history
+        self.bundle_meta_store
+            .history
             .insert(header.bundle_id.clone(), header.clone());
 
         self.scan_and_update_own_fingerprints()?;
@@ -378,8 +386,8 @@ impl Wallet {
         let container_bytes = serde_json::to_vec(&secure_container)?;
 
         let header = bundle.to_header(TransactionDirection::Sent);
-        self.profile
-            .bundle_history
+        self.bundle_meta_store
+            .history
             .insert(header.bundle_id.clone(), header);
 
         // Nach dem Erstellen des signierten Bündels den Fingerprint der soeben erstellten

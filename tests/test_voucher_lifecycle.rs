@@ -41,7 +41,9 @@ use voucher_lib::services::{
 };
 use voucher_lib::crypto_utils::get_hash;
 use voucher_lib::models::fingerprint::FingerprintStore;
-use voucher_lib::models::profile::{UserIdentity, UserProfile, VoucherStatus, VoucherStore};
+use voucher_lib::models::profile::{
+    BundleMetadataStore, UserIdentity, UserProfile, VoucherStatus, VoucherStore,
+};
 use ed25519_dalek::SigningKey;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -820,8 +822,9 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
         user_id: alice_user_id.clone(),
     };
     let mut alice_wallet = Wallet {
-        profile: UserProfile { user_id: alice_user_id, bundle_history: Default::default() },
+        profile: UserProfile { user_id: alice_user_id },
         voucher_store: VoucherStore::default(),
+        bundle_meta_store: BundleMetadataStore::default(),
         fingerprint_store: FingerprintStore::default(),
     };
 
@@ -830,8 +833,9 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     let bob_user_id = crypto_utils::create_user_id(&bob_pub, Some("bo")).unwrap();
     let bob_identity = UserIdentity { signing_key: bob_key, public_key: bob_pub, user_id: bob_user_id.clone() };
     let mut bob_wallet = Wallet {
-        profile: UserProfile { user_id: bob_user_id, bundle_history: Default::default() },
+        profile: UserProfile { user_id: bob_user_id },
         voucher_store: VoucherStore::default(),
+        bundle_meta_store: BundleMetadataStore::default(),
         fingerprint_store: FingerprintStore::default(),
     };
 
@@ -883,7 +887,11 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     // Der Gutschein wird nicht entfernt, sondern archiviert. Wir prüfen den Status.
     let (_, status) = alice_wallet.voucher_store.vouchers.get(&local_id).expect("Voucher should still be in wallet");
     assert_eq!(*status, VoucherStatus::Archived, "Voucher status should be Archived after sending.");
-    assert_eq!(alice_wallet.profile.bundle_history.len(), 1, "Alice's bundle history should contain one entry.");
+    assert_eq!(
+        alice_wallet.bundle_meta_store.history.len(),
+        1,
+        "Alice's bundle history should contain one entry."
+    );
 
     // --- 4. RECEIPT AND PROCESSING by Bob ---
     bob_wallet
@@ -892,7 +900,11 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
 
     // --- 5. VERIFICATION ---
     assert_eq!(bob_wallet.voucher_store.vouchers.len(), 1, "Bob's wallet should now have one voucher.");
-    assert_eq!(bob_wallet.profile.bundle_history.len(), 1, "Bob's bundle history should contain one entry.");
+    assert_eq!(
+        bob_wallet.bundle_meta_store.history.len(),
+        1,
+        "Bob's bundle history should contain one entry."
+    );
 
     // Berechne die lokale ID für Bobs Instanz des Gutscheins.
     let (received_voucher, _) = bob_wallet.voucher_store.vouchers.values().next().unwrap();

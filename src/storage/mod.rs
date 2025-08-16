@@ -3,7 +3,7 @@
 //! Definiert die Abstraktion für die persistente Speicherung von Wallet-Daten.
 //! Dies ermöglicht es, die Kernlogik von der konkreten Speichermethode zu entkoppeln.
 
-use crate::models::profile::{UserIdentity, UserProfile, VoucherStore};
+use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
 use crate::models::fingerprint::FingerprintStore;
 pub mod file_storage;
 use thiserror::Error;
@@ -48,12 +48,12 @@ impl<'a> AuthMethod<'a> {
 /// Die Schnittstelle für persistente Speicherung.
 /// Jede Methode ist eine atomare Operation für ein komplettes Wallet.
 pub trait Storage {
-    /// Lädt und entschlüsselt das Profil und den VoucherStore.
-    fn load(&self, auth: &AuthMethod) -> Result<(UserProfile, VoucherStore), StorageError>;
+    /// Lädt und entschlüsselt das Kern-Wallet (Profil und VoucherStore).
+    fn load_wallet(&self, auth: &AuthMethod) -> Result<(UserProfile, VoucherStore), StorageError>;
 
-    /// Speichert und verschlüsselt das Profil und den VoucherStore.
+    /// Speichert und verschlüsselt das Kern-Wallet (Profil und VoucherStore).
     /// Muss auch die `UserIdentity` erhalten, um beim ersten Speichern den Wiederherstellungs-Schlüssel zu erstellen.
-    fn save(
+    fn save_wallet(
         &mut self,
         profile: &UserProfile,
         store: &VoucherStore,
@@ -80,5 +80,20 @@ pub trait Storage {
         user_id: &str,
         password: &str,
         fingerprint_store: &FingerprintStore,
+    ) -> Result<(), StorageError>;
+
+    /// Lädt und entschlüsselt die Metadaten der Transaktionsbündel.
+    fn load_bundle_metadata(
+        &self,
+        user_id: &str,
+        auth: &AuthMethod,
+    ) -> Result<BundleMetadataStore, StorageError>;
+
+    /// Speichert und verschlüsselt die Metadaten der Transaktionsbündel.
+    fn save_bundle_metadata(
+        &mut self,
+        user_id: &str,
+        password: &str,
+        metadata: &BundleMetadataStore,
     ) -> Result<(), StorageError>;
 }

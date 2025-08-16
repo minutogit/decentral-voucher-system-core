@@ -6,7 +6,9 @@
 use rust_decimal::Decimal;
 use voucher_lib::error::VoucherCoreError;
 use voucher_lib::models::fingerprint::FingerprintStore;
-use voucher_lib::models::profile::{UserIdentity, UserProfile, VoucherStatus, VoucherStore};
+use voucher_lib::models::profile::{ 
+    BundleMetadataStore, UserIdentity, UserProfile, VoucherStatus, VoucherStore,
+};
 use voucher_lib::models::voucher::{Collateral, Creator, NominalValue, Transaction, Voucher};
 use voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition;
 use voucher_lib::services::{crypto_utils, voucher_manager};
@@ -27,11 +29,9 @@ fn create_new_wallet_and_identity(prefix: &str, seed: &str) -> (Wallet, UserIden
         user_id: user_id.clone(),
     };
     let wallet = Wallet {
-        profile: UserProfile {
-            user_id,
-            bundle_history: Default::default(),
-        },
+        profile: UserProfile { user_id },
         voucher_store: VoucherStore::default(),
+        bundle_meta_store: BundleMetadataStore::default(),
         fingerprint_store: FingerprintStore::default(),
     };
     (wallet, identity)
@@ -289,4 +289,74 @@ fn calculate_local_instance_id(voucher: &Voucher, profile_owner_id: &str) -> Str
     let t_id = defining_transaction_id.expect("Voucher must be owned by the user.");
     let combined_string = format!("{}{}{}", voucher.voucher_id, t_id, profile_owner_id);
     get_hash(combined_string)
+}
+
+#[test]
+fn test_save_and_load_with_bundle_history() {
+    // 1. Setup
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let mut storage = FileStorage::new(temp_dir.path());
+    let password = "strongpassword123";
+    let standard = load_test_standard();
+
+    // Erstelle Sender (Alice) und Empfänger (Bob)
+    let (mut alice_wallet, alice_identity) =
+        create_new_wallet_and_identity("al", "bundle_hist_seed_alice");
+    let (_, bob_identity) = create_new_wallet_and_identity("bo", "bundle_hist_seed_bob");
+
+    // Alice erstellt einen Gutschein und fügt ihn ihrem Wallet hinzu
+    let voucher = create_test_voucher(&alice_identity, &standard);
+    let local_id = Wallet::calculate_local_instance_id(&voucher, &alice_identity.user_id).unwrap();
+    add_voucher_to_wallet(&mut alice_wallet, voucher, &alice_identity.user_id);
+
+    // 2. Aktion: Führe eine Transaktion durch, um Bundle-Metadaten zu erzeugen.
+    alice_wallet
+        .create_transfer(
+            &alice_identity,
+            &standard,
+            &local_id,
+            &bob_identity.user_id,
+            "100", // Sende den vollen Betrag
+            Some("Test transfer".to_string()),
+        )
+        .expect("Transfer failed");
+
+    // Überprüfe den Zustand vor dem Speichern
+    assert_eq!(alice_wallet.bundle_meta_store.history.len(), 1);
+    let original_bundle_id = alice_wallet
+        .bundle_meta_store
+        .history
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+
+    // 3. Speichern
+    alice_wallet
+        .save(&mut storage, &alice_identity, password)
+        .expect("Failed to save wallet with history");
+
+    // Überprüfe, ob die neue Metadaten-Datei erstellt wurde
+    assert!(temp_dir.path().join("bundles.meta.enc").exists());
+
+    // 4. Laden und Verifizieren
+    let (_, identity_for_load) = create_new_wallet_and_identity("al", "bundle_hist_seed_alice");
+    let loaded_wallet =
+        Wallet::load(&storage, &AuthMethod::Password(password), identity_for_load)
+            .expect("Failed to load wallet");
+
+    // **Die entscheidende Prüfung:** Wurde die Historie korrekt geladen?
+    assert_eq!(
+        loaded_wallet.bundle_meta_store.history.len(),
+        1,
+        "Bundle history should have been loaded from bundles.meta.enc"
+    );
+    assert!(loaded_wallet
+        .bundle_meta_store
+        .history
+        .contains_key(&original_bundle_id));
+    assert_eq!(
+        loaded_wallet.profile.user_id,
+        alice_wallet.profile.user_id
+    );
 }

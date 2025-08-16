@@ -4,7 +4,7 @@
 //! Dateien (`profile.enc`, `vouchers.enc`) im Dateisystem speichert.
 
 use super::{AuthMethod, Storage, StorageError};
-use crate::models::profile::{UserIdentity, UserProfile, VoucherStore};
+use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
 use crate::models::fingerprint::FingerprintStore;
 use crate::services::crypto_utils; 
 use argon2::Argon2;
@@ -18,6 +18,7 @@ const SALT_SIZE: usize = 16;
 const KEY_SIZE: usize = 32;
 const PROFILE_FILE_NAME: &str = "profile.enc";
 const VOUCHER_STORE_FILE_NAME: &str = "vouchers.enc";
+const BUNDLE_META_FILE_NAME: &str = "bundles.meta.enc";
 const FINGERPRINT_STORE_FILE_NAME: &str = "fingerprints.enc";
 
 /// Container für das verschlüsselte Nutzerprofil, inklusive Key-Wrapping-Informationen.
@@ -33,6 +34,12 @@ struct ProfileStorageContainer {
 /// Container für den verschlüsselten Gutschein-Store.
 #[derive(Serialize, Deserialize)]
 struct VoucherStorageContainer {
+    encrypted_store_payload: Vec<u8>,
+}
+
+/// Container für die verschlüsselten Bundle-Metadaten.
+#[derive(Serialize, Deserialize)]
+struct BundleMetadataContainer {
     encrypted_store_payload: Vec<u8>,
 }
 
@@ -64,7 +71,7 @@ impl Storage for FileStorage {
         self.wallet_directory.join(PROFILE_FILE_NAME).exists()
     }
 
-    fn load(&self, auth: &AuthMethod) -> Result<(UserProfile, VoucherStore), StorageError> {
+    fn load_wallet(&self, auth: &AuthMethod) -> Result<(UserProfile, VoucherStore), StorageError> {
         let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
         let store_path = self.wallet_directory.join(VOUCHER_STORE_FILE_NAME);
 
@@ -106,7 +113,7 @@ impl Storage for FileStorage {
         Ok((profile, store))
     }
 
-    fn save(
+    fn save_wallet(
         &mut self,
         profile: &UserProfile,
         store: &VoucherStore,
@@ -303,6 +310,88 @@ impl Storage for FileStorage {
         let store_tmp_path = self.wallet_directory.join(format!("{}.tmp", FINGERPRINT_STORE_FILE_NAME));
         fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
         fs::rename(&store_tmp_path, &fingerprint_path)?;
+
+        Ok(())
+    }
+
+    fn load_bundle_metadata(
+        &self,
+        _user_id: &str,
+        auth: &AuthMethod,
+    ) -> Result<BundleMetadataStore, StorageError> {
+        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
+        let meta_path = self.wallet_directory.join(BUNDLE_META_FILE_NAME);
+
+        if !profile_path.exists() {
+            return Err(StorageError::NotFound);
+        }
+
+        if !meta_path.exists() {
+            return Ok(BundleMetadataStore::default());
+        }
+
+        let profile_container_bytes = fs::read(&profile_path)?;
+        let profile_container: ProfileStorageContainer =
+            serde_json::from_slice(&profile_container_bytes)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+
+        let file_key_bytes = get_file_key(auth, &profile_container)?;
+        let file_key: [u8; KEY_SIZE] = file_key_bytes
+            .try_into()
+            .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
+
+        let meta_container_bytes = fs::read(meta_path)?;
+        let meta_container: BundleMetadataContainer =
+            serde_json::from_slice(&meta_container_bytes)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+        
+        let store_bytes = crypto_utils::decrypt_data(&file_key, &meta_container.encrypted_store_payload)
+            .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt bundle metadata: {}", e)))?;
+        
+        let store: BundleMetadataStore = serde_json::from_slice(&store_bytes)
+            .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+
+        Ok(store)
+    }
+
+    fn save_bundle_metadata(
+        &mut self,
+        _user_id: &str,
+        password: &str,
+        metadata: &BundleMetadataStore,
+    ) -> Result<(), StorageError> {
+        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
+        let meta_path = self.wallet_directory.join(BUNDLE_META_FILE_NAME);
+
+        if !profile_path.exists() {
+            return Err(StorageError::NotFound);
+        }
+
+        let profile_container_bytes = fs::read(profile_path)?;
+        let profile_container: ProfileStorageContainer =
+            serde_json::from_slice(&profile_container_bytes)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+
+        let password_key =
+            derive_key_from_password(password, &profile_container.password_kdf_salt)?;
+        let file_key_bytes = crypto_utils::decrypt_data(
+            &password_key,
+            &profile_container.password_wrapped_key_with_nonce,
+        ).map_err(|_| StorageError::AuthenticationFailed)?;
+        
+        let file_key: [u8; KEY_SIZE] = file_key_bytes
+            .try_into()
+            .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
+
+        let store_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(metadata).unwrap())
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+        let store_container = BundleMetadataContainer {
+            encrypted_store_payload: store_payload,
+        };
+
+        let store_tmp_path = self.wallet_directory.join(format!("{}.tmp", BUNDLE_META_FILE_NAME));
+        fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
+        fs::rename(&store_tmp_path, &meta_path)?;
 
         Ok(())
     }
