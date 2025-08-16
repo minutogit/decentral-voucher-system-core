@@ -7,6 +7,7 @@
 // Deklariert die Hauptmodule der Bibliothek und macht sie öffentlich.
 pub mod models;
 pub mod error;
+pub mod archive;
 pub mod storage;
 pub mod wallet;
 pub mod services;
@@ -29,6 +30,10 @@ pub use error::VoucherCoreError;
 pub use wallet::Wallet;
 pub use storage::{Storage, AuthMethod, StorageError};
 pub use storage::file_storage::FileStorage;
+
+// Archive
+pub use archive::{ArchiveError, VoucherArchive};
+pub use archive::file_archive::FileVoucherArchive;
 
 // Services
 pub use services::crypto_utils;

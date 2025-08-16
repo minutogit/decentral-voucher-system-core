@@ -9,6 +9,7 @@
 //!     bei dem ein Betrug begangen und vom System korrekt erkannt und behandelt wird.
 
 use std::fs;
+use voucher_lib::archive::file_archive::FileVoucherArchive;
 use lazy_static::lazy_static;
 use std::path::Path;
 use voucher_lib::models::fingerprint::TransactionFingerprint;
@@ -268,6 +269,7 @@ fn test_proactive_double_spend_prevention_in_wallet() {
         &recipient1_identity.user_id,
         "100",
         None,
+        None::<&FileVoucherArchive>,
     );
     assert!(transfer1_result.is_ok(), "Die erste Transaktion sollte erfolgreich sein.");
     assert_eq!(sender_wallet.fingerprint_store.own_fingerprints.len(), 1, "Ein Fingerprint sollte nach der ersten Transaktion existieren.");
@@ -288,6 +290,7 @@ fn test_proactive_double_spend_prevention_in_wallet() {
         &recipient2_identity.user_id,
         "100",
         None,
+        None::<&FileVoucherArchive>,
     );
 
     assert!(transfer2_result.is_err(), "Die zweite Transaktion von demselben Zustand aus muss fehlschlagen.");
@@ -319,15 +322,16 @@ fn test_local_double_spend_detection_lifecycle() {
     // Alice verwendet die neue, korrekte Methode, um den Gutschein an Bob zu senden.
     // Wir klonen die ID, um den immutable borrow auf alice_wallet sofort zu beenden.
     let alice_initial_local_id = alice_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
-    let bundle_to_bob = alice_wallet.create_transfer(
+    let (bundle_to_bob, _) = alice_wallet.create_transfer(
         alice_identity,
         &standard,
         &alice_initial_local_id,
         &bob_identity.user_id,
         "100",
         None,
+        None::<&FileVoucherArchive>,
     ).unwrap();
-    bob_wallet.process_encrypted_transaction_bundle(bob_identity, &bundle_to_bob).unwrap();
+    bob_wallet.process_encrypted_transaction_bundle(bob_identity, &bundle_to_bob, None::<&FileVoucherArchive>).unwrap();
 
     assert_eq!(alice_wallet.voucher_store.vouchers.len(), 1, "Alices Wallet muss den gesendeten Gutschein als 'Archived' behalten.");
     let (_, status) = alice_wallet.voucher_store.vouchers.values().next().unwrap();
@@ -350,12 +354,12 @@ fn test_local_double_spend_detection_lifecycle() {
 
     // Er verpackt und sendet die erste betrügerische Version an Charlie. Hierfür nutzt er die alte Methode.
     let bundle_to_charlie = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_charlie.clone()], &charlie_identity.user_id, None).unwrap();
-    charlie_wallet.process_encrypted_transaction_bundle(charlie_identity, &bundle_to_charlie).unwrap();
+    charlie_wallet.process_encrypted_transaction_bundle(charlie_identity, &bundle_to_charlie, None::<&FileVoucherArchive>).unwrap();
     
     // Um den zweiten Betrug zu ermöglichen, setzt er den Zustand seines Wallets künstlich zurück.
     bob_wallet.add_voucher_to_store(voucher_from_bob, VoucherStatus::Active, &bob_identity.user_id).unwrap();
     let bundle_to_david = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_david.clone()], &david_identity.user_id, None).unwrap();
-    david_wallet.process_encrypted_transaction_bundle(david_identity, &bundle_to_david).unwrap();
+    david_wallet.process_encrypted_transaction_bundle(david_identity, &bundle_to_david, None::<&FileVoucherArchive>).unwrap();
 
     assert_eq!(charlie_wallet.voucher_store.vouchers.len(), 1);
     assert_eq!(david_wallet.voucher_store.vouchers.len(), 1);
@@ -366,13 +370,14 @@ fn test_local_double_spend_detection_lifecycle() {
     // Charlie handelt legitim und verwendet die korrekte `create_transfer` Methode.
     // Wir klonen die ID, um den immutable borrow auf charlie_wallet sofort zu beenden.
     let charlie_local_id = charlie_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
-    let bundle_to_alice_1 = charlie_wallet.create_transfer(
+    let (bundle_to_alice_1, _) = charlie_wallet.create_transfer(
         charlie_identity,
         &standard,
         &charlie_local_id,
         &alice_identity.user_id,
         "100",
-        None
+        None,
+        None::<&FileVoucherArchive>
     ).unwrap();
     
     println!("\n[Debug Test] Alices Wallet VOR dem Empfang von Charlie:");
@@ -381,7 +386,9 @@ fn test_local_double_spend_detection_lifecycle() {
     }
     println!("[Debug Test] Verarbeite jetzt Bündel von Charlie...");
 
-    let result1 = alice_wallet.process_encrypted_transaction_bundle(alice_identity, &bundle_to_alice_1).unwrap();
+    let result1 = alice_wallet
+        .process_encrypted_transaction_bundle(alice_identity, &bundle_to_alice_1, None::<&FileVoucherArchive>)
+        .unwrap();
     assert_eq!(alice_wallet.voucher_store.vouchers.len(), 2, "Alice muss jetzt einen 'Archived' und einen 'Active' Gutschein haben.");
     assert!(result1.check_result.verifiable_conflicts.is_empty(), "Nach dem ersten zurückerhaltenen Gutschein darf es noch keinen Konflikt geben.");
 
@@ -397,15 +404,19 @@ fn test_local_double_spend_detection_lifecycle() {
     // David handelt ebenfalls legitim (aus seiner Sicht) und verwendet `create_transfer`.
     // Wir klonen die ID, um den immutable borrow auf david_wallet sofort zu beenden.
     let david_local_id = david_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
-    let bundle_to_alice_2 = david_wallet.create_transfer(
+    let (bundle_to_alice_2, _) = david_wallet.create_transfer(
         david_identity,
         &standard,
         &david_local_id,
         &alice_identity.user_id,
-        "100", None
+        "100",
+        None,
+        None::<&FileVoucherArchive>
     ).unwrap();
 
-    let result2 = alice_wallet.process_encrypted_transaction_bundle(alice_identity, &bundle_to_alice_2).unwrap();
+    let result2 = alice_wallet
+        .process_encrypted_transaction_bundle(alice_identity, &bundle_to_alice_2, None::<&FileVoucherArchive>)
+        .unwrap();
 
     // Assertions
     assert_eq!(result2.check_result.verifiable_conflicts.len(), 1, "Ein verifizierbarer Konflikt MUSS erkannt worden sein.");
@@ -422,7 +433,8 @@ fn test_local_double_spend_detection_lifecycle() {
         &standard,
         &id_to_be_quarantined,
         &bob_identity.user_id,
-        "100", None
+        "100", None, // notes
+        None::<&FileVoucherArchive> // archive
     );
     assert!(transfer_attempt.is_err(), "Die Verwendung eines unter Quarantäne stehenden Gutscheins via create_transfer muss fehlschlagen.");
 

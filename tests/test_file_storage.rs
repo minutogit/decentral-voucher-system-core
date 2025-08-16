@@ -3,6 +3,7 @@
 //! Enthält Integrationstests für das refaktorierte Profil- und VoucherStore-Management,
 //! inklusive der Passwort-Wiederherstellungslogik und Randbedingungen.
 
+use voucher_lib::archive::file_archive::FileVoucherArchive;
 use rust_decimal::Decimal;
 use voucher_lib::error::VoucherCoreError;
 use voucher_lib::models::fingerprint::FingerprintStore;
@@ -310,7 +311,7 @@ fn test_save_and_load_with_bundle_history() {
     add_voucher_to_wallet(&mut alice_wallet, voucher, &alice_identity.user_id);
 
     // 2. Aktion: Führe eine Transaktion durch, um Bundle-Metadaten zu erzeugen.
-    alice_wallet
+    let _ = alice_wallet
         .create_transfer(
             &alice_identity,
             &standard,
@@ -318,6 +319,7 @@ fn test_save_and_load_with_bundle_history() {
             &bob_identity.user_id,
             "100", // Sende den vollen Betrag
             Some("Test transfer".to_string()),
+            None::<&FileVoucherArchive>,
         )
         .expect("Transfer failed");
 

@@ -5,6 +5,7 @@
 //! und orchestriert die Interaktionen mit einem `Storage`-Backend und den
 //! kryptographischen Operationen der `UserIdentity`.
 
+use crate::archive::VoucherArchive;
 use crate::error::VoucherCoreError;
 use crate::models::fingerprint::{FingerprintStore, TransactionFingerprint};
 use crate::models::profile::{ 
@@ -190,6 +191,7 @@ impl Wallet {
         &mut self,
         identity: &UserIdentity,
         container_bytes: &[u8],
+        _archive: Option<&impl VoucherArchive>,
     ) -> Result<ProcessBundleResult, VoucherCoreError> {
         let container: SecureContainer = serde_json::from_slice(container_bytes)?;
         let (decrypted_bundle_bytes, payload_type) = open_secure_container(&container, identity)?;
@@ -310,7 +312,8 @@ impl Wallet {
         recipient_id: &str,
         amount_to_send: &str,
         notes: Option<String>,
-    ) -> Result<Vec<u8>, VoucherCoreError> {
+        archive: Option<&impl VoucherArchive>,
+    ) -> Result<(Vec<u8>, Voucher), VoucherCoreError> {
         // 1. Gutschein-Instanz klonen, um Borrowing-Konflikte zu vermeiden, und Status prüfen.
         let (voucher_to_spend, status) = self
             .voucher_store
@@ -347,6 +350,15 @@ impl Wallet {
         // Die alte Instanz wird archiviert.
         self.voucher_store.vouchers.get_mut(local_instance_id).unwrap().1 = VoucherStatus::Archived;
 
+        // NEU: Versuche, den nun (potenziell) vollständig ausgegebenen Gutschein zu archivieren.
+        if let Some(archive_backend) = archive {
+            archive_backend.archive_voucher(
+                &new_voucher_state,
+                &identity.user_id,
+                standard_definition,
+            )?;
+        }
+
         // Wenn es ein Split war, wird eine neue, aktive Instanz für den Restbetrag des Senders erstellt.
         if let Some(last_tx) = new_voucher_state.transactions.last() {
             if last_tx.sender_id == identity.user_id && last_tx.sender_remaining_amount.is_some() {
@@ -357,13 +369,14 @@ impl Wallet {
 
         // 3. Erstelle das `TransactionBundle` und den `SecureContainer`.
         // Diese Logik wird von `create_and_encrypt_transaction_bundle` hierher verschoben,
-        // um die Zustandsverwaltung an einem Ort zu zentralisieren.
-        let vouchers_for_bundle = vec![new_voucher_state];
+        // um die Zustandsverwaltung an einem Ort zu zentralisieren. Wir klonen hier, damit wir den
+        // new_voucher_state am Ende zurückgeben können.
+        let vouchers_for_bundle = vec![new_voucher_state.clone()];
         let mut bundle = TransactionBundle {
             bundle_id: "".to_string(),
             sender_id: identity.user_id.clone(),
             recipient_id: recipient_id.to_string(),
-            vouchers: vouchers_for_bundle.clone(),
+            vouchers: vouchers_for_bundle,
             timestamp: get_current_timestamp(),
             notes,
             sender_signature: "".to_string(),
@@ -392,13 +405,13 @@ impl Wallet {
 
         // Nach dem Erstellen des signierten Bündels den Fingerprint der soeben erstellten
         // Transaktion zum eigenen Store hinzufügen. Dies ist die proaktive Schutzmaßnahme.
-        let created_tx = vouchers_for_bundle[0].transactions.last().unwrap();
+        let created_tx = bundle.vouchers[0].transactions.last().unwrap();
         let fingerprint = TransactionFingerprint {
             prvhash_senderid_hash: fingerprint_hash.clone(),
             t_id: created_tx.t_id.clone(),
             t_time: created_tx.t_time.clone(),
             sender_signature: created_tx.sender_signature.clone(),
-            valid_until: vouchers_for_bundle[0].valid_until.clone(),
+            valid_until: bundle.vouchers[0].valid_until.clone(),
         };
 
         self.fingerprint_store
@@ -407,7 +420,7 @@ impl Wallet {
             .or_default()
             .push(fingerprint);
 
-        Ok(container_bytes)
+        Ok((container_bytes, new_voucher_state))
     }
 
     /// Führt Wartungsarbeiten am Wallet-Speicher durch, um veraltete Daten zu entfernen.

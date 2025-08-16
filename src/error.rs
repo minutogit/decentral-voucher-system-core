@@ -40,6 +40,10 @@ pub enum VoucherCoreError {
     #[error("Secure Container Error: {0}")]
     Container(#[from] ContainerManagerError),
 
+    /// Ein Fehler, der während einer Archiv-Operation aufgetreten ist.
+    #[error("Archive error: {0}")]
+    Archive(#[from] crate::archive::ArchiveError),
+
     /// Ein Fehler bei der Verarbeitung von JSON (Serialisierung oder Deserialisierung).
     #[error("JSON Processing Error: {0}")]
     Json(#[from] serde_json::Error),

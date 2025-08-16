@@ -39,6 +39,7 @@ use voucher_lib::{
 use voucher_lib::services::{
     voucher_manager::VoucherManagerError, voucher_validation::ValidationError,
 };
+use voucher_lib::archive::file_archive::FileVoucherArchive;
 use voucher_lib::crypto_utils::get_hash;
 use voucher_lib::models::fingerprint::FingerprintStore;
 use voucher_lib::models::profile::{
@@ -895,7 +896,7 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
 
     // --- 4. RECEIPT AND PROCESSING by Bob ---
     bob_wallet
-        .process_encrypted_transaction_bundle(&bob_identity, &encrypted_bundle_for_bob)
+        .process_encrypted_transaction_bundle(&bob_identity, &encrypted_bundle_for_bob, None::<&FileVoucherArchive>)
         .unwrap();
 
     // --- 5. VERIFICATION ---
