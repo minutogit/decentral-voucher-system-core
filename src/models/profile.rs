@@ -33,9 +33,16 @@ pub enum TransactionDirection {
     Received,
 }
 
+impl Default for TransactionDirection {
+    fn default() -> Self {
+        TransactionDirection::Sent
+    }
+}
+
+
 /// Eine leichtgewichtige Zusammenfassung eines `TransactionBundle` für die Anzeige in einer Historie.
 /// Enthält alle Metadaten, aber anstelle der vollständigen Gutscheine nur deren IDs.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct TransactionBundleHeader {
     /// Die eindeutige ID des zugehörigen Bündels.
     pub bundle_id: String,
@@ -57,7 +64,7 @@ pub struct TransactionBundleHeader {
 
 /// Repräsentiert ein vollständiges, signiertes Bündel für einen Austausch von Gutscheinen.
 /// Dies ist die atomare Einheit, die zwischen Nutzern ausgetauscht wird.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct TransactionBundle {
     /// Eine eindeutige ID für dieses Bündel, generiert aus dem Hash seines Inhalts (ohne Signatur).
     pub bundle_id: String,

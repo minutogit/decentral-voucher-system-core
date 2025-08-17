@@ -6,7 +6,7 @@
 use serde::{Serialize, Deserialize};
 
 /// Metadaten, die den Standard selbst beschreiben.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct StandardMetadata {
     pub name: String,
     pub uuid: String,
@@ -14,13 +14,13 @@ pub struct StandardMetadata {
 }
 
 /// Vorlage für den Nennwert (nur die Einheit wird vom Standard vorgegeben).
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct TemplateNominalValue {
     pub unit: String,
 }
 
 /// Vorlage für die Besicherung.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct TemplateCollateral {
     #[serde(rename = "type")]
     pub type_: String,
@@ -29,14 +29,14 @@ pub struct TemplateCollateral {
 }
 
 /// Vorlage für die Bürgen-Informationen, die in den Gutschein kopiert werden.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct TemplateGuarantorInfo {
     pub needed_count: i64,
     pub description: String,
 }
 
 /// Enthält alle Werte, die vom Standard zwingend und unveränderlich vorgegeben werden.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct TemplateFixed {
     pub description: Option<String>,
     /// Ein optionaler Fußnotentext, der vom Standard vorgegeben wird.
@@ -62,7 +62,7 @@ pub struct TemplateDefault {
 
 /// Eine Vorlage für Felder, die in einen neuen Gutschein kopiert werden,
 /// aufgeteilt in feste und überschreibbare Standardwerte.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct VoucherTemplate {
     pub fixed: TemplateFixed,
     #[serde(default)]
@@ -70,7 +70,7 @@ pub struct VoucherTemplate {
 }
 
 /// Regeln, die zur Validierung eines Gutscheins herangezogen werden.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct ValidationRules {
     /// Mindestgültigkeitsdauer, die ein Gutschein bei der Erstellung haben muss (z.B. P90D).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,7 +84,7 @@ pub struct ValidationRules {
 }
 
 /// Spezifische Validierungsregeln für die Bürgen.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct ValidationGuarantorRules {
     pub gender_specific: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -92,7 +92,7 @@ pub struct ValidationGuarantorRules {
 }
 
 /// Das neue Haupt-Struct, das die gesamte Standard-Definition kapselt.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct VoucherStandardDefinition {
     pub metadata: StandardMetadata,
     pub template: VoucherTemplate,

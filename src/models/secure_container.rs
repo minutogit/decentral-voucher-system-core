@@ -23,6 +23,13 @@ pub enum PayloadType {
     Generic(String),
 }
 
+impl Default for PayloadType {
+    /// Der Standard-Payload ist ein `TransactionBundle`, da dies der häufigste Anwendungsfall ist.
+    fn default() -> Self {
+        PayloadType::TransactionBundle
+    }
+}
+
 /// Repräsentiert einen sicheren Container für den Datenaustausch.
 ///
 /// Die Struktur implementiert das "Key Wrapping"-Muster:
@@ -30,7 +37,7 @@ pub enum PayloadType {
 /// 2. Dieser Payload Key wird für jeden Empfänger in `recipient_key_map` einzeln verschlüsselt,
 ///    und zwar mit einem Schlüssel, der aus einem statischen Diffie-Hellman-Austausch
 ///    zwischen Sender und dem jeweiligen Empfänger abgeleitet wird.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SecureContainer {
     /// Eine eindeutige ID für diesen Container, generiert aus dem Hash seines Inhalts.
     pub container_id: String,

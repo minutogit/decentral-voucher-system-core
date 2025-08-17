@@ -7,7 +7,7 @@
 use serde::{Serialize, Deserialize};
 
 /// Definiert den Standard, zu dem ein Gutschein gehört.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct VoucherStandard {
     /// Der Name des Standards (z.B. "Minuto-Gutschein").
     pub name: String,
@@ -16,7 +16,7 @@ pub struct VoucherStandard {
 }
 
 /// Definiert den Nennwert, den ein Gutschein repräsentiert.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct NominalValue {
     /// Die Einheit des Gutscheinwerts (z.B. "Minuten", "Unzen").
     pub unit: String,
@@ -64,7 +64,7 @@ pub struct Address {
 }
 
 /// Detaillierte Informationen zum Ersteller des Gutscheins.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Creator {
     /// Eindeutige ID des Erstellers (z.B. eine User ID, die aus dem Public Key generiert wird).
     pub id: String,
@@ -104,7 +104,7 @@ pub struct Creator {
 }
 
 /// Repräsentiert die Signatur eines Bürgen.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct GuarantorSignature {
     /// Die eindeutige ID des Gutscheins, auf den sich diese Signatur bezieht.
     pub voucher_id: String,
@@ -146,7 +146,7 @@ pub struct GuarantorSignature {
 }
 
 /// Repräsentiert eine einzelne Transaktion in der Transaktionskette des Gutscheins.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Transaction {
     /// Eindeutige ID der Transaktion.
     pub t_id: String,
@@ -172,7 +172,7 @@ pub struct Transaction {
 }
 
 /// Repräsentiert eine zusätzliche, optionale Signatur, die an den Gutschein angehängt wird.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct AdditionalSignature {
     /// Die eindeutige ID des Gutscheins, auf den sich diese Signatur bezieht.
     pub voucher_id: String,
@@ -190,7 +190,7 @@ pub struct AdditionalSignature {
 
 /// Das Haupt-Struct, das den universellen Gutschein-Container repräsentiert.
 /// Es fasst alle anderen Strukturen und Felder gemäß dem allgemeinen JSON-Schema zusammen.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Voucher {
     /// Definiert den Standard, dem dieser Gutschein folgt.
     pub voucher_standard: VoucherStandard,
