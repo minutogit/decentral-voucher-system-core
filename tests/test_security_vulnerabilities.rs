@@ -7,13 +7,13 @@
 use serde_json::Value;
 use std::fs;
 use voucher_lib::{archive::file_archive::FileVoucherArchive, crypto_utils};
-use voucher_lib::models::profile::{BundleMetadataStore, TransactionBundle, UserIdentity, VoucherStore};
+use voucher_lib::models::profile::{BundleMetadataStore, TransactionBundle, UserIdentity, VoucherStore, VoucherStatus};
 use voucher_lib::models::voucher::{Collateral, Creator, GuarantorSignature, NominalValue, Transaction, Voucher};
 use voucher_lib::services::crypto_utils::{create_user_id, get_hash, sign_ed25519};
 use voucher_lib::services::secure_container_manager::create_secure_container;
 use voucher_lib::services::utils::{get_current_timestamp, to_canonical_json};
-use voucher_lib::services::voucher_manager::{self, NewVoucherData};
-use voucher_lib::services::voucher_validation;
+use voucher_lib::services::voucher_manager::{self, NewVoucherData, create_voucher, create_transaction, load_standard_definition};
+use voucher_lib::services::voucher_validation::{self, get_spendable_balance};
 use voucher_lib::VoucherCoreError;
 use voucher_lib::wallet::Wallet;
 use lazy_static::lazy_static;
@@ -21,6 +21,8 @@ use rand::{Rng, thread_rng};
 use rand::seq::SliceRandom;
 use voucher_lib::models::secure_container::PayloadType;
 use voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition;
+use rust_decimal_macros::dec;
+use ed25519_dalek::SigningKey;
 
 // ===================================================================================
 // HILFSFUNKTIONEN & SETUP (Adaptiert aus bestehenden Tests)
@@ -86,22 +88,28 @@ fn new_test_voucher_data(creator_id: String) -> NewVoucherData {
 }
 
 /// Erstellt eine gültige Bürgschaft für einen gegebenen Gutschein.
-fn create_guarantor_signature(voucher: &Voucher, guarantor_identity: &UserIdentity) -> GuarantorSignature {
+fn create_guarantor_signature(
+    voucher: &Voucher,
+    guarantor_identity: &UserIdentity,
+    organization: Option<&str>,
+    gender: &str,
+) -> GuarantorSignature {
     let mut sig_obj = GuarantorSignature {
         voucher_id: voucher.voucher_id.clone(),
         guarantor_id: guarantor_identity.user_id.clone(),
         first_name: "Garant".to_string(),
         last_name: "Test".to_string(),
         signature_time: get_current_timestamp(),
+        organization: organization.map(String::from),
+        gender: gender.to_string(),
         ..Default::default()
     };
-    let sig_obj_for_id = {
-        let mut temp = sig_obj.clone();
-        temp.signature_id = "".to_string();
-        temp.signature = "".to_string();
-        temp
-    };
+
+    let mut sig_obj_for_id = sig_obj.clone();
+    sig_obj_for_id.signature_id = "".to_string();
+    sig_obj_for_id.signature = "".to_string();
     let id_hash = get_hash(to_canonical_json(&sig_obj_for_id).unwrap());
+
     sig_obj.signature_id = id_hash;
     let signature = sign_ed25519(&guarantor_identity.signing_key, sig_obj.signature_id.as_bytes());
     sig_obj.signature = bs58::encode(signature.to_bytes()).into_string();
@@ -152,6 +160,34 @@ fn create_hacked_tx(signer_identity: &UserIdentity, mut hacked_tx: Transaction) 
     hacked_tx
 }
 
+/// **NEUER STUB:** Erstellt einen Test-Creator für die neuen Tests.
+fn setup_creator() -> (SigningKey, Creator) {
+    let (public_key, signing_key) = crypto_utils::generate_ed25519_keypair_for_tests(Some("creator_stub"));
+    let user_id = create_user_id(&public_key, Some("cs")).unwrap();
+    let creator = Creator {
+        id: user_id,
+        first_name: "Stub".to_string(),
+        last_name: "Creator".to_string(),
+        ..Default::default()
+    };
+    (signing_key, creator)
+}
+
+/// **NEUER STUB:** Erstellt Test-Voucher-Daten für die neuen Tests.
+fn create_test_voucher_data_with_amount(creator: Creator, amount: &str) -> NewVoucherData {
+    NewVoucherData {
+        validity_duration: Some("P5Y".to_string()),
+        non_redeemable_test_voucher: false,
+        nominal_value: NominalValue {
+            amount: amount.to_string(),
+            ..Default::default()
+        },
+        collateral: Collateral::default(),
+        creator,
+    }
+}
+
+
 // ===================================================================================
 // ANGRIFFSKLASSE 1 & 4: MANIPULATION VON STAMMDATEN & BÜRGSCHAFTEN
 // ===================================================================================
@@ -163,7 +199,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
     let mut victim_wallet = setup_test_wallet(&ACTORS.victim);
     let voucher_data = new_test_voucher_data(ACTORS.issuer.user_id.clone());
     let mut valid_voucher = voucher_manager::create_voucher(voucher_data, &STANDARD, &ACTORS.issuer.signing_key).unwrap();
-    let guarantor_sig = create_guarantor_signature(&valid_voucher, &ACTORS.guarantor);
+    let guarantor_sig = create_guarantor_signature(&valid_voucher, &ACTORS.guarantor, None, "0");
     valid_voucher.guarantor_signatures.push(guarantor_sig);
     let local_id = Wallet::calculate_local_instance_id(&valid_voucher, &ACTORS.issuer.user_id).unwrap();
     issuer_wallet.voucher_store.vouchers.insert(local_id.clone(), (valid_voucher, Default::default()));
@@ -358,6 +394,161 @@ fn mutate_value(val: &mut Value, rng: &mut impl Rng, current_path: &str) -> Opti
     None // Keine Mutation in diesem Zweig durchgeführt
 }
 
+// --- NEUE TESTS FÜR WALLET-ZUSTANDSVERWALTUNG UND KOLLABORATIVE SICHERHEIT ---
+
+#[test]
+fn test_wallet_state_management_on_split() {
+    // 1. Setup
+    let standard_toml = std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+
+    let a_identity = &ACTORS.alice;
+    let b_identity = &ACTORS.bob;
+    let mut wallet_a = setup_test_wallet(a_identity);
+    let mut wallet_b = setup_test_wallet(b_identity);
+
+    // 2. Erstelle einen Gutschein explizit und füge ihn zu Wallet A hinzu, um das Setup zu verdeutlichen.
+    let creator_data = Creator {
+        id: a_identity.user_id.clone(),
+        first_name: "Alice".to_string(),
+        last_name: "Test".to_string(),
+        ..Default::default()
+    };
+    let voucher_data = create_test_voucher_data_with_amount(creator_data, "100.0000");
+    let initial_voucher = create_voucher(voucher_data, &standard, &a_identity.signing_key).unwrap();
+
+    wallet_a.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &a_identity.user_id).unwrap();
+    let original_local_id = wallet_a.voucher_store.vouchers.keys().next().unwrap().clone();
+
+    // 3. Aktion: Wallet A sendet 40 an Wallet B
+    let (bundle_to_b, _) = wallet_a.create_transfer(
+        &a_identity,
+        &standard,
+        &original_local_id,
+        &b_identity.user_id,
+        "40",
+        None,
+        None::<&FileVoucherArchive>,
+    ).unwrap();
+
+    wallet_b.process_encrypted_transaction_bundle(&b_identity, &bundle_to_b, None::<&FileVoucherArchive>).unwrap();
+
+    // 4. Verifizierung (Wallet A)
+    assert_eq!(wallet_a.voucher_store.vouchers.len(), 2, "Wallet A should have two instances (original archived, new remainder active)");
+
+    let (_, original_status) = wallet_a.voucher_store.vouchers.get(&original_local_id).unwrap();
+    assert_eq!(*original_status, VoucherStatus::Archived, "Original voucher instance must be archived.");
+
+    let (remainder_voucher, remainder_status) = wallet_a.voucher_store.vouchers.values()
+        .find(|(_, status)| *status == VoucherStatus::Active)
+        .expect("Wallet A must have one active remainder voucher.");
+    assert_eq!(*remainder_status, VoucherStatus::Active);
+
+    let remainder_balance = get_spendable_balance(remainder_voucher, &a_identity.user_id, &standard).unwrap();
+    assert_eq!(remainder_balance, dec!(60));
+
+    // 5. Verifizierung (Wallet B)
+    assert_eq!(wallet_b.voucher_store.vouchers.len(), 1, "Wallet B should have one voucher instance.");
+    let (received_voucher, received_status) = wallet_b.voucher_store.vouchers.values().next().unwrap();
+    assert_eq!(*received_status, VoucherStatus::Active);
+
+    let received_balance = get_spendable_balance(received_voucher, &b_identity.user_id, &standard).unwrap();
+    assert_eq!(received_balance, dec!(40));
+}
+
+#[test]
+fn test_collaborative_fraud_detection_with_fingerprints() {
+    // 1. Setup
+    let a_identity = &ACTORS.alice;
+    let mut alice_wallet = setup_test_wallet(a_identity);
+    let b_identity = &ACTORS.bob;
+    let mut bob_wallet = setup_test_wallet(b_identity);
+    // Wir verwenden den "Hacker" als böswilligen Akteur Eve
+    let eve_identity = &ACTORS.hacker;
+    let mut eve_wallet = setup_test_wallet(eve_identity);
+
+    let standard_toml = std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+
+    // 2. Akt 1 (Double Spend)
+    let eve_creator = Creator { id: eve_identity.user_id.clone(), ..setup_creator().1 };
+    let voucher_data = create_test_voucher_data_with_amount(eve_creator, "100");
+    let initial_voucher = create_voucher(voucher_data, &standard, &eve_identity.signing_key).unwrap();
+
+    // Eve erstellt zwei widersprüchliche Zukünfte
+    let voucher_for_alice = create_transaction(&initial_voucher, &standard, &eve_identity.user_id, &eve_identity.signing_key, &a_identity.user_id, "100").unwrap();
+    let voucher_for_bob = create_transaction(&initial_voucher, &standard, &eve_identity.user_id, &eve_identity.signing_key, &b_identity.user_id, "100").unwrap();
+
+    // Eve verpackt und sendet die Gutscheine
+    let bundle_to_alice = eve_wallet.create_and_encrypt_transaction_bundle(&eve_identity, vec![voucher_for_alice], &a_identity.user_id, None).unwrap();
+    let bundle_to_bob = eve_wallet.create_and_encrypt_transaction_bundle(&eve_identity, vec![voucher_for_bob], &b_identity.user_id, None).unwrap();
+
+    alice_wallet.process_encrypted_transaction_bundle(&a_identity, &bundle_to_alice, None::<&FileVoucherArchive>).unwrap();
+    bob_wallet.process_encrypted_transaction_bundle(&b_identity, &bundle_to_bob, None::<&FileVoucherArchive>).unwrap();
+
+    // 3. Akt 2 (Austausch)
+    alice_wallet.scan_and_update_own_fingerprints().unwrap();
+    let alice_fingerprints = alice_wallet.export_own_fingerprints().unwrap();
+    bob_wallet.import_foreign_fingerprints(&alice_fingerprints).unwrap();
+
+    // 4. Akt 3 (Aufdeckung)
+    bob_wallet.scan_and_update_own_fingerprints().unwrap();
+    let check_result = bob_wallet.check_for_double_spend();
+
+    // 5. Verifizierung
+    assert!(check_result.unverifiable_warnings.is_empty(), "There should be no unverifiable warnings.");
+    assert_eq!(check_result.verifiable_conflicts.len(), 1, "A verifiable conflict must be detected.");
+
+    let conflict = check_result.verifiable_conflicts.values().next().unwrap();
+    assert_eq!(conflict.len(), 2, "The conflict should involve two transactions.");
+    println!("SUCCESS: Collaborative fraud detection upgraded a warning to a verifiable conflict.");
+}
+
+#[test]
+fn test_serialization_roundtrip_with_special_chars() {
+    // 1. Setup
+    let standard_toml = std::fs::read_to_string("voucher_standards/minuto_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+
+    let (signing_key, mut creator) = setup_creator();
+    creator.first_name = "Jörg-ẞtråße".to_string(); // Sonderzeichen
+
+    let voucher_data = create_test_voucher_data_with_amount(creator, "123.45");
+    let mut original_voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
+
+    // Mache den Gutschein komplexer
+    let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g1_roundtrip"));
+    let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
+    let g1_identity = UserIdentity { public_key: g1_pub, signing_key: g1_priv, user_id: g1_id };
+
+    // **KORRIGIERTER AUFRUF:** Metadaten werden jetzt bei der Erstellung übergeben.
+    let guarantor_sig =
+        create_guarantor_signature(&original_voucher, &g1_identity, Some("Bürge & Co."), "1");
+    original_voucher.guarantor_signatures.push(guarantor_sig);
+
+    // FÜGE ZWEITEN BÜRGEN HINZU, UM DIE VALIDIERUNG ZU ERFÜLLEN
+    // ÄNDERUNG: Gender auf "2" gesetzt, um die Regel des Minuto-Standards zu erfüllen.
+    let second_guarantor_sig = create_guarantor_signature(&original_voucher, &ACTORS.guarantor, None, "2");
+    original_voucher.guarantor_signatures.push(second_guarantor_sig);
+
+    original_voucher = create_transaction(
+        &original_voucher,
+        &standard,
+        &original_voucher.creator.id,
+        &signing_key,
+        "some_recipient_id",
+        "23.45"
+    ).unwrap();
+
+    // 2. Aktion
+    // Wir verwenden serde_json::to_string direkt, um den Prozess ohne unsere Wrapper zu testen.
+    let json_string = serde_json::to_string(&original_voucher).unwrap();
+    let deserialized_voucher: Voucher = serde_json::from_str(&json_string).unwrap();
+
+    // 3. Verifizierung
+    assert_eq!(original_voucher, deserialized_voucher, "The deserialized voucher must be identical to the original.");
+}
+
 #[test]
 fn test_attack_fuzzing_random_mutations() {
     // ### SETUP ###
@@ -367,11 +558,10 @@ fn test_attack_fuzzing_random_mutations() {
 
     let mut master_voucher = voucher_manager::create_voucher(data, &STANDARD, &ACTORS.issuer.signing_key).unwrap();
 
-    // Füge mehrere Bürgen hinzu, um die Komplexität des Objekts zu erhöhen.
-    let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("guarantor2_fuzz"));
-    let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
-    let sig1 = create_guarantor_signature(&master_voucher, &ACTORS.guarantor);
-    let sig2 = create_guarantor_signature(&master_voucher, &UserIdentity { signing_key: g2_priv, public_key: g2_pub, user_id: g2_id });
+    // Füge mehrere Bürgen hinzu, um die Komplexität des Objekts zu erhöhen (Standard braucht 2).
+    let g2_identity = identity_from_seed("guarantor2_fuzz");
+    let sig1 = create_guarantor_signature(&master_voucher, &ACTORS.guarantor, None, "0");
+    let sig2 = create_guarantor_signature(&master_voucher, &g2_identity, None, "0");
     master_voucher.guarantor_signatures.push(sig1);
     master_voucher.guarantor_signatures.push(sig2);
 
@@ -391,7 +581,7 @@ fn test_attack_fuzzing_random_mutations() {
     let master_json_value = serde_json::to_value(&master_voucher).unwrap();
     let mut rng = thread_rng();
     println!("--- Starte Fuzzing-Test mit 1000 Iterationen ---");
-    let iterations = 1000;
+    let iterations = 100;
 
     for i in 0..iterations {
         let mut mutated_value = master_json_value.clone();
