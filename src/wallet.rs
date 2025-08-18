@@ -229,10 +229,35 @@ impl Wallet {
         let check_result = self.check_for_double_spend();
 
         for (conflict_hash, fingerprints) in &check_result.verifiable_conflicts {
+            // Wenn kein Archiv bereitgestellt wird, können wir keinen Beweis führen.
             if let Some(archive_backend) = archive {
+                // Schritt 1: Immer den Beweis erstellen und speichern.
+                // Die `verify...`-Funktion setzt standardmäßig ALLE betroffenen
+                // Gutscheine auf Quarantäne (Offline-Modus / maximale Vorsicht).
                 if let Some(proof) = self.verify_conflict_and_create_proof(
                     identity, conflict_hash, fingerprints, archive_backend
                 )? {
+                    // Schritt 2: Prüfen, ob ein Layer-2-Urteil vorliegt.
+                    if let Some(verdict) = &proof.layer2_verdict {
+                        // TODO: Die Signatur des Verdicts hier verifizieren.
+
+                        // Finde die lokale Instanz, die laut Urteil GÜLTIG ist.
+                        if let Some((local_id, _)) = self.find_local_voucher_by_tx_id(&verdict.valid_transaction_id) {
+                            // Hebe die Quarantäne für den gültigen Pfad wieder auf.
+                            self.voucher_store.vouchers.get_mut(&local_id).unwrap().1 = VoucherStatus::Active;
+                        }
+
+                        // Finde die lokalen Instanzen, die UNGÜLTIG sind, und hänge eine Sperr-Transaktion an.
+                        for tx in &proof.conflicting_transactions {
+                            if tx.t_id != verdict.valid_transaction_id {
+                                if let Some((local_id, _)) = self.find_local_voucher_by_tx_id(&tx.t_id) {
+                                    // Rufe die neue Funktion für die Sperr-Transaktion auf.
+                                    self.create_and_append_blocking_transaction(&local_id, identity)?;
+                                }
+                            }
+                        }
+                    }
+                    // Speichere den (ggf. mit Verdict angereicherten) Beweis.
                     self.proof_store.proofs.insert(proof.proof_id.clone(), proof);
                 }
             }
@@ -666,6 +691,7 @@ impl Wallet {
             report_timestamp: get_current_timestamp(),
             reporter_signature: bs58::encode(reporter_signature.to_bytes()).into_string(),
             resolutions: None,
+            layer2_verdict: None,
         };
 
         // 5. Als Konsequenz alle betroffenen lokalen Gutscheine unter Quarantäne stellen.
@@ -783,5 +809,48 @@ impl Wallet {
             }
         }
         Ok(new_count)
+    }
+
+
+    /// Erstellt und hängt eine Sperr-Transaktion an einen als ungültig
+    /// identifizierten Gutschein an.
+    fn create_and_append_blocking_transaction(
+        &mut self,
+        _local_instance_id: &str,
+        _signing_identity: &UserIdentity,
+    ) -> Result<(), VoucherCoreError> {
+
+        // TODO: Diese Funktion wird implementiert, sobald die Layer-2-Interaktion
+        //       definiert ist.
+        //
+        // Die Logik würde hier eine neue Transaktion vom Typ "block" erstellen,
+        // die vom aktuellen Wallet-Besitzer (dem Entdecker) signiert wird.
+        //
+        // Der Empfänger (`recipient_id`) dieser Transaktion wird formal der
+        // Verursacher (`offender_id`) des Double Spends sein. Auch wenn die
+        // Transaktion nie an ihn gesendet wird, dokumentiert sie "on-chain",
+        // wer für die Sperrung verantwortlich ist.
+        //
+        // Diese Sperr-Transaktion dient als definitiver Endpunkt für diesen
+        // Gutschein-Zweig. Sie verhindert, dass der aktuelle Besitzer den nun
+        // als ungültig bekannten Gutschein weitergeben kann, da er sonst
+        // selbst einen kryptographisch nachweisbaren Double Spend erzeugen würde
+        // (gegenüber dieser Sperr-Transaktion).
+
+        Ok(())
+    }
+
+    /// Findet die lokale ID und den Status eines Gutscheins anhand einer enthaltenen Transaktions-ID.
+    fn find_local_voucher_by_tx_id(&self, tx_id: &str) -> Option<(String, VoucherStatus)> {
+        self.voucher_store
+            .vouchers
+            .iter()
+            .find_map(|(local_id, (voucher, status))| {
+                if voucher.transactions.iter().any(|tx| tx.t_id == tx_id) {
+                    Some((local_id.clone(), status.clone()))
+                } else {
+                    None
+                }
+            })
     }
 }

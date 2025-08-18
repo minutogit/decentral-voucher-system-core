@@ -97,6 +97,11 @@ pub struct ProofOfDoubleSpend {
     /// Eine Liste von Bestätigungen, die belegen, dass der Konflikt
     /// mit den Opfern beigelegt wurde. Kann `None` sein, wenn ungelöst.
     pub resolutions: Option<Vec<ResolutionEndorsement>>,
+
+    /// Das optionale, signierte Urteil eines Layer-2-Dienstes.
+    /// Wenn `Some`, überschreibt dieses Urteil die lokale "maximale Vorsicht"-Regel.
+    #[serde(default)]
+    pub layer2_verdict: Option<Layer2Verdict>,
 }
 
 /// Bestätigung durch ein Opfer, dass ein durch eine `proof_id` identifizierter
@@ -139,3 +144,17 @@ pub struct ProofStore {
     #[serde(default)]
     pub proofs: HashMap<String, ProofOfDoubleSpend>,
 }
+
+/// Repräsentiert das fälschungssichere Urteil eines Layer-2-Servers über einen Konflikt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Layer2Verdict {
+    /// Die ID des Servers oder Gremiums, das das Urteil gefällt hat.
+    pub server_id: String,
+    /// Der Zeitstempel des Urteils.
+    pub verdict_timestamp: String,
+    /// Die `t_id` der Transaktion, die vom Server als "gültig" (weil zuerst gesehen) eingestuft wurde.
+    pub valid_transaction_id: String,
+    /// Die Signatur des Servers über dem Hash dieses Verdict-Objekts, um es fälschungssicher zu machen.
+    pub server_signature: String,
+}
+
