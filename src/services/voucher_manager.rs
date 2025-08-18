@@ -280,14 +280,16 @@ pub fn create_transaction(
     recipient_id: &str,
     amount_to_send_str: &str,
 ) -> Result<Voucher, VoucherCoreError> {
+    // SICHERHEITSPATCH: Validiere den gesamten Gutschein-Zustand, bevor eine neue Transaktion erstellt wird.
+    // Dies verhindert, dass auf einer manipulierten oder ungültigen Transaktionskette aufgebaut wird.
+    crate::services::voucher_validation::validate_voucher_against_standard(voucher, standard)?;
     let decimal_places = standard.validation.amount_decimal_places as u32;
 
     // 1. Aktuell verfügbares Guthaben für den Sender berechnen.
     let spendable_balance = get_spendable_balance(voucher, sender_id, standard)?;
 
     // 2. Zu sendenden Betrag parsen und mit dem Guthaben vergleichen.
-    let mut amount_to_send = Decimal::from_str_exact(amount_to_send_str)?;
-    amount_to_send.set_scale(decimal_places)?;
+    let amount_to_send = Decimal::from_str_exact(amount_to_send_str)?;
 
     if amount_to_send <= Decimal::ZERO {
         return Err(VoucherManagerError::Generic("Transaction amount must be positive.".to_string()).into());
@@ -305,7 +307,10 @@ pub fn create_transaction(
         if !voucher.divisible {
             return Err(VoucherManagerError::VoucherNotDivisible.into());
         }
-        let remaining = spendable_balance - amount_to_send;
+        let mut remaining = spendable_balance - amount_to_send;
+        // SICHERHEITSPATCH: Die Skalierung muss explizit gesetzt werden, BEVOR to_string() aufgerufen wird.
+        // Andernfalls wird z.B. aus `60.0000` der String "60", was beim späteren Einlesen zu Fehlinterpretationen führt.
+        remaining.set_scale(decimal_places)?;
         ("split".to_string(), Some(remaining.to_string()))
     } else {
         // Dies ist ein voller Transfer.

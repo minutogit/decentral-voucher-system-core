@@ -106,6 +106,7 @@ pub fn validate_voucher_against_standard(
     verify_consistency_with_standard(voucher, standard)?;
     verify_validity_duration(voucher, standard)?;
     verify_guarantor_requirements(voucher, standard)?;
+    verify_additional_signatures(voucher)?; // NEUE PRÜFUNG HINZUGEFÜGT
     verify_transactions(voucher, standard)?; // WICHTIG: standard wird jetzt übergeben
     verify_creator_signature(voucher)?; // Die kryptographische Gesamtprüfung zum Schluss.
 
@@ -320,6 +321,50 @@ fn verify_guarantor_requirements(voucher: &Voucher, standard: &VoucherStandardDe
     Ok(())
 }
 
+/// Verifiziert die Integrität und kryptographische Gültigkeit aller zusätzlichen Signaturen.
+/// Die Logik ist identisch zur Überprüfung der Bürgen-Signaturen.
+fn verify_additional_signatures(voucher: &Voucher) -> Result<(), VoucherCoreError> {
+    for signature_obj in &voucher.additional_signatures {
+        // 1. Stelle sicher, dass die Signatur zum richtigen Gutschein gehört.
+        if signature_obj.voucher_id != voucher.voucher_id {
+            return Err(ValidationError::MismatchedVoucherIdInSignature {
+                expected: voucher.voucher_id.clone(),
+                found: signature_obj.voucher_id.clone(),
+            }.into());
+        }
+
+        // 2. Rekonstruiere die Daten für die `signature_id` und verifiziere sie.
+        let mut obj_to_verify = signature_obj.clone();
+        let signature_b58 = obj_to_verify.signature;
+
+        obj_to_verify.signature_id = "".to_string();
+        obj_to_verify.signature = "".to_string();
+
+        let calculated_id_hash = get_hash(to_canonical_json(&obj_to_verify)?);
+
+        if calculated_id_hash != signature_obj.signature_id {
+            return Err(ValidationError::InvalidSignatureId(signature_obj.signature_id.clone()).into());
+        }
+
+        // 3. Verifiziere die digitale Signatur selbst.
+        let public_key = get_pubkey_from_user_id(&signature_obj.signer_id)
+            .map_err(|_| ValidationError::InvalidGuarantorSignature(signature_obj.signer_id.clone()))?;
+
+        let signature_bytes = bs58::decode(signature_b58)
+            .into_vec()
+            .map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
+        let signature = Signature::from_slice(&signature_bytes)
+            .map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
+
+        if !verify_ed25519(&public_key, signature_obj.signature_id.as_bytes(), &signature) {
+            return Err(ValidationError::InvalidGuarantorSignature(
+                signature_obj.signer_id.clone(),
+            ).into());
+        }
+    }
+    Ok(())
+}
+
 
 /// Verifiziert die Integrität, Signaturen und Geschäftslogik der Transaktionsliste.
 /// Dies ist eine zustandsbehaftete Prüfung, die Bilanzen über die Kette hinweg verfolgt.
@@ -351,9 +396,24 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
         let sender_id = &transaction.sender_id;
         let sender_balance = *balances.get(sender_id).unwrap_or(&Decimal::ZERO);
         
+        // SICHERHEITSPATCH: Eine "init"-Transaktion ist nur als allererste Transaktion (i=0) gültig.
+        if i > 0 && transaction.t_type == "init" {
+            return Err(ValidationError::InvalidTransaction(format!(
+                "Transaction {} has invalid type 'init' at a non-zero position.",
+                transaction.t_id
+            )).into());
+        }
+
         let mut amount_sent = Decimal::from_str(&transaction.amount)?;
         amount_sent.set_scale(decimal_places)?;
-        
+
+        // SICHERHEITSPATCH: Transaktions- und Restbeträge müssen immer positiv sein.
+        if amount_sent <= Decimal::ZERO {
+            return Err(ValidationError::InvalidTransaction(
+                "Transaction amount must be positive.".to_string()
+            ).into());
+        }
+
         // Geschäftslogik für die 'init' Transaktion.
         if i == 0 && transaction.t_type == "init" {
             // Die 'init' Transaktion setzt das Startguthaben für den Ersteller.
@@ -372,6 +432,12 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
                 
                 let mut remaining_amount = Decimal::from_str(remaining_str)?;
                 remaining_amount.set_scale(decimal_places)?;
+
+                if remaining_amount < Decimal::ZERO { // Restbetrag darf 0 sein, aber nicht negativ
+                    return Err(ValidationError::InvalidTransaction(
+                        "Sender remaining amount cannot be negative.".to_string()
+                    ).into());
+                }
 
                 // Prüfe die Erhaltung des Wertes.
                 // Toleranz für Rundungsfehler einbauen, falls nötig, aber exakter Vergleich ist besser.
@@ -468,6 +534,9 @@ pub fn get_spendable_balance(
         }
     }
 
-    balance.set_scale(decimal_places)?;
+    // KORREKTUR: Die Normalisierung der Skalierung hier ist fehlerhaft und die Ursache der Rechenfehler.
+    // `rust_decimal` kann mit Werten unterschiedlicher Skalierung korrekt umgehen.
+    // Die Zeile wird entfernt, um die rohen, korrekt geparsten Decimal-Werte zurückzugeben.
+    // balance.set_scale(decimal_places)?;
     Ok(balance)
 }

@@ -36,6 +36,90 @@ fn identity_from_seed(seed: &str) -> UserIdentity {
     UserIdentity { signing_key, public_key, user_id }
 }
 
+use voucher_lib::models::voucher::AdditionalSignature;
+use rust_decimal::Decimal;
+use std::str::FromStr;
+
+/// Definiert die verschiedenen Angriffsstrategien für den Fuzzer.
+#[derive(Debug, Clone, Copy)]
+enum FuzzingStrategy {
+    /// Manipuliert eine `AdditionalSignature`, um die Validierung zu testen.
+    InvalidateAdditionalSignature,
+    /// Setzt einen Transaktionsbetrag auf einen negativen Wert.
+    SetNegativeTransactionAmount,
+    /// Setzt den Restbetrag eines Splits auf einen negativen Wert.
+    SetNegativeRemainderAmount,
+    /// Verschiebt eine `init`-Transaktion an eine ungültige Position.
+    SetInitTransactionInWrongPosition,
+    /// Führt eine zufällige, strukturelle Mutation durch (der alte Ansatz).
+    GenericRandomMutation,
+}
+
+/// Wählt eine zufällige Transaktion (außer `init`) und macht ihren Betrag negativ.
+fn mutate_to_negative_amount(voucher: &mut Voucher) -> String {
+    if voucher.transactions.len() < 2 { return "No non-init transaction to mutate".to_string(); }
+    let mut rng = thread_rng();
+    let tx_index = rng.gen_range(1..voucher.transactions.len());
+
+    if let Some(tx) = voucher.transactions.get_mut(tx_index) {
+        if let Ok(mut amount) = Decimal::from_str(&tx.amount) {
+            if amount > Decimal::ZERO {
+                amount.set_sign_negative(true);
+                tx.amount = amount.to_string();
+                return format!("Set tx[{}] amount to negative: {}", tx_index, tx.amount);
+            }
+        }
+    }
+    "Failed to apply negative amount mutation".to_string()
+}
+
+/// Wählt eine zufällige Split-Transaktion und macht ihren Restbetrag negativ.
+fn mutate_to_negative_remainder(voucher: &mut Voucher) -> String {
+    let mut rng = thread_rng();
+    // Finde alle Indizes von Transaktionen, die einen Restbetrag haben
+    let splittable_indices: Vec<usize> = voucher.transactions.iter().enumerate()
+        .filter(|(_, tx)| tx.sender_remaining_amount.is_some())
+        .map(|(i, _)| i)
+        .collect();
+
+    if let Some(&tx_index) = splittable_indices.choose(&mut rng) {
+        if let Some(tx) = voucher.transactions.get_mut(tx_index) {
+            if let Some(remainder_str) = &tx.sender_remaining_amount {
+                if let Ok(mut remainder) = Decimal::from_str(remainder_str) {
+                    if remainder > Decimal::ZERO {
+                        remainder.set_sign_negative(true);
+                        tx.sender_remaining_amount = Some(remainder.to_string());
+                        return format!("Set tx[{}] remainder to negative: {}", tx_index, remainder);
+                    }
+                }
+            }
+        }
+    }
+    "No suitable split transaction found to mutate".to_string()
+}
+
+/// Verschiebt den `t_type` "init" auf eine zufällige, ungültige Position.
+fn mutate_init_to_wrong_position(voucher: &mut Voucher) -> String {
+    if voucher.transactions.len() < 2 { return "Not enough transactions to move 'init' type".to_string(); }
+    let mut rng = thread_rng();
+    let tx_index = rng.gen_range(1..voucher.transactions.len());
+
+    if let Some(tx) = voucher.transactions.get_mut(tx_index) {
+        tx.t_type = "init".to_string();
+        return format!("Set tx[{}] t_type to 'init'", tx_index);
+    }
+    "Failed to move 'init' t_type".to_string()
+}
+
+/// Nimmt eine `AdditionalSignature` und macht sie ungültig, indem die Signaturdaten manipuliert werden.
+fn mutate_invalidate_additional_signature(voucher: &mut Voucher) -> String {
+    if let Some(sig) = voucher.additional_signatures.get_mut(0) {
+        sig.signature = "invalid_signature_data".to_string();
+        return "Invalidated signature of first AdditionalSignature".to_string();
+    }
+    "No AdditionalSignature found to invalidate".to_string()
+}
+
 /// Erstellt ein frisches, leeres In-Memory-Wallet für einen Akteur.
 fn setup_test_wallet(identity: &UserIdentity) -> Wallet {
     let profile = voucher_lib::models::profile::UserProfile {
@@ -552,49 +636,92 @@ fn test_serialization_roundtrip_with_special_chars() {
 #[test]
 fn test_attack_fuzzing_random_mutations() {
     // ### SETUP ###
-    // Erstelle einen maximal komplexen "Master"-Gutschein mit über 10 Transaktionen.
+    // Erstelle einen "Master"-Gutschein, der alle für die Angriffe relevanten Features enthält.
     let mut data = new_test_voucher_data(ACTORS.issuer.user_id.clone());
-    data.nominal_value.amount = "1000".to_string(); // Höherer Startwert für mehr Transaktionen
-
+    data.nominal_value.amount = "1000".to_string();
     let mut master_voucher = voucher_manager::create_voucher(data, &STANDARD, &ACTORS.issuer.signing_key).unwrap();
 
-    // Füge mehrere Bürgen hinzu, um die Komplexität des Objekts zu erhöhen (Standard braucht 2).
+    // Füge Bürgen hinzu.
     let g2_identity = identity_from_seed("guarantor2_fuzz");
-    let sig1 = create_guarantor_signature(&master_voucher, &ACTORS.guarantor, None, "0");
-    let sig2 = create_guarantor_signature(&master_voucher, &g2_identity, None, "0");
-    master_voucher.guarantor_signatures.push(sig1);
-    master_voucher.guarantor_signatures.push(sig2);
+    master_voucher.guarantor_signatures.push(create_guarantor_signature(&master_voucher, &ACTORS.guarantor, None, "0"));
+    master_voucher.guarantor_signatures.push(create_guarantor_signature(&master_voucher, &g2_identity, None, "0"));
 
-    // KORRIGIERTE "Ping-Pong"-Kette, die mit der "letzte Transaktion"-Logik kompatibel ist.
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.issuer.user_id, &ACTORS.issuer.signing_key, &ACTORS.alice.user_id, "1000").unwrap();
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.alice.user_id, &ACTORS.alice.signing_key, &ACTORS.bob.user_id, "1000").unwrap();
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.bob.user_id, &ACTORS.bob.signing_key, &ACTORS.hacker.user_id, "1000").unwrap();
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.hacker.user_id, &ACTORS.hacker.signing_key, &ACTORS.victim.user_id, "1000").unwrap();
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.victim.user_id, &ACTORS.victim.signing_key, &ACTORS.issuer.user_id, "1000").unwrap();
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.issuer.user_id, &ACTORS.issuer.signing_key, &ACTORS.alice.user_id, "1000").unwrap();
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.alice.user_id, &ACTORS.alice.signing_key, &ACTORS.bob.user_id, "1000").unwrap();
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.bob.user_id, &ACTORS.bob.signing_key, &ACTORS.hacker.user_id, "1000").unwrap();
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.hacker.user_id, &ACTORS.hacker.signing_key, &ACTORS.victim.user_id, "500").unwrap(); // Split am Ende
-    master_voucher = voucher_manager::create_transaction(&master_voucher, &STANDARD, &ACTORS.victim.user_id, &ACTORS.victim.signing_key, &ACTORS.issuer.user_id, "500").unwrap(); // Voller Transfer des erhaltenen Betrags
+    // WICHTIG: Füge eine `AdditionalSignature` hinzu, damit der Fuzzer sie angreifen kann.
+    let mut additional_sig = AdditionalSignature {
+        voucher_id: master_voucher.voucher_id.clone(),
+        signer_id: ACTORS.victim.user_id.clone(),
+        signature_time: get_current_timestamp(),
+        description: "A valid additional signature".to_string(),
+        ..Default::default()
+    };
+    let mut sig_obj_for_id = additional_sig.clone();
+    sig_obj_for_id.signature_id = "".to_string();
+    sig_obj_for_id.signature = "".to_string();
+    additional_sig.signature_id = get_hash(to_canonical_json(&sig_obj_for_id).unwrap());
+    let signature = sign_ed25519(&ACTORS.victim.signing_key, additional_sig.signature_id.as_bytes());
+    additional_sig.signature = bs58::encode(signature.to_bytes()).into_string();
+    master_voucher.additional_signatures.push(additional_sig);
 
+    // Erstelle eine Transaktionskette, die auch einen Split enthält.
+    master_voucher = create_transaction(&master_voucher, &STANDARD, &ACTORS.issuer.user_id, &ACTORS.issuer.signing_key, &ACTORS.alice.user_id, "1000").unwrap();
+    master_voucher = create_transaction(&master_voucher, &STANDARD, &ACTORS.alice.user_id, &ACTORS.alice.signing_key, &ACTORS.bob.user_id, "500").unwrap(); // Split
 
-    let master_json_value = serde_json::to_value(&master_voucher).unwrap();
     let mut rng = thread_rng();
-    println!("--- Starte Fuzzing-Test mit 1000 Iterationen ---");
-    let iterations = 100;
+    println!("--- Starte intelligenten Fuzzing-Test mit 2000 Iterationen ---");
+    let iterations = 2000;
+
+    // Definiere die intelligenten und zufälligen Angriffsstrategien.
+    let strategies = [
+        FuzzingStrategy::InvalidateAdditionalSignature,
+        FuzzingStrategy::SetNegativeTransactionAmount,
+        FuzzingStrategy::SetNegativeRemainderAmount,
+        FuzzingStrategy::SetInitTransactionInWrongPosition,
+        FuzzingStrategy::GenericRandomMutation, // Behalte die alte Methode für allgemeine Zufälligkeit bei.
+        FuzzingStrategy::GenericRandomMutation, // Erhöhe die Wahrscheinlichkeit für zufällige Mutationen.
+    ];
 
     for i in 0..iterations {
-        let mut mutated_value = master_json_value.clone();
-        let change_description = mutate_value(&mut mutated_value, &mut rng, "voucher").unwrap_or_else(|| "No mutation occurred".to_string());
-        let deserialized_voucher: Voucher = match serde_json::from_value(mutated_value.clone()) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let validation_result = voucher_validation::validate_voucher_against_standard(&deserialized_voucher, &STANDARD);
+        let mut mutated_voucher = master_voucher.clone();
+        let strategy = strategies.choose(&mut rng).unwrap();
+        let change_description: String;
+
+        // Führe die gewählte Angriffsstrategie aus
+        match strategy {
+            FuzzingStrategy::InvalidateAdditionalSignature => {
+                change_description = mutate_invalidate_additional_signature(&mut mutated_voucher);
+            }
+            FuzzingStrategy::SetNegativeTransactionAmount => {
+                change_description = mutate_to_negative_amount(&mut mutated_voucher);
+            }
+            FuzzingStrategy::SetNegativeRemainderAmount => {
+                change_description = mutate_to_negative_remainder(&mut mutated_voucher);
+            }
+            FuzzingStrategy::SetInitTransactionInWrongPosition => {
+                change_description = mutate_init_to_wrong_position(&mut mutated_voucher);
+            }
+            FuzzingStrategy::GenericRandomMutation => {
+                // Konvertiere zu JSON, mutiere zufällig und konvertiere zurück
+                let mut as_value = serde_json::to_value(&mutated_voucher).unwrap();
+                change_description = mutate_value(&mut as_value, &mut rng, "voucher")
+                    .unwrap_or_else(|| "Generic mutation did not change anything".to_string());
+
+                if let Ok(v) = serde_json::from_value(as_value) {
+                    mutated_voucher = v;
+                } else {
+                    // Wenn die zufällige Mutation die Struktur so zerstört hat, dass sie nicht mehr
+                    // als Voucher geparst werden kann, ist das ein "erfolgreicher" Fund.
+                    // Wir können zur nächsten Iteration übergehen.
+                    println!("Iter {}: Generic mutation created invalid structure. OK.", i);
+                    continue;
+                }
+            }
+        }
+
+        let validation_result = voucher_validation::validate_voucher_against_standard(&mutated_voucher, &STANDARD);
         assert!(validation_result.is_err(),
-                "FUZZING-FEHLER bei Iteration {}: Eine Mutation hat die Validierung umgangen!\nÄnderung: {}\nMutierter Gutschein:\n{}",
-                i, change_description, serde_json::to_string_pretty(&mutated_value).unwrap()
+                "FUZZING-FEHLER bei Iteration {}: Eine Mutation hat die Validierung umgangen!\nStrategie: {:?}\nÄnderung: {}\nMutierter Gutschein:\n{}",
+                i, strategy, change_description, serde_json::to_string_pretty(&mutated_voucher).unwrap()
         );
     }
-    println!("--- Fuzzing-Test erfolgreich abgeschlossen ---");
+    println!("--- Intelligenter Fuzzing-Test erfolgreich abgeschlossen ---");
 }
