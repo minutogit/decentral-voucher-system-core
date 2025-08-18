@@ -3,8 +3,8 @@
 //! Definiert die Abstraktion für die persistente Speicherung von Wallet-Daten.
 //! Dies ermöglicht es, die Kernlogik von der konkreten Speichermethode zu entkoppeln.
 
+use crate::models::conflict::{FingerprintStore, ProofStore};
 use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
-use crate::models::fingerprint::FingerprintStore;
 pub mod file_storage;
 use thiserror::Error;
 
@@ -95,5 +95,17 @@ pub trait Storage {
         user_id: &str,
         password: &str,
         metadata: &BundleMetadataStore,
+    ) -> Result<(), StorageError>;
+
+
+    /// Lädt und entschlüsselt den ProofStore.
+    fn load_proofs(&self, user_id: &str, auth: &AuthMethod) -> Result<ProofStore, StorageError>;
+
+    /// Speichert und verschlüsselt den ProofStore.
+    fn save_proofs(
+        &mut self,
+        user_id: &str,
+        password: &str,
+        proof_store: &ProofStore,
     ) -> Result<(), StorageError>;
 }

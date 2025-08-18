@@ -50,6 +50,7 @@ fn test_voucher_archiving_on_full_spend() {
         voucher_store: Default::default(),
         bundle_meta_store: Default::default(),
         fingerprint_store: Default::default(),
+        proof_store: Default::default(),
     };
 
     // Erstelle Alices Archiv im temporären Verzeichnis.

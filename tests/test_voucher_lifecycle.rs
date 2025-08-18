@@ -41,7 +41,7 @@ use voucher_lib::services::{
 };
 use voucher_lib::archive::file_archive::FileVoucherArchive;
 use voucher_lib::crypto_utils::get_hash;
-use voucher_lib::models::fingerprint::FingerprintStore;
+use voucher_lib::models::conflict::FingerprintStore;
 use voucher_lib::models::profile::{
     BundleMetadataStore, UserIdentity, UserProfile, VoucherStatus, VoucherStore,
 };
@@ -827,6 +827,7 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
         voucher_store: VoucherStore::default(),
         bundle_meta_store: BundleMetadataStore::default(),
         fingerprint_store: FingerprintStore::default(),
+        proof_store: Default::default(),
     };
 
     let (bob_pub, bob_key) =
@@ -838,6 +839,7 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
         voucher_store: VoucherStore::default(),
         bundle_meta_store: BundleMetadataStore::default(),
         fingerprint_store: FingerprintStore::default(),
+        proof_store: Default::default(),
     };
 
     // --- 2. VOUCHER CREATION by Alice ---

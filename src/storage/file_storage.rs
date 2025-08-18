@@ -5,7 +5,7 @@
 
 use super::{AuthMethod, Storage, StorageError};
 use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
-use crate::models::fingerprint::FingerprintStore;
+use crate::models::conflict::{FingerprintStore, ProofStore};
 use crate::services::crypto_utils; 
 use argon2::Argon2;
 use rand_core::{OsRng, RngCore};
@@ -20,6 +20,7 @@ const PROFILE_FILE_NAME: &str = "profile.enc";
 const VOUCHER_STORE_FILE_NAME: &str = "vouchers.enc";
 const BUNDLE_META_FILE_NAME: &str = "bundles.meta.enc";
 const FINGERPRINT_STORE_FILE_NAME: &str = "fingerprints.enc";
+const PROOF_STORE_FILE_NAME: &str = "proofs.enc";
 
 /// Container für das verschlüsselte Nutzerprofil, inklusive Key-Wrapping-Informationen.
 #[derive(Serialize, Deserialize)]
@@ -46,6 +47,12 @@ struct BundleMetadataContainer {
 /// Container für den verschlüsselten Fingerprint-Store.
 #[derive(Serialize, Deserialize)]
 struct FingerprintStorageContainer {
+    encrypted_store_payload: Vec<u8>,
+}
+
+/// Container für den verschlüsselten Proof-Store.
+#[derive(Serialize, Deserialize)]
+struct ProofStorageContainer {
     encrypted_store_payload: Vec<u8>,
 }
 
@@ -392,6 +399,92 @@ impl Storage for FileStorage {
         let store_tmp_path = self.wallet_directory.join(format!("{}.tmp", BUNDLE_META_FILE_NAME));
         fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
         fs::rename(&store_tmp_path, &meta_path)?;
+
+        Ok(())
+    }
+
+    fn load_proofs(&self, _user_id: &str, auth: &AuthMethod) -> Result<ProofStore, StorageError> {
+        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
+        let proof_path = self.wallet_directory.join(PROOF_STORE_FILE_NAME);
+
+        if !profile_path.exists() {
+            return Err(StorageError::NotFound);
+        }
+
+        if !proof_path.exists() {
+            return Ok(ProofStore::default());
+        }
+
+        let profile_container_bytes = fs::read(&profile_path)?;
+        let profile_container: ProfileStorageContainer =
+            serde_json::from_slice(&profile_container_bytes)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+
+        let file_key_bytes = get_file_key(auth, &profile_container)?;
+        let file_key: [u8; KEY_SIZE] = file_key_bytes
+            .try_into()
+            .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
+
+        let proof_container_bytes = fs::read(proof_path)?;
+        let proof_container: ProofStorageContainer =
+            serde_json::from_slice(&proof_container_bytes)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+        
+        let store_bytes = crypto_utils::decrypt_data(&file_key, &proof_container.encrypted_store_payload)
+            .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt proof store: {}", e)))?;
+        
+        let store: ProofStore = serde_json::from_slice(&store_bytes)
+            .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+
+        Ok(store)
+    }
+
+    fn save_proofs(
+        &mut self,
+        _user_id: &str,
+        password: &str,
+        proof_store: &ProofStore,
+    ) -> Result<(), StorageError> {
+        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
+        let proof_path = self.wallet_directory.join(PROOF_STORE_FILE_NAME);
+
+        if !profile_path.exists() {
+            return Err(StorageError::NotFound);
+        }
+
+        let profile_container_bytes = fs::read(profile_path)?;
+        let profile_container: ProfileStorageContainer =
+            serde_json::from_slice(&profile_container_bytes)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+
+        let password_key =
+            derive_key_from_password(password, &profile_container.password_kdf_salt)?;
+        let file_key_bytes = crypto_utils::decrypt_data(
+            &password_key,
+            &profile_container.password_wrapped_key_with_nonce,
+        ).map_err(|_| StorageError::AuthenticationFailed)?;
+        
+        let file_key: [u8; KEY_SIZE] = file_key_bytes
+            .try_into()
+            .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
+
+        // Wenn der ProofStore leer ist, löschen wir die Datei, anstatt eine leere zu speichern.
+        if proof_store.proofs.is_empty() {
+            if proof_path.exists() {
+                fs::remove_file(proof_path)?;
+            }
+            return Ok(());
+        }
+
+        let store_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(proof_store).unwrap())
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+        let store_container = ProofStorageContainer {
+            encrypted_store_payload: store_payload,
+        };
+
+        let store_tmp_path = self.wallet_directory.join(format!("{}.tmp", PROOF_STORE_FILE_NAME));
+        fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
+        fs::rename(&store_tmp_path, &proof_path)?;
 
         Ok(())
     }

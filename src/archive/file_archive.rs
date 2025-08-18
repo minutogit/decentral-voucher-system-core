@@ -3,7 +3,7 @@
 //! Eine Implementierung des `VoucherArchive`-Traits, die jeden Gutschein-Zustand
 //! als separate JSON-Datei in einer strukturierten Verzeichnishierarchie speichert.
 
-use super::{ArchiveError, VoucherArchive};
+use super::{ArchiveError, VoucherArchive}; use crate::models::voucher::Transaction;
 use crate::models::voucher::Voucher;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::utils::to_canonical_json;
@@ -71,5 +71,42 @@ impl VoucherArchive for FileVoucherArchive {
         let file_content = fs::read(file_path)?;
         let voucher: Voucher = serde_json::from_slice(&file_content)?;
         Ok(voucher)
+    }
+
+    fn find_transaction_by_id(
+        &self,
+        t_id: &str,
+    ) -> Result<Option<(Voucher, Transaction)>, ArchiveError> {
+        for entry in fs::read_dir(&self.archive_directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |s| s == "json") {
+                let file_content = fs::read(path)?;
+                // Wir ignorieren Deserialisierungsfehler bei einzelnen Dateien,
+                // um das Archiv robust gegenüber korrupten Einträgen zu machen.
+                if let Ok(voucher) = serde_json::from_slice::<Voucher>(&file_content) {
+                    if let Some(tx) = voucher.transactions.iter().find(|t| t.t_id == t_id) {
+                        return Ok(Some((voucher.clone(), tx.clone())));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn find_voucher_by_tx_id(&self, t_id: &str) -> Result<Option<Voucher>, ArchiveError> {
+        for entry in fs::read_dir(&self.archive_directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |s| s == "json") {
+                let file_content = fs::read(path)?;
+                if let Ok(voucher) = serde_json::from_slice::<Voucher>(&file_content) {
+                    if voucher.transactions.iter().any(|t| t.t_id == t_id) {
+                        return Ok(Some(voucher));
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 }

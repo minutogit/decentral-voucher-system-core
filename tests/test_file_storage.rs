@@ -6,7 +6,7 @@
 use voucher_lib::archive::file_archive::FileVoucherArchive;
 use rust_decimal::Decimal;
 use voucher_lib::error::VoucherCoreError;
-use voucher_lib::models::fingerprint::FingerprintStore;
+use voucher_lib::models::conflict::FingerprintStore;
 use voucher_lib::models::profile::{ 
     BundleMetadataStore, UserIdentity, UserProfile, VoucherStatus, VoucherStore,
 };
@@ -34,6 +34,7 @@ fn create_new_wallet_and_identity(prefix: &str, seed: &str) -> (Wallet, UserIden
         voucher_store: VoucherStore::default(),
         bundle_meta_store: BundleMetadataStore::default(),
         fingerprint_store: FingerprintStore::default(),
+        proof_store: Default::default(),
     };
     (wallet, identity)
 }

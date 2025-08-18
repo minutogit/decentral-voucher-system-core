@@ -12,7 +12,7 @@ use std::fs;
 use voucher_lib::archive::file_archive::FileVoucherArchive;
 use lazy_static::lazy_static;
 use std::path::Path;
-use voucher_lib::models::fingerprint::TransactionFingerprint;
+use voucher_lib::models::conflict::TransactionFingerprint;
 use voucher_lib::models::profile::{BundleMetadataStore, UserIdentity, VoucherStatus};
 use voucher_lib::models::voucher::{Address, Collateral, Creator, NominalValue, Voucher};
 use voucher_lib::services::crypto_utils::{create_user_id, get_hash};
@@ -79,6 +79,7 @@ fn setup_test_wallet(identity: &UserIdentity, _name: &str, _storage_dir: &Path) 
         voucher_store: Default::default(),
         bundle_meta_store: BundleMetadataStore::default(),
         fingerprint_store: Default::default(),
+        proof_store: Default::default(),
     }
 }
 
@@ -305,6 +306,7 @@ fn test_proactive_double_spend_prevention_in_wallet() {
 fn test_local_double_spend_detection_lifecycle() {
     let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_path = temp_dir.path();
+    let archive = FileVoucherArchive::new(storage_path.join("archive"));
     let standard = load_test_standard();
 
     // ### Akt 1: Initialisierung & Erster Transfer ###
@@ -329,9 +331,9 @@ fn test_local_double_spend_detection_lifecycle() {
         &bob_identity.user_id,
         "100",
         None,
-        None::<&FileVoucherArchive>,
+        Some(&archive),
     ).unwrap();
-    bob_wallet.process_encrypted_transaction_bundle(bob_identity, &bundle_to_bob, None::<&FileVoucherArchive>).unwrap();
+    bob_wallet.process_encrypted_transaction_bundle(bob_identity, &bundle_to_bob, Some(&archive)).unwrap();
 
     assert_eq!(alice_wallet.voucher_store.vouchers.len(), 1, "Alices Wallet muss den gesendeten Gutschein als 'Archived' behalten.");
     let (_, status) = alice_wallet.voucher_store.vouchers.values().next().unwrap();
@@ -354,12 +356,12 @@ fn test_local_double_spend_detection_lifecycle() {
 
     // Er verpackt und sendet die erste betrügerische Version an Charlie. Hierfür nutzt er die alte Methode.
     let bundle_to_charlie = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_charlie.clone()], &charlie_identity.user_id, None).unwrap();
-    charlie_wallet.process_encrypted_transaction_bundle(charlie_identity, &bundle_to_charlie, None::<&FileVoucherArchive>).unwrap();
-    
+    charlie_wallet.process_encrypted_transaction_bundle(charlie_identity, &bundle_to_charlie, Some(&archive)).unwrap();
+
     // Um den zweiten Betrug zu ermöglichen, setzt er den Zustand seines Wallets künstlich zurück.
     bob_wallet.add_voucher_to_store(voucher_from_bob, VoucherStatus::Active, &bob_identity.user_id).unwrap();
     let bundle_to_david = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_david.clone()], &david_identity.user_id, None).unwrap();
-    david_wallet.process_encrypted_transaction_bundle(david_identity, &bundle_to_david, None::<&FileVoucherArchive>).unwrap();
+    david_wallet.process_encrypted_transaction_bundle(david_identity, &bundle_to_david, Some(&archive)).unwrap();
 
     assert_eq!(charlie_wallet.voucher_store.vouchers.len(), 1);
     assert_eq!(david_wallet.voucher_store.vouchers.len(), 1);
@@ -377,9 +379,9 @@ fn test_local_double_spend_detection_lifecycle() {
         &alice_identity.user_id,
         "100",
         None,
-        None::<&FileVoucherArchive>
+        Some(&archive)
     ).unwrap();
-    
+
     println!("\n[Debug Test] Alices Wallet VOR dem Empfang von Charlie:");
     for (id, (voucher, status)) in &alice_wallet.voucher_store.vouchers {
         println!("  -> Vorhanden: ID={}, Status={:?}, Tx-Anzahl={}", id, status, voucher.transactions.len());
@@ -387,7 +389,7 @@ fn test_local_double_spend_detection_lifecycle() {
     println!("[Debug Test] Verarbeite jetzt Bündel von Charlie...");
 
     let result1 = alice_wallet
-        .process_encrypted_transaction_bundle(alice_identity, &bundle_to_alice_1, None::<&FileVoucherArchive>)
+        .process_encrypted_transaction_bundle(alice_identity, &bundle_to_alice_1, Some(&archive))
         .unwrap();
     assert_eq!(alice_wallet.voucher_store.vouchers.len(), 2, "Alice muss jetzt einen 'Archived' und einen 'Active' Gutschein haben.");
     assert!(result1.check_result.verifiable_conflicts.is_empty(), "Nach dem ersten zurückerhaltenen Gutschein darf es noch keinen Konflikt geben.");
@@ -411,11 +413,11 @@ fn test_local_double_spend_detection_lifecycle() {
         &alice_identity.user_id,
         "100",
         None,
-        None::<&FileVoucherArchive>
+        Some(&archive)
     ).unwrap();
 
     let result2 = alice_wallet
-        .process_encrypted_transaction_bundle(alice_identity, &bundle_to_alice_2, None::<&FileVoucherArchive>)
+        .process_encrypted_transaction_bundle(alice_identity, &bundle_to_alice_2, Some(&archive))
         .unwrap();
 
     // Assertions
@@ -434,7 +436,7 @@ fn test_local_double_spend_detection_lifecycle() {
         &id_to_be_quarantined,
         &bob_identity.user_id,
         "100", None, // notes
-        None::<&FileVoucherArchive> // archive
+        Some(&archive) // archive
     );
     assert!(transfer_attempt.is_err(), "Die Verwendung eines unter Quarantäne stehenden Gutscheins via create_transfer muss fehlschlagen.");
 

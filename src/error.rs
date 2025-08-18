@@ -100,4 +100,12 @@ pub enum VoucherCoreError {
     /// Die proaktive, lokale Prüfung hat einen versuchten Double Spend verhindert.
     #[error("Double spend attempt blocked: A transaction has already been issued from this voucher state.")]
     DoubleSpendAttemptBlocked,
+
+    /// Ein Fehler bei der Base58-Dekodierung.
+    #[error("Base58 decode error: {0}")]
+    Bs58Decode(#[from] bs58::decode::Error),
+
+    /// Ein Fehler in der ed25519-Kryptographiebibliothek.
+    #[error("Ed25519 crypto error: {0}")]
+    Ed25519(#[from] ed25519_dalek::ed25519::Error),
 }
