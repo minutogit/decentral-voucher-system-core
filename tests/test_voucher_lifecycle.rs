@@ -866,25 +866,16 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     assert!(alice_wallet.voucher_store.vouchers.contains_key(&local_id));
 
     // --- 3. SECURE TRANSFER from Alice to Bob ---
-    // Zuerst muss eine Transaktion auf dem Gutschein erstellt werden, die den Besitz überträgt.
-    let (voucher_to_transfer, _) = alice_wallet.voucher_store.vouchers.get(&local_id).unwrap();
-    let updated_voucher = create_transaction(
-        voucher_to_transfer,
-        &standard,
-        &alice_identity.user_id,
-        &alice_identity.signing_key,
-        &bob_identity.user_id,
-        &voucher_to_transfer.nominal_value.amount, // Transfer the full amount
-    )
-    .expect("Failed to create transfer transaction");
-
-    // Sende den Gutschein mit der neuen Transaktion im Bündel.
-    let vouchers_to_send = vec![updated_voucher];
-    let encrypted_bundle_for_bob = alice_wallet.create_and_encrypt_transaction_bundle(
+    // Anstatt die Transaktion manuell zu erstellen und zu bündeln, verwenden wir die
+    // öffentliche `create_transfer`-Methode, die die Zustandsverwaltung (Archivierung) korrekt durchführt.
+    let (encrypted_bundle_for_bob, _) = alice_wallet.create_transfer(
         &alice_identity,
-        vouchers_to_send,
+        &standard,
+        &local_id,
         &bob_identity.user_id,
+        "500", // Sende den vollen Betrag
         Some("Here is the voucher I promised!".to_string()),
+        None::<&FileVoucherArchive>,
     ).unwrap();
 
     // Der Gutschein wird nicht entfernt, sondern archiviert. Wir prüfen den Status.

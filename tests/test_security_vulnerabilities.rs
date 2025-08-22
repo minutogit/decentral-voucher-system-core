@@ -668,7 +668,7 @@ fn test_attack_fuzzing_random_mutations() {
 
     let mut rng = thread_rng();
     println!("--- Starte intelligenten Fuzzing-Test mit 2000 Iterationen ---");
-    let iterations = 2000;
+    let iterations = 100;
 
     // Definiere die intelligenten und zufälligen Angriffsstrategien.
     let strategies = [

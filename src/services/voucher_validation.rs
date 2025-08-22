@@ -514,7 +514,7 @@ pub fn get_spendable_balance(
     user_id: &str,
     standard: &VoucherStandardDefinition,
 ) -> Result<Decimal, VoucherCoreError> {
-    let decimal_places = standard.validation.amount_decimal_places as u32;
+    let _decimal_places = standard.validation.amount_decimal_places as u32;
     let mut balance = Decimal::ZERO;
 
     // Für die schnelle Guthabenprüfung eines bestimmten Nutzers ist nur die letzte Transaktion relevant.

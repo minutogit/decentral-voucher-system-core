@@ -299,7 +299,9 @@ fn test_save_and_load_with_bundle_history() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let mut storage = FileStorage::new(temp_dir.path());
     let password = "strongpassword123";
-    let standard = load_test_standard();
+    // Lade den Silber-Standard, der keine Bürgen erfordert.
+    let silver_toml_str = include_str!("../voucher_standards/silver_standard.toml");
+    let standard = voucher_manager::load_standard_definition(silver_toml_str).expect("Failed to load silver standard");
 
     // Erstelle Sender (Alice) und Empfänger (Bob)
     let (mut alice_wallet, alice_identity) =
