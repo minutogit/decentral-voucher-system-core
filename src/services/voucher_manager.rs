@@ -66,6 +66,7 @@ pub fn load_standard_definition(toml_str: &str) -> Result<VoucherStandardDefinit
 
 /// Eine Hilfsstruktur, die alle notwendigen Daten zur Erstellung eines neuen Gutscheins bündelt.
 /// Dies vereinfacht die Signatur der `create_voucher` Funktion.
+#[derive(Default)]
 pub struct NewVoucherData {
     /// Eine vom Ersteller optional angegebene Gültigkeitsdauer im ISO 8601 Duration Format (z.B. "P1Y").
     pub validity_duration: Option<String>,

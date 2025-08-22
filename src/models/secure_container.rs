@@ -17,6 +17,8 @@ pub enum PayloadType {
     TransactionBundle,
     /// Der Payload ist ein `Voucher`, der einem Bürgen zur Signierung vorgelegt wird.
     VoucherForSigning,
+    /// Der Payload ist eine `DetachedSignature`-Antwort im Signatur-Workflow.
+    DetachedSignature,
     /// Der Payload ist eine `TrustAssertion` für das Web-of-Trust.
     TrustAssertion,
     /// Ein generischer Typ für zukünftige, noch nicht definierte Anwendungsfälle.

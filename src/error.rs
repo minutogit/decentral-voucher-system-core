@@ -108,4 +108,8 @@ pub enum VoucherCoreError {
     /// Ein Fehler in der ed25519-Kryptographiebibliothek.
     #[error("Ed25519 crypto error: {0}")]
     Ed25519(#[from] ed25519_dalek::ed25519::Error),
+
+    /// Die Daten in einer Signatur (z.B. voucher_id) stimmen nicht mit dem Kontext überein.
+    #[error("Mismatched signature data: {0}")]
+    MismatchedSignatureData(String),
 }

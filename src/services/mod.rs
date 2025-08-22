@@ -5,3 +5,5 @@ pub mod secure_container_manager;
 pub mod voucher_manager;
 pub mod conflict_manager;
 pub mod bundle_processor;
+
+pub mod signature_manager;

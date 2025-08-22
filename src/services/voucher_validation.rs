@@ -59,6 +59,8 @@ pub enum ValidationError {
     SignatureDecodeError(String),
     /// Die Signatur eines Transaktionsbündels (`TransactionBundle`) ist ungültig.
     InvalidBundleSignature,
+    /// Die digitale Signatur ist kryptographisch ungültig.
+    InvalidSignature(String),
 }
 
 impl fmt::Display for ValidationError {
@@ -82,6 +84,7 @@ impl fmt::Display for ValidationError {
             Self::DateParseError(e) => write!(f, "Failed to parse date: {}", e),
             Self::SignatureDecodeError(e) => write!(f, "Failed to decode signature: {}", e),
             Self::InvalidBundleSignature => write!(f, "The transaction bundle signature is invalid"),
+            Self::InvalidSignature(signer_id) => write!(f, "Invalid digital signature for signer: {}", signer_id),
         }
     }
 }
