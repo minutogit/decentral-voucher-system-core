@@ -2,14 +2,11 @@
 //!
 //! Eine Implementierung des `VoucherArchive`-Traits, die jeden Gutschein-Zustand
 //! als separate JSON-Datei in einer strukturierten Verzeichnishierarchie speichert.
-
-use super::{ArchiveError, VoucherArchive}; use crate::models::voucher::Transaction;
+use super::{ArchiveError, VoucherArchive};
+use crate::models::voucher::Transaction;
 use crate::models::voucher::Voucher;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
-use crate::services::utils::to_canonical_json;
-use crate::services::voucher_validation::get_spendable_balance;
-use rust_decimal::Decimal;
-use std::{fs, path::PathBuf};
+use crate::services::utils::to_canonical_json; use std::{fs, path::PathBuf};
 
 /// Eine Implementierung des `VoucherArchive`-Traits, die auf dem Dateisystem basiert.
 ///
@@ -25,40 +22,42 @@ impl FileVoucherArchive {
             archive_directory: path.into(),
         }
     }
+
+    // TODO: Eine Bereinigungsfunktion (`purge_deep_archive`) implementieren,
+    //       die Zustände nach Ablauf einer Aufbewahrungsfrist löscht.
 }
 
 impl VoucherArchive for FileVoucherArchive {
     fn archive_voucher(
         &self,
         voucher: &Voucher,
-        owner_id: &str,
-        standard: &VoucherStandardDefinition,
-    ) -> Result<bool, ArchiveError> {
-        let balance = get_spendable_balance(voucher, owner_id, standard)
-            .map_err(|e| ArchiveError::Generic(e.to_string()))?;
+        _owner_id: &str,
+        _standard: &VoucherStandardDefinition,
+    ) -> Result<(), ArchiveError> {
+        // TODO: Die Archiv-Dateien sollten verschlüsselt werden.
 
-        // Nur archivieren, wenn kein Guthaben mehr vorhanden ist.
-        if balance > Decimal::ZERO {
-            return Ok(false);
-        }
+        // Jeder Zustand wird durch die ID der letzten Transaktion eindeutig identifiziert.
+        let last_tx = voucher.transactions.last().ok_or_else(|| {
+            ArchiveError::Generic("Cannot archive voucher with no transactions.".to_string())
+        })?;
 
-        // Speichere den Gutschein als eine einzelne Datei.
-        let file_path = self.archive_directory.join(format!("{}.json", &voucher.voucher_id));
+        // Erstelle ein Unterverzeichnis für jeden Gutschein, um die Zustände zu gruppieren.
+        let voucher_dir = self.archive_directory.join(&voucher.voucher_id);
+        fs::create_dir_all(&voucher_dir)?;
+
+        let file_path = voucher_dir.join(format!("{}.json", &last_tx.t_id));
         if file_path.exists() {
-            return Ok(true); // Bereits archiviert.
+            return Ok(()); // Bereits archiviert, alles in Ordnung.
         }
 
-        fs::create_dir_all(&self.archive_directory)?;
         let json_content = to_canonical_json(voucher)?;
 
         // Atomares Schreiben
-        let temp_file_path = self
-            .archive_directory
-            .join(format!("{}.json.tmp", &voucher.voucher_id));
+        let temp_file_path = voucher_dir.join(format!("{}.json.tmp", &last_tx.t_id));
         fs::write(&temp_file_path, json_content)?;
         fs::rename(&temp_file_path, &file_path)?;
 
-        Ok(true)
+        Ok(())
     }
 
     fn get_archived_voucher(&self, voucher_id: &str) -> Result<Voucher, ArchiveError> {
@@ -77,36 +76,33 @@ impl VoucherArchive for FileVoucherArchive {
         &self,
         t_id: &str,
     ) -> Result<Option<(Voucher, Transaction)>, ArchiveError> {
-        for entry in fs::read_dir(&self.archive_directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |s| s == "json") {
-                let file_content = fs::read(path)?;
-                // Wir ignorieren Deserialisierungsfehler bei einzelnen Dateien,
-                // um das Archiv robust gegenüber korrupten Einträgen zu machen.
-                if let Ok(voucher) = serde_json::from_slice::<Voucher>(&file_content) {
-                    if let Some(tx) = voucher.transactions.iter().find(|t| t.t_id == t_id) {
-                        return Ok(Some((voucher.clone(), tx.clone())));
+        // Durchsuche alle Unterverzeichnisse (jedes `voucher_id`-Verzeichnis).
+        for voucher_dir_entry in fs::read_dir(&self.archive_directory)? {
+            let voucher_dir_path = voucher_dir_entry?.path();
+            if voucher_dir_path.is_dir() {
+                for entry in fs::read_dir(voucher_dir_path)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_file() && path.extension().map_or(false, |s| s == "json") {
+                        if let Ok(voucher) =
+                            serde_json::from_slice::<Voucher>(&fs::read(&path)?)
+                        {
+                            if let Some(tx) = voucher.transactions.iter().find(|t| t.t_id == t_id) {
+                                return Ok(Some((voucher.clone(), tx.clone())));
+                            }
+                        }
                     }
                 }
             }
         }
         Ok(None)
     }
-
     fn find_voucher_by_tx_id(&self, t_id: &str) -> Result<Option<Voucher>, ArchiveError> {
-        for entry in fs::read_dir(&self.archive_directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |s| s == "json") {
-                let file_content = fs::read(path)?;
-                if let Ok(voucher) = serde_json::from_slice::<Voucher>(&file_content) {
-                    if voucher.transactions.iter().any(|t| t.t_id == t_id) {
-                        return Ok(Some(voucher));
-                    }
-                }
-            }
+        // Nutze die bereits vorhandene Logik von `find_transaction_by_id`.
+        if let Some((voucher, _)) = self.find_transaction_by_id(t_id)? {
+            Ok(Some(voucher))
+        } else {
+            Ok(None)
         }
-        Ok(None)
     }
 }

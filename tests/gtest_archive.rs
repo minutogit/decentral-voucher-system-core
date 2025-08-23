@@ -3,7 +3,7 @@
 //! Testet die Funktionalität des `VoucherArchive`-Traits und der `FileVoucherArchive`-Implementierung.
 
 use voucher_lib::{
-    archive::{file_archive::FileVoucherArchive, VoucherArchive},
+    archive::file_archive::FileVoucherArchive,
     models::{
         profile::{UserIdentity, UserProfile},
         voucher::{Address, Creator, NominalValue},
@@ -115,14 +115,19 @@ fn test_voucher_archiving_on_full_spend() {
         .expect("Transfer with archive should succeed.");
 
     // 3. VERIFIZIERUNG
-    // Prüfe, ob das Archiv-System die korrekte Datei angelegt hat.
-    let expected_file_path = temp_dir.path().join(format!("{}.json", voucher_id));
+    // Prüfe, ob das Archiv-System die korrekte Datei im korrekten Unterverzeichnis angelegt hat.
+    let last_tx = transferred_voucher_state.transactions.last().unwrap();
+    let expected_file_path = temp_dir
+        .path()
+        .join(&voucher_id)
+        .join(format!("{}.json", &last_tx.t_id));
+
     assert!(expected_file_path.exists(), "Archive file was not created.");
 
-    // Lade den Gutschein direkt aus dem Archiv und überprüfe ihn.
-    let archived_voucher = archive
-        .get_archived_voucher(&voucher_id)
-        .expect("Should be able to retrieve the voucher from archive.");
+    // Lade den Inhalt der archivierten Datei und vergleiche ihn.
+    let archived_content = fs::read(expected_file_path).unwrap();
+    let archived_voucher: voucher_lib::models::voucher::Voucher =
+        serde_json::from_slice(&archived_content).unwrap();
 
     // Der archivierte Gutschein muss exakt dem Zustand entsprechen, den die `create_transfer`-Funktion zurückgegeben hat.
     assert_eq!(archived_voucher, transferred_voucher_state);

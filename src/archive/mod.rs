@@ -31,22 +31,22 @@ pub enum ArchiveError {
 /// dient das `VoucherArchive` dazu, *jeden jemals gesehenen* Zustand eines Gutscheins
 /// zu speichern, um eine lückenlose Historie für forensische Analysen zu schaffen.
 pub trait VoucherArchive {
-    /// Prüft, ob der Gutschein für den `owner_id` kein Guthaben mehr aufweist,
-    /// und speichert ihn in diesem Fall im Archiv.
+    /// Speichert eine Kopie des übergebenen Gutschein-Zustands bedingungslos im Archiv.
+    ///
+    /// Diese Methode dient der forensischen Protokollierung. Jeder relevante Zustand
+    /// eines Gutscheins (z.B. bei Empfang oder nach Erstellung einer neuen Transaktion)
+    /// wird hier abgelegt, um eine lückenlose und überprüfbare Historie zu schaffen.
     ///
     /// # Arguments
-    /// * `voucher` - Der zu prüfende und ggf. zu archivierende Gutschein.
-    /// * `owner_id` - Die ID des Nutzers, dessen Guthaben geprüft werden soll.
-    /// * `standard` - Die Standard-Definition, die für die Guthaben-Berechnung benötigt wird.
-    ///
-    /// # Returns
-    /// `Ok(true)`, wenn der Gutschein archiviert wurde, `Ok(false)`, wenn noch Guthaben vorhanden war.
+    /// * `voucher` - Der Gutschein-Zustand, der archiviert werden soll.
+    /// * `owner_id` - Die ID des Nutzers, in dessen Kontext die Archivierung stattfindet.
+    /// * `standard` - Die zugehörige Standard-Definition des Gutscheins.
     fn archive_voucher(
         &self,
         voucher: &Voucher,
         owner_id: &str,
         standard: &VoucherStandardDefinition,
-    ) -> Result<bool, ArchiveError>;
+    ) -> Result<(), ArchiveError>;
 
     /// Ruft einen archivierten Gutschein anhand seiner ID ab.
     fn get_archived_voucher(&self, voucher_id: &str) -> Result<Voucher, ArchiveError>;
