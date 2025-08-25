@@ -18,6 +18,7 @@ abbreviation = "Minuto"                # Gängige Abkürzung.
 description = "Ein Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Minuten qualitativer Leistung."
 footnote = "Gutschein-Nutzung nur für Mitspieler/innen."
 primary_redemption_type = "goods_or_services"
+is_fungible = true
 is_divisible = true
 round_up_validity_to = "P1Y" # Gültigkeit auf Jahresende aufrunden.
 

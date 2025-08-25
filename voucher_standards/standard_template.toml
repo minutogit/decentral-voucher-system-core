@@ -60,6 +60,13 @@ footnote = "Optionaler Fußnotentext."
 # z.B. "goods_or_services", "specific_product", "community_work"
 primary_redemption_type = "goods_or_services"
 
+# (Boolean) Gibt an, ob die Nennwerte von Gutscheinen dieses Standards "fungibel"
+# sind, d.h. ob sie austauschbar sind und ihre Beträge sinnvoll addiert werden können.
+# `true`: Ja (z.B. "10 Minuten" + "20 Minuten" = "30 Minuten").
+# `false`: Nein (z.B. ein Gutschein für "1 Kuchen" und einer für "1 Stunde Hilfe"
+#          können nicht zu "2 Etwas" addiert werden, auch wenn sie den gleichen Standard nutzen).
+is_fungible = true
+
 # (Boolean) Gibt an, ob der Gutschein teilbar ist (`true`) oder nur als
 # Ganzes eingelöst werden kann (`false`).
 is_divisible = true

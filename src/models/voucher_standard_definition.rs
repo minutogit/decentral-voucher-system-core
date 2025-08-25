@@ -43,6 +43,8 @@ pub struct TemplateFixed {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub footnote: Option<String>,
     pub primary_redemption_type: String,
+    /// Gibt an, ob die Nennwerte von Gutscheinen dieses Standards untereinander austauschbar und addierbar sind.
+    pub is_fungible: bool,
     pub is_divisible: bool,
     pub nominal_value: TemplateNominalValue,
     pub collateral: TemplateCollateral,

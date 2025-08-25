@@ -16,6 +16,7 @@ abbreviation = "Oz"                # Gängige Abkürzung für Unzen.
 [template.fixed]
 description = "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von {{amount}} Unzen Silber."
 primary_redemption_type = "goods_or_services"
+is_fungible = true
 is_divisible = true
 # Kein 'round_up_validity_to', daher exaktes Datum.
 
