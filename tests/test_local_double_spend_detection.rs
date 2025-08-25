@@ -257,7 +257,8 @@ fn test_proactive_double_spend_prevention_in_wallet() {
     // Sender erhält einen initialen Gutschein.
     let voucher_data = new_test_voucher_data(sender_identity.user_id.clone());
     let initial_voucher = voucher_manager::create_voucher(voucher_data, &standard, &sender_identity.signing_key).unwrap();
-    sender_wallet.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &sender_identity.user_id).unwrap();
+    // Wir klonen den Gutschein hier, damit die 'initial_voucher'-Variable für den späteren Test gültig bleibt.
+    sender_wallet.add_voucher_to_store(initial_voucher.clone(), VoucherStatus::Active, &sender_identity.user_id).unwrap();
     let initial_local_id = sender_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
 
     // ### Akt 1: Legitime Transaktion ###
@@ -275,15 +276,15 @@ fn test_proactive_double_spend_prevention_in_wallet() {
     assert!(transfer1_result.is_ok(), "Die erste Transaktion sollte erfolgreich sein.");
     assert_eq!(sender_wallet.fingerprint_store.own_fingerprints.len(), 1, "Ein Fingerprint sollte nach der ersten Transaktion existieren.");
 
-    // ### Akt 2: Manuelle Manipulation für den Betrugsversuch ###
-    // Wir simulieren, dass der Sender versucht, denselben Gutschein erneut auszugeben.
-    // Dafür setzen wir den Status des archivierten Gutscheins manuell zurück auf 'Active'.
-    // Dies ahmt einen Angreifer oder einen Wallet-Bug nach.
-    sender_wallet.voucher_store.vouchers.get_mut(&initial_local_id).unwrap().1 = VoucherStatus::Active;
+    // ### Akt 2: Manuelle Manipulation für einen Betrugsversuch ###
+    // Wir simulieren, dass der Sender versucht, denselben ursprünglichen Gutschein-Zustand erneut auszugeben.
+    // Da create_transfer die ursprüngliche Instanz (`initial_local_id`) entfernt hat, fügen wir sie manuell
+    // wieder hinzu. Dies ahmt einen Angreifer nach, der einen alten Wallet-Zustand wiederherstellt. 
+    sender_wallet.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &sender_identity.user_id).unwrap();
 
     // ### Akt 3: Der blockierte Double-Spend-Versuch ###
-    // Sender versucht, den "wiederhergestellten" Gutschein an Empfänger 2 zu senden.
-    // Dies MUSS fehlschlagen, weil `create_transfer` den existierenden Fingerprint erkennt.
+    // Sender versucht, den wiederhergestellten, ursprünglichen Gutschein an Empfänger 2 zu senden.
+    // Dies MUSS fehlschlagen, weil `create_transfer` den existierenden Fingerprint aus der ersten Transaktion erkennt.
     let transfer2_result = sender_wallet.create_transfer(
         sender_identity,
         &standard,

@@ -518,14 +518,14 @@ fn test_wallet_state_management_on_split() {
     wallet_b.process_encrypted_transaction_bundle(&b_identity, &bundle_to_b, None::<&FileVoucherArchive>).unwrap();
 
     // 4. Verifizierung (Wallet A)
-    assert_eq!(wallet_a.voucher_store.vouchers.len(), 2, "Wallet A should have two instances (original archived, new remainder active)");
-
-    let (_, original_status) = wallet_a.voucher_store.vouchers.get(&original_local_id).unwrap();
-    assert_eq!(*original_status, VoucherStatus::Archived, "Original voucher instance must be archived.");
+    // NACH ÄNDERUNG: Wallet A sollte jetzt nur noch EINE Instanz haben - den aktiven Restbetrag.
+    // Die ursprüngliche Instanz wird gelöscht, nicht archiviert.
+    assert_eq!(wallet_a.voucher_store.vouchers.len(), 1, "Wallet A should have exactly one instance (the active remainder).");
+    assert!(wallet_a.voucher_store.vouchers.get(&original_local_id).is_none(), "The original voucher instance must be removed.");
 
     let (remainder_voucher, remainder_status) = wallet_a.voucher_store.vouchers.values()
-        .find(|(_, status)| *status == VoucherStatus::Active)
-        .expect("Wallet A must have one active remainder voucher.");
+        .next()
+        .expect("Wallet A must have one voucher instance left.");
     assert_eq!(*remainder_status, VoucherStatus::Active);
 
     let remainder_balance = get_spendable_balance(remainder_voucher, &a_identity.user_id, &standard).unwrap();

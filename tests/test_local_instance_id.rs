@@ -128,15 +128,13 @@ fn test_local_id_after_full_transfer() {
 
     assert_eq!(local_id_recipient, expected_hash);
 
-    // Der ursprüngliche Besitzer hat kein Guthaben mehr, die Berechnung sollte fehlschlagen.
+    // ID für den ursprünglichen Besitzer (jetzt archiviert)
+    // NACH ÄNDERUNG: Die ID muss nun auf der Transfer-Transaktion basieren, da der Creator dort der Sender war.
     let result_creator = Wallet::calculate_local_instance_id(&voucher, creator_id);
-    // NACH ÄNDERUNG: Die Funktion soll jetzt erfolgreich sein und eine ID basierend auf der
-    // letzten Transaktion zurückgeben, bei der der Creator einen positiven Saldo hatte (die init-Transaktion).
     assert!(result_creator.is_ok());
     let creators_archived_id = result_creator.unwrap();
-    let expected_archived_string =
-        format!("{}{}{}", voucher.voucher_id, "t-init-abc", creator_id);
-    assert_eq!(creators_archived_id, get_hash(expected_archived_string));
+    let expected_archived_string = format!("{}{}{}", voucher.voucher_id, "t-transfer-def", creator_id);
+    assert_eq!(creators_archived_id, get_hash(expected_archived_string), "Die archivierte ID des Erstellers sollte auf der Transfer-Transaktion basieren.");
 }
 
 /// Testet die `local_instance_id` für Sender und Empfänger nach einer Teilung (Split).
@@ -223,10 +221,13 @@ fn test_local_id_changes_on_round_trip() {
     let _bobs_id = Wallet::calculate_local_instance_id(&voucher, bob_id)
         .expect("Bob should now own the voucher");
     let alice_result_after_send = Wallet::calculate_local_instance_id(&voucher, alice_id);
-    // NACH ÄNDERUNG: Alice's Aufruf muss erfolgreich sein und ihre alte ID zurückgeben.
+    // NACH ÄNDERUNG: Alice's Aufruf muss erfolgreich sein und eine NEUE ID zurückgeben, die
+    // auf der Transaktion basiert, bei der sie die Senderin war.
     assert!(alice_result_after_send.is_ok());
     let alice_archived_id = alice_result_after_send.unwrap();
-    assert_eq!(initial_alice_id, alice_archived_id, "Alice's archived ID should be her initial ID.");
+    assert_ne!(initial_alice_id, alice_archived_id, "Alice's archived ID should NOT be her initial ID.");
+    let expected_archived_string = format!("{}{}{}", voucher.voucher_id, "t-alice-to-bob", alice_id);
+    assert_eq!(alice_archived_id, get_hash(expected_archived_string), "Alice's archived ID should be based on the transaction to Bob.");
 
     // 4. Bob sendet den Gutschein zurück an Alice
     let tx_to_alice = Transaction {

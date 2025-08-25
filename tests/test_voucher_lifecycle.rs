@@ -878,9 +878,10 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
         None::<&FileVoucherArchive>,
     ).unwrap();
 
-    // Der Gutschein wird nicht entfernt, sondern archiviert. Wir prüfen den Status.
-    let (_, status) = alice_wallet.voucher_store.vouchers.get(&local_id).expect("Voucher should still be in wallet");
-    assert_eq!(*status, VoucherStatus::Archived, "Voucher status should be Archived after sending.");
+    // NACH ÄNDERUNG: Die alte Instanz wird gelöscht. Es sollte nur noch eine neue, archivierte Instanz im Wallet sein.
+    assert_eq!(alice_wallet.voucher_store.vouchers.len(), 1, "Alice's wallet should contain exactly one (archived) voucher instance.");
+    let (_, status) = alice_wallet.voucher_store.vouchers.values().next().unwrap();
+    assert_eq!(*status, VoucherStatus::Archived, "The remaining voucher's status should be Archived after sending.");
     assert_eq!(
         alice_wallet.bundle_meta_store.history.len(),
         1,

@@ -256,11 +256,13 @@ impl Wallet {
     ) -> Result<String, VoucherCoreError> {
         let mut ownership_defining_tx_id: Option<String> = None;
 
+        // Suche rückwärts nach der letzten Transaktion, die dem Profilinhaber zu tun hat.
         for tx in voucher.transactions.iter().rev() {
             let is_recipient = tx.recipient_id == profile_owner_id;
-            let is_sender_with_remainder = tx.sender_id == profile_owner_id && tx.sender_remaining_amount.is_some();
+            let is_sender = tx.sender_id == profile_owner_id;
 
-            if is_recipient || is_sender_with_remainder {
+            // Eine neue ID wird definiert, wenn der User den Gutschein empfängt ODER sendet.
+            if is_recipient || is_sender {
                 ownership_defining_tx_id = Some(tx.t_id.clone());
                 break;
             }
@@ -287,26 +289,29 @@ impl Wallet {
         notes: Option<String>,
         archive: Option<&impl VoucherArchive>,
     ) -> Result<(Vec<u8>, Voucher), VoucherCoreError> {
+        // 1. Gutschein aus dem Store holen und Status prüfen.
         let (voucher_to_spend, status) = self
             .voucher_store
             .vouchers
             .get(local_instance_id)
             .ok_or(VoucherCoreError::VoucherNotFound(local_instance_id.to_string()))?;
-
+ 
         if *status != VoucherStatus::Active {
             return Err(VoucherCoreError::VoucherNotActive(status.clone()));
         }
         let voucher_to_spend = voucher_to_spend.clone();
-
+ 
+        // 2. Proaktive Double-Spend-Prüfung durchführen.
         let last_tx = voucher_to_spend.transactions.last()
             .ok_or_else(|| VoucherCoreError::Generic("Cannot spend voucher with no transactions.".to_string()))?;
         let prev_hash = get_hash(to_canonical_json(last_tx)?);
         let fingerprint_hash = get_hash(format!("{}{}", prev_hash, identity.user_id));
-
+ 
         if self.fingerprint_store.own_fingerprints.contains_key(&fingerprint_hash) {
             return Err(VoucherCoreError::DoubleSpendAttemptBlocked);
         }
-
+ 
+        // 3. Neue Transaktion und den daraus resultierenden neuen Gutschein-Zustand erstellen.
         let new_voucher_state = voucher_manager::create_transaction(
             &voucher_to_spend,
             standard_definition,
@@ -315,9 +320,21 @@ impl Wallet {
             recipient_id,
             amount_to_send,
         )?;
-
-        self.voucher_store.vouchers.get_mut(local_instance_id).unwrap().1 = VoucherStatus::Archived;
-
+ 
+        // 4. Den neuen Gutschein-Zustand dem Wallet hinzufügen, bevor der alte entfernt wird.
+        if let Some(last_tx) = new_voucher_state.transactions.last() {
+            if last_tx.sender_id == identity.user_id && last_tx.sender_remaining_amount.is_some() {
+                // Bei einem Split verbleibt ein aktiver Restbetrag beim Sender.
+                self.add_voucher_to_store(new_voucher_state.clone(), VoucherStatus::Active, &identity.user_id)?;
+            } else {
+                // Bei einem vollen Transfer wird der gesendete Zustand für die Historie archiviert.
+                self.add_voucher_to_store(new_voucher_state.clone(), VoucherStatus::Archived, &identity.user_id)?;
+            }
+        }
+        // Der alte, ausgegebene Gutschein wird nun aus dem Store gelöscht.
+        self.voucher_store.vouchers.remove(local_instance_id);
+ 
+        // 5. Den neuen Zustand optional in ein externes Archiv für forensische Zwecke schreiben.
         if let Some(archive_backend) = archive {
             archive_backend.archive_voucher(
                 &new_voucher_state,
@@ -325,16 +342,12 @@ impl Wallet {
                 standard_definition,
             )?;
         }
-
-        if let Some(last_tx) = new_voucher_state.transactions.last() {
-            if last_tx.sender_id == identity.user_id && last_tx.sender_remaining_amount.is_some() {
-                self.add_voucher_to_store(new_voucher_state.clone(), VoucherStatus::Active, &identity.user_id)?;
-            }
-        }
-
+ 
+        // 6. Den neuen Gutschein-Zustand für den Versand an den Empfänger verpacken.
         let vouchers_for_bundle = vec![new_voucher_state.clone()];
         let container_bytes = self.create_and_encrypt_transaction_bundle(identity, vouchers_for_bundle.clone(), recipient_id, notes)?;
-
+ 
+        // 7. Einen Fingerprint der Transaktion erstellen und für die Double-Spend-Erkennung speichern.
         let created_tx = vouchers_for_bundle[0].transactions.last().unwrap();
         let fingerprint = TransactionFingerprint {
             prvhash_senderid_hash: fingerprint_hash.clone(),
@@ -343,16 +356,16 @@ impl Wallet {
             sender_signature: created_tx.sender_signature.clone(),
             valid_until: vouchers_for_bundle[0].valid_until.clone(),
         };
-
+ 
         self.fingerprint_store
             .own_fingerprints
             .entry(fingerprint_hash)
             .or_default()
             .push(fingerprint);
-
+ 
         Ok((container_bytes, new_voucher_state))
     }
-
+ 
     /// Führt Wartungsarbeiten am Wallet-Speicher durch, um veraltete Daten zu entfernen.
     pub fn cleanup_storage(&mut self, archive_grace_period_years: i64) {
         self.cleanup_expired_fingerprints();
