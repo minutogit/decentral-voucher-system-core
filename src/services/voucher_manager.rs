@@ -229,8 +229,8 @@ pub fn create_voucher(
 
 
 /// Hilfsfunktion zum Parsen einer einfachen ISO 8601 Duration und Addieren zu einem Datum.
-/// Unterstützt nur P...Y, P...M, P...D.
-fn add_iso8601_duration(start_date: DateTime<Utc>, duration_str: &str) -> Result<DateTime<Utc>, VoucherManagerError> {
+/// Unterstützt P...Y, P...M, P...D und behandelt Schaltjahre/Monatslängen korrekt.
+pub fn add_iso8601_duration(start_date: DateTime<Utc>, duration_str: &str) -> Result<DateTime<Utc>, VoucherManagerError> {
     if !duration_str.starts_with('P') || duration_str.len() < 3 {
         return Err(VoucherManagerError::Generic(format!("Invalid ISO 8601 duration format: {}", duration_str)));
     }
@@ -239,15 +239,54 @@ fn add_iso8601_duration(start_date: DateTime<Utc>, duration_str: &str) -> Result
     let value: u32 = value_str[1..].parse().map_err(|_| VoucherManagerError::Generic(format!("Invalid number in duration: {}", duration_str)))?;
 
     match unit {
-        "Y" => Ok(start_date + chrono::Duration::days(i64::from(value) * 365)), // Vereinfachung
-        "M" => Ok(start_date + chrono::Duration::days(i64::from(value) * 30)), // Vereinfachung
+        "Y" => {
+            let new_year = start_date.year() + value as i32;
+            // Versuche, das Datum im neuen Jahr zu erstellen. `with_year` behandelt die meisten Fälle.
+            // Das Hauptproblem ist der 29. Februar in einem Schaltjahr, wenn das Zieljahr keines ist.
+            // In diesem Fall gibt `with_year` `None` zurück.
+            let new_date = start_date.with_year(new_year).unwrap_or_else(|| {
+                // Wenn wir von einem 29. Februar in einem Nicht-Schaltjahr landen,
+                // setzen wir das Datum auf den 28. Februar des Zieljahres.
+                Utc.with_ymd_and_hms(new_year, 2, 28, start_date.hour(), start_date.minute(), start_date.second()).unwrap()
+            });
+            Ok(new_date)
+        }
+        "M" => {
+            let current_month0 = start_date.month0(); // 0-indiziert für einfache Berechnung
+            let total_months0 = current_month0 + value;
+            
+            let new_year = start_date.year() + (total_months0 / 12) as i32;
+            let new_month = (total_months0 % 12) + 1;
+            let original_day = start_date.day();
+
+            // Ermittle den letzten Tag des Zielmonats, um ein Überlaufen zu verhindern
+            // (z.B. 31. Januar + 1 Monat soll nicht der 31. Februar sein).
+            let days_in_target_month = Utc.with_ymd_and_hms(
+                    if new_month == 12 { new_year + 1 } else { new_year },
+                    if new_month == 12 { 1 } else { new_month + 1 },
+                    1, 0, 0, 0
+                ).unwrap()
+                .signed_duration_since(Utc.with_ymd_and_hms(new_year, new_month, 1, 0, 0, 0).unwrap())
+                .num_days() as u32;
+
+            let new_day = original_day.min(days_in_target_month);
+
+            // KORREKTUR: Konstruiere das Datum sicher aus den Komponenten, anstatt das Originaldatum
+            // schrittweise zu ändern, was bei ungültigen Zwischendaten (z.B. "31. Februar") zu einem Panic führt.
+            let new_date = Utc.with_ymd_and_hms(new_year, new_month, new_day, start_date.hour(), start_date.minute(), start_date.second())
+                .unwrap()
+                .with_nanosecond(start_date.nanosecond())
+                .unwrap();
+
+            Ok(new_date)
+        }
         "D" => Ok(start_date + chrono::Duration::days(i64::from(value))),
         _ => Err(VoucherManagerError::Generic(format!("Unsupported duration unit in: {}", duration_str))),
     }
 }
 
 /// Hilfsfunktion, um ein Datum auf das Ende des Tages, Monats oder Jahres aufzurunden.
-fn round_up_date(date: DateTime<Utc>, rounding_str: &str) -> Result<DateTime<Utc>, VoucherManagerError> {
+pub fn round_up_date(date: DateTime<Utc>, rounding_str: &str) -> Result<DateTime<Utc>, VoucherManagerError> {
     match rounding_str {
         "P1D" => { // Ende des Tages
             Ok(date.with_hour(23).unwrap()
