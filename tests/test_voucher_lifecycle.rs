@@ -114,15 +114,23 @@ fn create_minuto_voucher_data(creator: Creator) -> NewVoucherData {
 
 /// Erstellt eine gültige, entkoppelte Bürgen-Signatur für einen gegebenen Gutschein.
 fn create_guarantor_signature(
-    voucher_id: &str,
+    // Wir übergeben den ganzen Gutschein, um Zugriff auf das Erstellungsdatum zu haben.
+    voucher: &Voucher,
     guarantor_id: String,
     guarantor_first_name: &str,
     guarantor_gender: &str,
     signing_key: &SigningKey,
 ) -> GuarantorSignature {
+    // Erzeuge einen Zeitstempel, der garantiert NACH der Erstellung des Gutscheins liegt.
+    let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date)
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let signature_dt = creation_dt + chrono::Duration::days(1);
+    let signature_time_str = signature_dt.to_rfc3339();
+
     // 1. Erstelle das Signatur-Objekt, aber lasse die finale Signatur und die ID leer.
     let mut signature_data = GuarantorSignature {
-        voucher_id: voucher_id.to_string(),
+        voucher_id: voucher.voucher_id.clone(),
         signature_id: "".to_string(), // Wird gleich berechnet
         guarantor_id,
         first_name: guarantor_first_name.to_string(),
@@ -136,7 +144,7 @@ fn create_guarantor_signature(
         coordinates: None,
         url: None,
         signature: "".to_string(), // Wird gleich berechnet
-        signature_time: "2025-07-16T12:00:00Z".to_string(),
+        signature_time: signature_time_str,
     };
 
     // 2. Erzeuge die signature_id durch Hashing der Metadaten.
@@ -184,10 +192,8 @@ fn test_full_creation_and_validation_cycle() {
     let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
     let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
 
-    let guarantor_sig_1 =
-        create_guarantor_signature(&voucher.voucher_id, g1_id, "Hans", "1", &g1_priv);
-    let guarantor_sig_2 =
-        create_guarantor_signature(&voucher.voucher_id, g2_id, "Gabi", "2", &g2_priv);
+    let guarantor_sig_1 = create_guarantor_signature(&voucher, g1_id, "Hans", "1", &g1_priv);
+    let guarantor_sig_2 = create_guarantor_signature(&voucher, g2_id, "Gabi", "2", &g2_priv);
 
     voucher.guarantor_signatures.push(guarantor_sig_1);
     voucher.guarantor_signatures.push(guarantor_sig_2);
@@ -243,10 +249,8 @@ fn test_validation_fails_on_invalid_signature() {
     let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g2_invalid_sig"));
     let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
     let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
-    let guarantor_sig_1 =
-        create_guarantor_signature(&voucher.voucher_id, g1_id, "Guarantor1", "1", &g1_priv);
-    let guarantor_sig_2 =
-        create_guarantor_signature(&voucher.voucher_id, g2_id, "Guarantor2", "2", &g2_priv);
+    let guarantor_sig_1 = create_guarantor_signature(&voucher, g1_id, "Guarantor1", "1", &g1_priv);
+    let guarantor_sig_2 = create_guarantor_signature(&voucher, g2_id, "Guarantor2", "2", &g2_priv);
     voucher.guarantor_signatures.push(guarantor_sig_1);
     voucher.guarantor_signatures.push(guarantor_sig_2);
     assert!(validate_voucher_against_standard(&voucher, &standard).is_ok());
@@ -394,10 +398,8 @@ fn test_validation_succeeds_with_extra_fields_in_json() {
     let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
     let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
 
-    let guarantor_sig_1 =
-        create_guarantor_signature(&valid_voucher.voucher_id, g1_id, "Guarantor1", "1", &g1_priv);
-    let guarantor_sig_2 =
-        create_guarantor_signature(&valid_voucher.voucher_id, g2_id, "Guarantor2", "2", &g2_priv);
+    let guarantor_sig_1 = create_guarantor_signature(&valid_voucher, g1_id, "Guarantor1", "1", &g1_priv);
+    let guarantor_sig_2 = create_guarantor_signature(&valid_voucher, g2_id, "Guarantor2", "2", &g2_priv);
     valid_voucher.guarantor_signatures.push(guarantor_sig_1);
     valid_voucher.guarantor_signatures.push(guarantor_sig_2);
 
@@ -601,8 +603,8 @@ fn test_validity_duration_rules() {
     let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g2_validity"));
     let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
     let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
-    voucher.guarantor_signatures.push(create_guarantor_signature(&voucher.voucher_id, g1_id, "G1", "1", &g1_priv));
-    voucher.guarantor_signatures.push(create_guarantor_signature(&voucher.voucher_id, g2_id, "G2", "2", &g2_priv));
+    voucher.guarantor_signatures.push(create_guarantor_signature(&voucher, g1_id, "G1", "1", &g1_priv));
+    voucher.guarantor_signatures.push(create_guarantor_signature(&voucher, g2_id, "G2", "2", &g2_priv));
     assert!(validate_voucher_against_standard(&voucher, &standard).is_ok());
 
     // Manipuliere das Datum
@@ -650,15 +652,14 @@ fn test_validation_fails_on_replayed_guarantor_signature() {
     // 2. Erstelle eine gültige Bürgschaft für Gutschein A
     let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g_replay"));
     let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
-    let valid_signature_for_a =
-        create_guarantor_signature(&voucher_a.voucher_id, g1_id, "Replay", "1", &g1_priv);
+    let valid_signature_for_a = create_guarantor_signature(&voucher_a, g1_id, "Replay", "1", &g1_priv);
 
     // 3. Versuche, die Signatur von A an B anzuhängen (Replay-Angriff)
     // (Wir benötigen eine zweite "Dummy"-Signatur, um die Anforderung von 2 Bürgen zu erfüllen)
     let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g_dummy"));
     let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
     let dummy_signature_for_b =
-        create_guarantor_signature(&voucher_b.voucher_id, g2_id, "Dummy", "2", &g2_priv);
+        create_guarantor_signature(&voucher_b, g2_id, "Dummy", "2", &g2_priv);
 
     voucher_b.guarantor_signatures.push(valid_signature_for_a); // Falsche Signatur
     voucher_b.guarantor_signatures.push(dummy_signature_for_b); // Korrekte Signatur
@@ -689,9 +690,8 @@ fn test_validation_fails_on_tampered_guarantor_signature() {
     let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
     let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
 
-    let sig1 = create_guarantor_signature(&voucher.voucher_id, g1_id, "Original", "1", &g1_priv);
-    let sig2 =
-        create_guarantor_signature(&voucher.voucher_id, g2_id, "Untampered", "2", &g2_priv);
+    let sig1 = create_guarantor_signature(&voucher, g1_id, "Original", "1", &g1_priv);
+    let sig2 = create_guarantor_signature(&voucher, g2_id, "Untampered", "2", &g2_priv);
     voucher.guarantor_signatures.push(sig1);
     voucher.guarantor_signatures.push(sig2);
     assert!(validate_voucher_against_standard(&voucher, &standard).is_ok());
@@ -730,14 +730,22 @@ fn test_double_spend_detection_logic() {
     let voucher_after_split = create_transaction(
         &initial_voucher, &standard, &alice_id, &alice_key, &bob_id, "40"
     ).unwrap();
-    assert!(validate_voucher_against_standard(&voucher_after_split, &standard).is_ok());
+    // NEU: Verbessertes Assert, das den Fehler im Detail ausgibt.
+    let validation_result_1 = validate_voucher_against_standard(&voucher_after_split, &standard);
+    assert!(
+        validation_result_1.is_ok(),
+        "Validation of the first legitimate transaction failed unexpectedly: {:?}",
+        validation_result_1.err()
+    );
 
     // 4. Alice betrügt: Sie nimmt den Zustand VOR der Transaktion an Bob (`initial_voucher`)
     //    und versucht, ihr ursprüngliches Guthaben von 100 erneut auszugeben, indem sie 60 an Frank sendet.
     let fraudulent_voucher = create_transaction(
         &initial_voucher, &standard, &alice_id, &alice_key, &frank_id, "60"
     ).unwrap();
-    assert!(validate_voucher_against_standard(&fraudulent_voucher, &standard).is_ok());
+    // NEU: Verbessertes Assert auch für den zweiten Gutschein.
+    let validation_result_2 = validate_voucher_against_standard(&fraudulent_voucher, &standard);
+    assert!(validation_result_2.is_ok(), "Validation of the fraudulent (but individually valid) transaction failed unexpectedly: {:?}", validation_result_2.err());
 
     // 5. Verifizierung des Double Spends:
     //    Beide Gutscheine sind für sich genommen gültig, aber die zweite Transaktion in beiden
@@ -907,6 +915,12 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     assert!(bob_wallet.voucher_store.vouchers.contains_key(&bob_local_id), "Voucher with correct local ID should be in Bob's wallet.");
 
     // Füge die finale Überprüfung hinzu, ob der empfangene Gutschein auch wirklich gültig ist.
-    assert!(validate_voucher_against_standard(received_voucher, &standard).is_ok(), "Received voucher must be valid.");
+    // KORREKTUR: Verwende ein assert!, das im Fehlerfall die genaue ValidationError ausgibt.
+    let final_validation_result = validate_voucher_against_standard(received_voucher, &standard);
+    assert!(
+        final_validation_result.is_ok(),
+        "Validation of the received voucher failed: {:?}",
+        final_validation_result.err()
+    );
     println!("SUCCESS: Voucher was securely transferred from Alice to Bob via an encrypted bundle.");
 }

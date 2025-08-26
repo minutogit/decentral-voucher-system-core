@@ -77,7 +77,7 @@ fn test_voucher_archiving_on_full_spend() {
             coordinates: "0,0".to_string(),
         };
         let nominal_value = NominalValue {
-            amount: "100".to_string(),
+            amount: "100.0000".to_string(), // KORREKTUR: Vier Dezimalstellen für den Silber-Standard
             unit: "".to_string(),
             abbreviation: "".to_string(),
             description: "".to_string(),
@@ -108,7 +108,7 @@ fn test_voucher_archiving_on_full_spend() {
             &standard,
             &local_id,
             &bob_identity.user_id,
-            "100", // Wichtig: Der volle Betrag wird gesendet.
+            "100.0000", // KORREKTUR: Betrag muss ebenfalls das korrekte Format haben.
             None,
             Some(&archive), // Das Archiv-Backend wird übergeben.
         )

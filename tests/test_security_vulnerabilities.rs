@@ -316,7 +316,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
     victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None::<&FileVoucherArchive>).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
     let result = voucher_validation::validate_voucher_against_standard(received_voucher, &STANDARD);
-    assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::InvalidCreatorSignature))),
+    assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::InvalidCreatorSignature { .. }))),
             "Validation must fail due to manipulated nominal value.");
     victim_wallet.voucher_store.vouchers.clear(); // Reset for next test
 
@@ -597,7 +597,7 @@ fn test_serialization_roundtrip_with_special_chars() {
     let (signing_key, mut creator) = setup_creator();
     creator.first_name = "Jörg-ẞtråße".to_string(); // Sonderzeichen
 
-    let voucher_data = create_test_voucher_data_with_amount(creator, "123.45");
+    let voucher_data = create_test_voucher_data_with_amount(creator, "123");
     let mut original_voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
 
     // Mache den Gutschein komplexer
@@ -621,7 +621,7 @@ fn test_serialization_roundtrip_with_special_chars() {
         &original_voucher.creator.id,
         &signing_key,
         "some_recipient_id",
-        "23.45"
+        "23"
     ).unwrap();
 
     // 2. Aktion

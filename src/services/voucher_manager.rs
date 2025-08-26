@@ -4,6 +4,7 @@ use crate::models::voucher::{
 use crate::error::VoucherCoreError;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::voucher_validation::get_spendable_balance;
+use crate::services::decimal_utils;
 use crate::services::crypto_utils::{get_hash, sign_ed25519};
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
 
@@ -11,6 +12,7 @@ use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
 // use toml::de::Error as TomlError; // ungenutzt
 use ed25519_dalek::SigningKey;
 use rust_decimal::Decimal;
+use std::str::FromStr;
 use std::fmt;
 
 // Definiert die Fehler, die im `voucher_manager`-Modul auftreten können.
@@ -22,6 +24,11 @@ pub enum VoucherManagerError {
     VoucherNotDivisible,
     /// Das verfügbare Guthaben ist für die Transaktion nicht ausreichend.
     InsufficientFunds { available: Decimal, needed: Decimal },
+    /// Der Betrag hat mehr Nachkommastellen als vom Standard erlaubt.
+    AmountPrecisionExceeded {
+        allowed: u32,
+        found: u32,
+    },
     /// Die angegebene Gültigkeitsdauer erfüllt nicht die Mindestanforderungen des Standards.
     InvalidValidityDuration(String),
     /// Ein allgemeiner Fehler mit einer Beschreibung.
@@ -36,6 +43,9 @@ impl fmt::Display for VoucherManagerError {
             VoucherManagerError::VoucherNotDivisible => write!(f, "Voucher is not divisible according to its standard."),
             VoucherManagerError::InsufficientFunds { available, needed } => {
                 write!(f, "Insufficient funds: Available: {}, Needed: {}", available, needed)
+            }
+            VoucherManagerError::AmountPrecisionExceeded { allowed, found } => {
+                write!(f, "Amount precision exceeds standard limit. Allowed: {}, Found: {}", allowed, found)
             }
             VoucherManagerError::InvalidValidityDuration(s) => write!(f, "Invalid validity duration: {}", s),
             VoucherManagerError::Generic(s) => write!(f, "Voucher Manager Error: {}", s),
@@ -177,6 +187,9 @@ pub fn create_voucher(
     temp_voucher.creator.signature = bs58::encode(creator_signature.to_bytes()).into_string();
 
     // JETZT: Erstelle und signiere die 'init' Transaktion, die sich auf die finale voucher_id bezieht.
+    let decimal_places = standard_definition.validation.amount_decimal_places as u32;
+    let initial_amount = Decimal::from_str(&temp_voucher.nominal_value.amount)?;
+
     let mut init_transaction = Transaction {
         t_id: "".to_string(), // Wird im nächsten Schritt berechnet
         prev_hash: get_hash(&temp_voucher.voucher_id),
@@ -184,7 +197,7 @@ pub fn create_voucher(
         t_time: creation_date_str.clone(),
         sender_id: temp_voucher.creator.id.clone(),
         recipient_id: temp_voucher.creator.id.clone(),
-        amount: temp_voucher.nominal_value.amount.clone(),
+        amount: decimal_utils::format_for_storage(&initial_amount, decimal_places),
         sender_remaining_amount: None,
         sender_signature: "".to_string(), // Wird im nächsten Schritt berechnet
     };
@@ -285,12 +298,14 @@ pub fn create_transaction(
     // Dies verhindert, dass auf einer manipulierten oder ungültigen Transaktionskette aufgebaut wird.
     crate::services::voucher_validation::validate_voucher_against_standard(voucher, standard)?;
     let decimal_places = standard.validation.amount_decimal_places as u32;
-
+ 
     // 1. Aktuell verfügbares Guthaben für den Sender berechnen.
     let spendable_balance = get_spendable_balance(voucher, sender_id, standard)?;
 
     // 2. Zu sendenden Betrag parsen und mit dem Guthaben vergleichen.
-    let amount_to_send = Decimal::from_str_exact(amount_to_send_str)?;
+    let amount_to_send = Decimal::from_str(amount_to_send_str)?;
+
+    decimal_utils::validate_precision(&amount_to_send, decimal_places)?;
 
     if amount_to_send <= Decimal::ZERO {
         return Err(VoucherManagerError::Generic("Transaction amount must be positive.".to_string()).into());
@@ -308,11 +323,8 @@ pub fn create_transaction(
         if !voucher.divisible {
             return Err(VoucherManagerError::VoucherNotDivisible.into());
         }
-        let mut remaining = spendable_balance - amount_to_send;
-        // SICHERHEITSPATCH: Die Skalierung muss explizit gesetzt werden, BEVOR to_string() aufgerufen wird.
-        // Andernfalls wird z.B. aus `60.0000` der String "60", was beim späteren Einlesen zu Fehlinterpretationen führt.
-        remaining.set_scale(decimal_places)?;
-        ("split".to_string(), Some(remaining.to_string()))
+        let remaining = spendable_balance - amount_to_send;
+        ("split".to_string(), Some(decimal_utils::format_for_storage(&remaining, decimal_places)))
     } else {
         // Dies ist ein voller Transfer.
         ("".to_string(), None)
@@ -329,7 +341,7 @@ pub fn create_transaction(
         t_time,
         sender_id: sender_id.to_string(),
         recipient_id: recipient_id.to_string(),
-        amount: amount_to_send.to_string(),
+        amount: decimal_utils::format_for_storage(&amount_to_send, decimal_places),
         sender_remaining_amount,
         sender_signature: "".to_string(), // Wird später berechnet
     };

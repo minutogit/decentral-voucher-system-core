@@ -52,8 +52,13 @@ fn setup_voucher_for_alice(
     };
     let voucher_data = voucher_lib::NewVoucherData {
         validity_duration: Some("P3Y".to_string()),
+        non_redeemable_test_voucher: true,
+        nominal_value: voucher_lib::NominalValue {
+            amount: "60".to_string(), // Setze einen expliziten, gültigen Betrag
+            ..Default::default()
+        },
+        collateral: Default::default(),
         creator: creator_data,
-        ..Default::default()
     };
     let voucher =
         voucher_manager::create_voucher(voucher_data, &standard, &alice_identity.signing_key)
@@ -231,7 +236,13 @@ fn test_workflow_fails_with_mismatched_voucher_id() {
         id: alice_identity.user_id.clone(), ..Default::default()
     };
     let voucher_data_b = voucher_lib::NewVoucherData {
-        creator: creator_data_b, ..Default::default()
+        creator: creator_data_b,
+        validity_duration: Some("P3Y".to_string()),
+        nominal_value: voucher_lib::NominalValue {
+            amount: "120".to_string(), // Setze einen expliziten, gültigen Betrag
+            ..Default::default()
+        },
+        ..Default::default()
     };
     let voucher_b =
         voucher_manager::create_voucher(voucher_data_b, &standard, &alice_identity.signing_key).unwrap();
