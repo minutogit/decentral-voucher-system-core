@@ -1,6 +1,6 @@
 // Zufallszahlengenerierung
 use rand::Rng;
-use rand::RngCore;
+use rand_core::RngCore;
 use rand_core::OsRng;
 
 // Kryptografische Hashes (SHA-2)
@@ -29,7 +29,7 @@ use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
 use bip39::{Mnemonic, Language};
 
 // Key Derivation Functions
-use hmac::{Hmac, Mac};
+use hmac::Hmac;
 use pbkdf2::pbkdf2;
 use hkdf::Hkdf;
 
@@ -37,6 +37,7 @@ use hkdf::Hkdf;
 use std::convert::TryInto;
 use std::fmt;
 
+use crate::error::VoucherCoreError;
 
 /// Generates a mnemonic phrase with a specified word count and language.
 ///
@@ -84,7 +85,8 @@ pub fn get_hash(input: impl AsRef<[u8]>) -> String {
 /// Derives an Ed25519 keypair from a mnemonic phrase and an optional passphrase.
 ///
 /// This function takes a BIP-39 mnemonic phrase and an optional passphrase,
-/// and derives an Ed25519 keypair using PBKDF2 and HMAC-based key derivation.
+/// derives the standard BIP-39 seed, and then applies additional key stretching
+/// using PBKDF2 for enhanced security against brute-force attacks.
 ///
 /// # Arguments
 ///
@@ -93,53 +95,56 @@ pub fn get_hash(input: impl AsRef<[u8]>) -> String {
 ///
 /// # Returns
 ///
-/// A tuple containing the Ed25519 public key and signing key.
+/// A Result containing a tuple of the Ed25519 public key and signing key,
+/// or a VoucherCoreError if derivation fails.
 pub fn derive_ed25519_keypair(
     mnemonic_phrase: &str,
     passphrase: Option<&str>,
-) -> (EdPublicKey, SigningKey) {
+) -> Result<(EdPublicKey, SigningKey), VoucherCoreError> {
+    // Parse the mnemonic phrase according to BIP-39 standard
     let mnemonic = Mnemonic::parse_in_normalized(Language::English, mnemonic_phrase)
-        .expect("Invalid BIP-39 mnemonic phrase");
-    
-    let passphrase = passphrase.unwrap_or("");
-    let salt = format!("mnemonic{}", passphrase);
-    let mut seed = [0u8; 64];
-    
-    pbkdf2::<Hmac<Sha512>>(
-        &mnemonic.to_entropy(),
-        salt.as_bytes(),
-        100_000,
-        &mut seed
-    ).expect("PBKDF2 failed");
+        .map_err(|e| VoucherCoreError::Crypto(format!("Mnemonic parsing failed: {}", e)))?;
 
-    let hmac_context = b"DCVOUCHER-KDF-v1";
-    // Explizite Angabe des Traits, um die Mehrdeutigkeit von `new_from_slice` aufzulösen,
-    // die in hmac v0.12 durch die Traits `Mac` und `KeyInit` entstehen kann.
-    let mut hmac = <Hmac<Sha512> as Mac>::new_from_slice(hmac_context)
-        .expect("HMAC key error");
-    hmac.update(&seed);
-    let derived_seed = hmac.finalize().into_bytes();
-    
+    // Generate the standard BIP-39 seed (uses PBKDF2 with 2048 rounds)
+    let bip39_seed = mnemonic.to_seed(passphrase.unwrap_or(""));
+
+    // Apply additional key stretching using PBKDF2 with 100,000 rounds
+    // This provides enhanced protection against brute-force attacks
+    // while maintaining BIP-39 compatibility for the initial seed generation
     let mut stretched_key = [0u8; 32];
     pbkdf2::<Hmac<Sha512>>(
-        &derived_seed,
-        b"ed25519-key-stretch",
-        10_000,
-        &mut stretched_key
-    ).expect("PBKDF2 stretching failed");
-    
-    let signing_key = SigningKey::from_bytes(&stretched_key);
+        &bip39_seed,
+        b"voucher-core-stretch-v1",
+        100_000,
+        &mut stretched_key,
+    ).map_err(|e| VoucherCoreError::Crypto(
+        format!("PBKDF2 stretching failed: {}", e)
+    ))?;
+
+    // Use HKDF to derive an application-specific key from the stretched seed
+    // This is a cryptographic best practice to separate keys for different purposes
+    let hkdf = Hkdf::<Sha256>::new(None, &stretched_key);
+    let mut ed_signing_key_seed = [0u8; 32];
+    hkdf.expand(b"voucher-core/ed25519", &mut ed_signing_key_seed)
+        .map_err(|_| VoucherCoreError::Crypto(
+            "HKDF expansion failed".to_string()
+        ))?;
+
+    // SigningKey::from_seed_bytes takes a 32-byte seed and uses it to derive the
+    // Ed25519 keypair in a secure and standardized way (internally uses SHA512)
+    let signing_key = SigningKey::from_bytes(&ed_signing_key_seed);
+
     let public_key = signing_key.verifying_key();
-    (public_key, signing_key)
+    Ok((public_key, signing_key))
 }
 
 /// Erzeugt ein zufälliges oder deterministisches Ed25519-Schlüsselpaar für Testzwecke.
 ///
 /// # Warnung
 /// **Diese Funktion ist NICHT für den produktiven Einsatz geeignet!**
-/// Der deterministische Pfad verwendet eine sehr geringe Anzahl von PBKDF2-Iterationen
-/// und einen statischen Salt, was ihn kryptographisch unsicher macht. Er dient
-/// ausschließlich dazu, in Tests reproduzierbare Schlüsselpaare zu erzeugen.
+/// Der deterministische Pfad verwendet eine einfache Hash-Funktion und ist nicht
+/// gegen Brute-Force-Angriffe gehärtet. Er dient ausschließlich dazu, in Tests
+/// reproduzierbare Schlüsselpaare zu erzeugen.
 ///
 /// # Arguments
 /// * `seed` - Ein optionaler String.
@@ -150,27 +155,23 @@ pub fn derive_ed25519_keypair(
 /// Ein Tupel, das den öffentlichen und den privaten Ed25519-Schlüssel enthält.
 pub fn generate_ed25519_keypair_for_tests(seed: Option<&str>) -> (EdPublicKey, SigningKey) {
     if let Some(seed_str) = seed {
-        // Deterministischer, aber UNSICHERER Pfad für reproduzierbare Tests
-        let mut key_bytes = [0u8; 32];
-        pbkdf2::<Hmac<Sha512>>(
-            seed_str.as_bytes(),
-            b"insecure-test-salt",
-            100, // Sehr wenige Iterationen, nur für schnelle Tests!
-            &mut key_bytes,
-        )
-        .expect("PBKDF2 for testing failed");
+        // Deterministischer Pfad: Seed hashen, um einen 32-Byte-Schlüssel zu erzeugen.
+        let mut hasher = Sha512::new();
+        hasher.update(seed_str.as_bytes());
+        let hash_result = hasher.finalize();
+        let key_bytes: [u8; 32] = hash_result[..32].try_into().expect("Hash output must be 64 bytes");
 
         let signing_key = SigningKey::from_bytes(&key_bytes);
-        let public_key = signing_key.verifying_key();
-        (public_key, signing_key)
+        (signing_key.verifying_key(), signing_key)
     } else {
-        // Sicherer, zufälliger Pfad für allgemeine Tests
-        let mut csprng = OsRng {};
-        let mut key_bytes: [u8; 32] = [0; 32];
-        csprng.fill_bytes(&mut key_bytes);
+        // Sicherer, zufälliger Pfad für allgemeine Tests.
+        // Wir müssen RngCore importieren, um die fill_bytes-Methode nutzen zu können.
+        let mut csprng = OsRng;
+        let mut key_bytes = [0u8; 32];
+        csprng.fill_bytes(&mut key_bytes); // Benötigt `use rand_core::RngCore;`
+
         let signing_key = SigningKey::from_bytes(&key_bytes);
-        let public_key = signing_key.verifying_key();
-        (public_key, signing_key)
+        (signing_key.verifying_key(), signing_key)
     }
 }
 
@@ -253,11 +254,9 @@ pub fn perform_diffie_hellman(
     our_secret: EphemeralSecret,
     their_public: &X25519PublicKey,
 ) -> [u8; 32] {
-    let shared_secret = our_secret.diffie_hellman(their_public);
-    let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
-    let mut output = [0u8; 32];
-    hkdf.expand(b"key", &mut output).unwrap();
-    output
+    // X25519 liefert bereits ein sicheres, 32-Byte Shared Secret.
+    // Eine zusätzliche HKDF-Expansion ist in diesem Fall unnötig.
+    our_secret.diffie_hellman(their_public).to_bytes()
 }
 
 /// Custom error type for symmetric encryption/decryption functions.
@@ -558,6 +557,6 @@ pub fn get_pubkey_from_user_id(user_id: &str) -> Result<EdPublicKey, GetPubkeyEr
 
     let key_bytes_array: [u8; 32] = key_bytes.try_into()
         .map_err(|_| GetPubkeyError::InvalidLength(actual_len))?;
-    
+
     EdPublicKey::from_bytes(&key_bytes_array).map_err(GetPubkeyError::ConversionFailed)
 }

@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Ed25519-Schlüsselpaar ableiten
     println!("\nDeriving Ed25519 keys...");
-    let (ed_pub, ed_priv) = derive_ed25519_keypair(&mnemonic, None); 
+    let (ed_pub, ed_priv) = derive_ed25519_keypair(&mnemonic, None)?; 
     println!("Ed25519 Public Key: {}", hex::encode(ed_pub.to_bytes()));
     println!("Ed25519 Private Key: {}", hex::encode(ed_priv.to_bytes()));
 

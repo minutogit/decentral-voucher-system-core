@@ -36,7 +36,7 @@ mod tests {
     #[test]
     fn test_derive_ed25519_keypair() -> Result<(), Box<dyn std::error::Error>> {
         let mnemonic = generate_mnemonic(24, Language::English)?;
-        let (ed_pub, ed_priv) = derive_ed25519_keypair(&mnemonic, None);
+        let (ed_pub, ed_priv) = derive_ed25519_keypair(&mnemonic, None)?;
         assert_eq!(ed_pub.as_bytes().len(), 32);
         assert_eq!(ed_priv.as_bytes().len(), 32);
         println!("Ed25519 Public Key: {}", hex::encode(ed_pub.to_bytes()));
@@ -47,7 +47,7 @@ mod tests {
     #[test]
     fn test_user_id_creation() -> Result<(), Box<dyn std::error::Error>> {
         let mnemonic = generate_mnemonic(24, Language::English)?;
-        let (ed_pub, _) = derive_ed25519_keypair(&mnemonic, None);
+        let (ed_pub, _) = derive_ed25519_keypair(&mnemonic, None)?;
 
         let user_id_no_prefix = create_user_id(&ed_pub, None).unwrap();
         assert!(!user_id_no_prefix.is_empty());
@@ -67,7 +67,7 @@ mod tests {
     #[test]
     fn test_ed25519_to_x25519_conversion() -> Result<(), Box<dyn std::error::Error>> {
         let mnemonic = generate_mnemonic(24, Language::English)?;
-        let (ed_pub, _) = derive_ed25519_keypair(&mnemonic, None);
+        let (ed_pub, _) = derive_ed25519_keypair(&mnemonic, None)?;
         let x25519_pub = ed25519_pub_to_x25519(&ed_pub);
         assert_eq!(x25519_pub.as_bytes().len(), 32);
         println!("X25519 Public Key: {}", hex::encode(x25519_pub.to_bytes()));
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn test_ed25519_signature() -> Result<(), Box<dyn std::error::Error>> {
         let mnemonic = generate_mnemonic(24, Language::English)?;
-        let (_, ed_priv) = derive_ed25519_keypair(&mnemonic, None);
+        let (_, ed_priv) = derive_ed25519_keypair(&mnemonic, None)?;
         let message = b"Voucher system test message";
 
         let signature = sign_ed25519(&ed_priv, message);
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn test_get_pubkey_from_user_id() -> Result<(), Box<dyn std::error::Error>> {
         let mnemonic = generate_mnemonic(24, Language::English)?;
-        let (ed_pub, _) = derive_ed25519_keypair(&mnemonic, None);
+        let (ed_pub, ed_sk) = derive_ed25519_keypair(&mnemonic, None)?;
         let prefix = "ID";
         let user_id_with_prefix = create_user_id(&ed_pub, Some(prefix)).unwrap();
 
@@ -125,7 +125,7 @@ mod tests {
         println!("Recovered key matches original key.");
 
         let message = b"Voucher system test message";
-        let signature = sign_ed25519(&derive_ed25519_keypair(&mnemonic, None).1, message);
+        let signature = sign_ed25519(&ed_sk, message);
         let is_valid_recovered = verify_ed25519(&recovered_ed_pub, message, &signature);
         assert!(is_valid_recovered);
         println!("Signature valid (using RECOVERED key)? {}", is_valid_recovered);
