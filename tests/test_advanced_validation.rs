@@ -25,7 +25,7 @@
 use voucher_lib::{
     create_transaction, create_voucher, crypto_utils, load_standard_definition, to_canonical_json,
     validate_voucher_against_standard, Address, Collateral, Creator, GuarantorSignature,
-    NewVoucherData, NominalValue, VoucherCoreError, VoucherStandardDefinition,
+    NewVoucherData, NominalValue, VoucherCoreError, VoucherStandardDefinition, Transaction,
 };
 // Importiere die spezifischen Fehlertypen direkt aus ihren Modulen für die `matches!`-Makros.
 use voucher_lib::services::voucher_validation::ValidationError;
@@ -115,6 +115,30 @@ fn create_guarantor_signature(
     signature_data.signature = bs58::encode(digital_signature.to_bytes()).into_string();
     signature_data
 }
+
+/// Helper zum Neuberechnen von t_id und Signatur einer manipulierten Transaktion.
+/// Isoliert den zu testenden Fehler von Signatur- oder ID-Fehlern.
+fn resign_transaction(
+    mut tx: Transaction,
+    signer_key: &SigningKey,
+) -> Transaction {
+    tx.t_id = "".to_string();
+    tx.sender_signature = "".to_string();
+    tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
+    let payload = serde_json::json!({
+        "prev_hash": tx.prev_hash,
+        "sender_id": tx.sender_id,
+        "t_id": tx.t_id,
+        "t_time": tx.t_time
+    });
+    let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
+    tx.sender_signature = bs58::encode(
+        crypto_utils::sign_ed25519(signer_key, signature_hash.as_bytes()).to_bytes(),
+    )
+        .into_string();
+    tx
+}
+
 
 // --- NEUE, ERWEITERTE TESTS ---
 
@@ -206,23 +230,8 @@ fn test_validation_fails_on_malformed_amount_string() {
     voucher.transactions[0].amount = "not-a-number".to_string();
 
     // Da dies die Transaktion ungültig macht, müssen wir `t_id` und Signatur neu berechnen.
-    let mut tx = voucher.transactions[0].clone();
-    tx.t_id = "".to_string();
-    tx.sender_signature = "".to_string();
-    tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
-
-    let payload = serde_json::json!({
-        "prev_hash": tx.prev_hash,
-        "sender_id": tx.sender_id,
-        "t_id": tx.t_id,
-        "t_time": tx.t_time
-    });
-    let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
-    tx.sender_signature = bs58::encode(
-        crypto_utils::sign_ed25519(&signing_key, signature_hash.as_bytes()).to_bytes(),
-    )
-        .into_string();
-    voucher.transactions[0] = tx;
+    let tx = voucher.transactions[0].clone();
+    voucher.transactions[0] = resign_transaction(tx, &signing_key);
 
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
     assert!(
@@ -411,14 +420,9 @@ fn test_validation_fails_on_transaction_time_order() {
     voucher_after_split.transactions[1].t_time = invalid_second_time.to_string();
 
     // Re-signiere die manipulierte Transaktion, um den Zeit-Check zu isolieren.
-    let mut tx = voucher_after_split.transactions[1].clone();
-    tx.t_id = "".to_string();
-    tx.sender_signature = "".to_string();
-    tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
-    let payload = serde_json::json!({ "prev_hash": tx.prev_hash, "sender_id": tx.sender_id, "t_id": tx.t_id, "t_time": tx.t_time });
-    let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
-    tx.sender_signature = bs58::encode(crypto_utils::sign_ed25519(&sender_key, signature_hash.as_bytes()).to_bytes()).into_string();
-    voucher_after_split.transactions[1] = tx;
+    let tx = voucher_after_split.transactions[1].clone();
+    voucher_after_split.transactions[1] = resign_transaction(tx, &sender_key);
+
 
     let validation_result = validate_voucher_against_standard(&voucher_after_split, &standard);
 
@@ -454,17 +458,8 @@ fn test_validation_fails_on_init_tx_with_wrong_prev_hash() {
     voucher.transactions[0].prev_hash = "intentionally_wrong_prev_hash".to_string();
 
     // 2. Re-signiere die Transaktion, um den Fehler auf den prev_hash zu isolieren.
-    let mut tx = voucher.transactions[0].clone();
-    tx.t_id = "".to_string();
-    tx.sender_signature = "".to_string();
-    tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
-    let payload = serde_json::json!({ "prev_hash": tx.prev_hash, "sender_id": tx.sender_id, "t_id": tx.t_id, "t_time": tx.t_time });
-    let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
-    tx.sender_signature = bs58::encode(
-        crypto_utils::sign_ed25519(&signing_key, signature_hash.as_bytes()).to_bytes(),
-    )
-    .into_string();
-    voucher.transactions[0] = tx;
+    let tx = voucher.transactions[0].clone();
+    voucher.transactions[0] = resign_transaction(tx, &signing_key);
 
     // 3. Die Validierung muss fehlschlagen.
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
@@ -492,17 +487,8 @@ fn test_validation_fails_on_init_tx_with_wrong_amount() {
     voucher.transactions[0].amount = "999".to_string(); // Absichtlich falscher Betrag
 
     // 2. Re-signiere die Transaktion, um den Fehler zu isolieren.
-    let mut tx = voucher.transactions[0].clone();
-    tx.t_id = "".to_string();
-    tx.sender_signature = "".to_string();
-    tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
-    let payload = serde_json::json!({ "prev_hash": tx.prev_hash, "sender_id": tx.sender_id, "t_id": tx.t_id, "t_time": tx.t_time });
-    let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
-    tx.sender_signature = bs58::encode(
-        crypto_utils::sign_ed25519(&signing_key, signature_hash.as_bytes()).to_bytes(),
-    )
-    .into_string();
-    voucher.transactions[0] = tx;
+    let tx = voucher.transactions[0].clone();
+    voucher.transactions[0] = resign_transaction(tx, &signing_key);
 
     // 3. Die Validierung sollte fehlschlagen.
     // HINWEIS: Dies deckt eine Lücke in der aktuellen Validierungslogik auf.
@@ -536,17 +522,9 @@ fn test_validation_fails_on_init_tx_with_wrong_recipient() {
     voucher.transactions[0].recipient_id = imposter_id;
 
     // 2. Re-signiere die Transaktion.
-    let mut tx = voucher.transactions[0].clone();
-    tx.t_id = "".to_string();
-    tx.sender_signature = "".to_string();
-    tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
-    let payload = serde_json::json!({ "prev_hash": tx.prev_hash, "sender_id": tx.sender_id, "t_id": tx.t_id, "t_time": tx.t_time });
-    let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
-    tx.sender_signature = bs58::encode(
-        crypto_utils::sign_ed25519(&signing_key, signature_hash.as_bytes()).to_bytes(),
-    )
-    .into_string();
-    voucher.transactions[0] = tx;
+    let tx = voucher.transactions[0].clone();
+    voucher.transactions[0] = resign_transaction(tx, &signing_key);
+
 
     // 3. Die Validierung sollte fehlschlagen.
     // HINWEIS: Dies deckt ebenfalls eine Lücke in der Validierungslogik auf.
@@ -580,4 +558,265 @@ fn test_validation_fails_on_tampered_transaction_id() {
         ),
         "Validation should fail because the t_id does not match its content hash."
     );
+}
+
+// --- NEUE TESTS FÜR ANGRIFFSVEKTOREN AUF TRANSAKTIONEN ---
+
+/// Bereitet einen Gutschein mit einer validen ersten Transaktion für die folgenden Tests vor.
+fn setup_voucher_with_one_tx() -> (VoucherStandardDefinition, SigningKey, String, SigningKey, String, voucher_lib::Voucher) {
+    let standard_toml =
+        std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+
+    let (creator_key, creator) = setup_creator(Some("tx_base_creator"));
+    let creator_id = creator.id.clone();
+    let (recipient_key, recipient_creator) = setup_creator(Some("tx_base_recipient"));
+    let recipient_id = recipient_creator.id;
+
+    let mut voucher_data = create_minuto_voucher_data(creator);
+    voucher_data.nominal_value.amount = "100.0000".to_string();
+    let initial_voucher = create_voucher(voucher_data, &standard, &creator_key).unwrap();
+
+    // Erstelle eine valide Split-Transaktion. Creator -> Recipient
+    // Creator hat danach 60.0000, Recipient hat 40.0000
+    let voucher_after_tx1 = create_transaction(
+        &initial_voucher, &standard, &creator_id, &creator_key, &recipient_id, "40.0000",
+    ).unwrap();
+
+    (standard, creator_key, creator_id, recipient_key, recipient_id, voucher_after_tx1)
+}
+
+
+#[test]
+fn test_tx_fails_on_split_if_not_divisible() {
+    let (mut standard, creator_key, creator_id, _, recipient_id, voucher) = setup_voucher_with_one_tx();
+
+    // Manipuliere den Standard, sodass der Gutschein nicht teilbar ist.
+    standard.template.fixed.is_divisible = false;
+
+    // Die Validierung innerhalb von `create_transaction` sollte fehlschlagen,
+    // da `voucher.divisible` (true) nicht mit `standard.is_divisible` (false) übereinstimmt.
+    let tx_result = create_transaction(&voucher, &standard, &creator_id, &creator_key, &recipient_id, "10.0000");
+
+    assert!(matches!(
+        tx_result.unwrap_err(),
+        VoucherCoreError::Validation(ValidationError::IncorrectDivisibility { .. })
+    ));
+}
+
+#[test]
+fn test_tx_fails_on_negative_amount() {
+    let (standard, _, _, recipient_key, recipient_id, mut voucher) = setup_voucher_with_one_tx();
+    let last_valid_tx = voucher.transactions.last().unwrap();
+    let prev_hash = crypto_utils::get_hash(to_canonical_json(last_valid_tx).unwrap());
+
+    let tx2 = Transaction {
+        t_id: "".to_string(),
+        prev_hash,
+        t_type: "".to_string(),
+        t_time: voucher_lib::services::utils::get_current_timestamp(),
+        sender_id: recipient_id,
+        recipient_id: "ts1...some_other_person".to_string(),
+        amount: "-10.0000".to_string(), // Negativer Betrag
+        sender_remaining_amount: None,
+        sender_signature: "".to_string(),
+    };
+
+    let signed_tx2 = resign_transaction(tx2, &recipient_key);
+    voucher.transactions.push(signed_tx2);
+
+    let result = validate_voucher_against_standard(&voucher, &standard);
+    assert!(matches!(
+        result.unwrap_err(),
+        VoucherCoreError::Validation(ValidationError::NegativeOrZeroAmount { .. })
+    ));
+}
+
+
+#[test]
+fn test_tx_fails_on_wrong_prev_hash_in_chain() {
+    let (standard, _, _, recipient_key, recipient_id, mut voucher) = setup_voucher_with_one_tx();
+
+    let tx2 = Transaction {
+        t_id: "".to_string(),
+        prev_hash: "intentionally-wrong-hash".to_string(),
+        t_type: "".to_string(),
+        t_time: voucher_lib::services::utils::get_current_timestamp(),
+        sender_id: recipient_id,
+        recipient_id: "ts1...some_other_person".to_string(),
+        amount: "10.0000".to_string(),
+        sender_remaining_amount: None,
+        sender_signature: "".to_string(),
+    };
+
+    let signed_tx2 = resign_transaction(tx2, &recipient_key);
+    voucher.transactions.push(signed_tx2);
+
+    let result = validate_voucher_against_standard(&voucher, &standard);
+    assert!(matches!(
+        result.unwrap_err(),
+        VoucherCoreError::Validation(ValidationError::InvalidTransaction(_))
+    ));
+}
+
+#[test]
+fn test_tx_fails_on_insufficient_funds() {
+    let (standard, _, _, recipient_key, recipient_id, mut voucher) = setup_voucher_with_one_tx();
+    let last_valid_tx = voucher.transactions.last().unwrap();
+    let prev_hash = crypto_utils::get_hash(to_canonical_json(last_valid_tx).unwrap());
+
+    // Empfänger hat 40.0000, versucht aber 50.0000 als vollen Transfer zu senden.
+    let tx2 = Transaction {
+        t_id: "".to_string(),
+        prev_hash,
+        t_type: "".to_string(),
+        t_time: voucher_lib::services::utils::get_current_timestamp(),
+        sender_id: recipient_id,
+        recipient_id: "ts1...some_other_person".to_string(),
+        amount: "50.0000".to_string(),
+        sender_remaining_amount: None, // Voller Transfer
+        sender_signature: "".to_string(),
+    };
+
+    let signed_tx2 = resign_transaction(tx2, &recipient_key);
+    voucher.transactions.push(signed_tx2);
+
+    let result = validate_voucher_against_standard(&voucher, &standard);
+    assert!(matches!(
+        result.unwrap_err(),
+        VoucherCoreError::Validation(ValidationError::FullTransferAmountMismatch { .. })
+    ));
+}
+
+#[test]
+fn test_tx_fails_on_subsequent_init_transaction() {
+    let (standard, _, _, recipient_key, recipient_id, mut voucher) = setup_voucher_with_one_tx();
+    let last_valid_tx = voucher.transactions.last().unwrap();
+    let prev_hash = crypto_utils::get_hash(to_canonical_json(last_valid_tx).unwrap());
+
+    let tx2 = Transaction {
+        t_id: "".to_string(),
+        prev_hash,
+        t_type: "init".to_string(), // Eine zweite init-Transaktion
+        t_time: voucher_lib::services::utils::get_current_timestamp(),
+        sender_id: recipient_id,
+        recipient_id: "ts1...some_other_person".to_string(),
+        amount: "10.0000".to_string(),
+        sender_remaining_amount: None,
+        sender_signature: "".to_string(),
+    };
+
+    let signed_tx2 = resign_transaction(tx2, &recipient_key);
+    voucher.transactions.push(signed_tx2);
+
+    let result = validate_voucher_against_standard(&voucher, &standard);
+    assert!(matches!(
+        result.unwrap_err(),
+        VoucherCoreError::Validation(ValidationError::InvalidTransaction(_))
+    ));
+}
+
+#[test]
+fn test_tx_fails_on_send_to_self_after_init() {
+    let (standard, _, _, recipient_key, recipient_id, mut voucher) = setup_voucher_with_one_tx();
+    let last_valid_tx = voucher.transactions.last().unwrap();
+    let prev_hash = crypto_utils::get_hash(to_canonical_json(last_valid_tx).unwrap());
+
+    let tx2 = Transaction {
+        t_id: "".to_string(),
+        prev_hash,
+        t_type: "".to_string(),
+        t_time: voucher_lib::services::utils::get_current_timestamp(),
+        sender_id: recipient_id.clone(),
+        recipient_id: recipient_id.clone(), // Sendet an sich selbst
+        amount: "10.0000".to_string(),
+        sender_remaining_amount: None,
+        sender_signature: "".to_string(),
+    };
+
+    let signed_tx2 = resign_transaction(tx2, &recipient_key);
+    voucher.transactions.push(signed_tx2);
+
+    let result = validate_voucher_against_standard(&voucher, &standard);
+    assert!(matches!(
+        result.unwrap_err(),
+        VoucherCoreError::Validation(ValidationError::InvalidTransaction(_))
+    ));
+}
+
+#[test]
+fn test_tx_fails_on_tampered_content_vs_tid() {
+    let (standard, _, _, _, _, mut voucher) = setup_voucher_with_one_tx();
+
+    // Manipuliere einen Wert, aber berechne weder t_id noch Signatur neu.
+    voucher.transactions[1].amount = "99.9999".to_string();
+
+    let result = validate_voucher_against_standard(&voucher, &standard);
+    assert!(matches!(
+        result.unwrap_err(),
+        VoucherCoreError::Validation(ValidationError::MismatchedTransactionId{..})
+    ));
+}
+
+#[test]
+fn test_tx_fails_on_zero_amount() {
+    let (standard, _, _, recipient_key, recipient_id, mut voucher) = setup_voucher_with_one_tx();
+    let last_valid_tx = voucher.transactions.last().unwrap();
+    let prev_hash = crypto_utils::get_hash(to_canonical_json(last_valid_tx).unwrap());
+
+    let tx2 = Transaction {
+        t_id: "".to_string(),
+        prev_hash,
+        t_type: "".to_string(),
+        t_time: voucher_lib::services::utils::get_current_timestamp(),
+        sender_id: recipient_id,
+        recipient_id: "ts1...some_other_person".to_string(),
+        amount: "0.0000".to_string(), // Null-Betrag
+        sender_remaining_amount: None,
+        sender_signature: "".to_string(),
+    };
+
+    let signed_tx2 = resign_transaction(tx2, &recipient_key);
+    voucher.transactions.push(signed_tx2);
+
+    let result = validate_voucher_against_standard(&voucher, &standard);
+    assert!(matches!(
+        result.unwrap_err(),
+        VoucherCoreError::Validation(ValidationError::NegativeOrZeroAmount{..})
+    ));
+}
+
+#[test]
+fn test_guarantor_sig_fails_on_mismatched_voucher_id() {
+    let standard_toml =
+        std::fs::read_to_string("voucher_standards/minuto_standard.toml").unwrap();
+    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml).unwrap();
+    let (signing_key, creator) = setup_creator(Some("guarantor_voucher_id_mismatch"));
+    let mut voucher =
+        create_voucher(create_minuto_voucher_data(creator), &standard, &signing_key).unwrap();
+
+    let (g1_pub, g1_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g1_vid"));
+    let g1_id = crypto_utils::create_user_id(&g1_pub, Some("g1")).unwrap();
+    let (g2_pub, g2_priv) = crypto_utils::generate_ed25519_keypair_for_tests(Some("g2_vid"));
+    let g2_id = crypto_utils::create_user_id(&g2_pub, Some("g2")).unwrap();
+
+    // Erstelle eine valide Signatur
+    let mut sig1 = create_guarantor_signature(
+        &voucher.voucher_id, g1_id, "G1", "1", &g1_priv, "2026-08-01T10:00:00Z",
+    );
+    // Manipuliere die voucher_id NACH der Erstellung
+    sig1.voucher_id = "this-is-the-wrong-voucher-id".to_string();
+
+    let sig2 = create_guarantor_signature(
+        &voucher.voucher_id, g2_id, "G2", "2", &g2_priv, "2026-08-01T10:00:00Z",
+    );
+
+    voucher.guarantor_signatures.push(sig1);
+    voucher.guarantor_signatures.push(sig2);
+
+    let validation_result = validate_voucher_against_standard(&voucher, &standard);
+    assert!(matches!(
+        validation_result.unwrap_err(),
+        VoucherCoreError::Validation(ValidationError::MismatchedVoucherIdInSignature { .. })
+    ));
 }

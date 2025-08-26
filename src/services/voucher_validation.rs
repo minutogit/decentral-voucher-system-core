@@ -565,6 +565,14 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
             balances.insert(sender_id.clone(), amount_sent);
         } else {
             // Geschäftslogik für alle nachfolgenden Transaktionen.
+            // NEU: Eine Transaktion an sich selbst ist nach der Initialisierung nicht erlaubt,
+            // da dies keinen Zustand ändert und nur die Kette unnötig verlängert.
+            if transaction.sender_id == transaction.recipient_id {
+                return Err(ValidationError::InvalidTransaction(
+                    "Sender and recipient cannot be the same in a non-init transaction.".to_string()
+                ).into());
+            }
+
             // Unterscheidung zwischen Split und vollem Transfer anhand von sender_remaining_amount
             if let Some(remaining_str) = &transaction.sender_remaining_amount {
                 // --- Fall 1: Dies ist eine SPLIT-Transaktion ---
@@ -607,9 +615,6 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
             } else {
                 // --- Fall 2: Dies ist ein VOLLER TRANSFER ---
                 // Bei einem vollen Transfer muss der gesendete Betrag exakt dem Guthaben des Senders entsprechen.
-                if amount_sent > sender_balance {
-                    return Err(ValidationError::InsufficientFunds.into()); 
-                }
                 // Direkter Vergleich ist jetzt sicher, da die Formatierung konsistent ist.
                 if amount_sent != sender_balance {
                     // NEU: Ersetze den generischen Fehler durch die detaillierte Variante.
