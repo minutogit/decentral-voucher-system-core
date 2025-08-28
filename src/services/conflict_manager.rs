@@ -12,7 +12,7 @@ use crate::error::VoucherCoreError;
 use crate::models::conflict::{
     FingerprintStore, ProofOfDoubleSpend, TransactionFingerprint,
 };
-use crate::models::profile::{UserIdentity, VoucherStatus, VoucherStore};
+use crate::models::profile::{UserIdentity, VoucherStore};
 use crate::models::voucher::{Transaction, Voucher};
 use crate::services::crypto_utils::{get_hash, get_pubkey_from_user_id, sign_ed25519, verify_ed25519};
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
@@ -107,9 +107,9 @@ pub fn check_for_double_spend(fingerprint_store: &FingerprintStore) -> DoubleSpe
 /// - `None`: Es konnte kein Beweis erbracht werden (z.B. weil Transaktionen nicht
 ///   gefunden wurden oder Signaturen ungültig waren).
 pub fn verify_conflict_and_create_proof(
-    voucher_store: &mut VoucherStore,
+    voucher_store: &VoucherStore,
     identity: &UserIdentity,
-    conflict_hash: &str,
+    _conflict_hash: &str,
     fingerprints: &[TransactionFingerprint],
     archive: &impl VoucherArchive,
 ) -> Result<Option<ProofOfDoubleSpend>, VoucherCoreError> {
@@ -181,33 +181,7 @@ pub fn verify_conflict_and_create_proof(
         layer2_verdict: None,
     };
 
-    // 5. Als Konsequenz alle betroffenen lokalen Gutscheine unter Quarantäne stellen.
-    let ids_to_quarantine = find_all_local_vouchers_by_conflict_hash(voucher_store, conflict_hash);
-    for local_id in ids_to_quarantine {
-        if let Some(entry) = voucher_store.vouchers.get_mut(&local_id) {
-            entry.1 = VoucherStatus::Quarantined;
-        }
-    }
-
     Ok(Some(proof))
-}
-
-/// Findet die lokalen IDs aller Gutschein-Instanzen, die einen bestimmten Konflikt-Hash enthalten.
-fn find_all_local_vouchers_by_conflict_hash(
-    voucher_store: &VoucherStore,
-    conflict_hash: &str,
-) -> Vec<String> {
-    let mut matching_ids = Vec::new();
-    for (local_id, (voucher, _)) in &voucher_store.vouchers {
-        for tx in &voucher.transactions {
-            let current_hash = get_hash(format!("{}{}", tx.prev_hash, tx.sender_id));
-            if current_hash == conflict_hash {
-                matching_ids.push(local_id.clone());
-                break;
-            }
-        }
-    }
-    matching_ids
 }
 
 /// Sucht eine Transaktion anhand ihrer ID (`t_id`) zuerst im aktiven
@@ -324,4 +298,29 @@ pub fn encrypt_transaction_timestamp(transaction: &Transaction) -> Result<u128, 
 
     // c. Zeitstempel via XOR verschlüsseln und zurückgeben.
     Ok(nanos ^ key)
+}
+
+/// Entschlüsselt den Zeitstempel einer Transaktion, der mit `encrypt_transaction_timestamp`
+/// verschlüsselt wurde.
+///
+/// Da die Verschlüsselung auf XOR basiert, ist die Entschlüsselungsfunktion identisch.
+///
+/// # Arguments
+/// * `transaction` - Die Transaktion, zu der der Zeitstempel gehört.
+/// * `encrypted_nanos` - Der verschlüsselte Zeitstempel in Nanosekunden (`u128`).
+///
+/// # Returns
+/// Der ursprüngliche, entschlüsselte Zeitstempel in Nanosekunden.
+pub fn decrypt_transaction_timestamp(transaction: &Transaction, encrypted_nanos: u128) -> Result<u128, VoucherCoreError> {
+    let key_material = format!("{}{}", transaction.prev_hash, transaction.t_id);
+    let key_hash_b58 = get_hash(key_material);
+    let key_hash_bytes = bs58::decode(key_hash_b58)
+        .into_vec()
+        .map_err(|_| VoucherCoreError::Generic("Failed to decode base58 hash for key derivation".to_string()))?;
+
+    let key_bytes: [u8; 16] = key_hash_bytes[..16].try_into()
+        .map_err(|_| VoucherCoreError::Generic("Hash too short for key derivation".to_string()))?;
+    let key = u128::from_le_bytes(key_bytes);
+
+    Ok(encrypted_nanos ^ key)
 }

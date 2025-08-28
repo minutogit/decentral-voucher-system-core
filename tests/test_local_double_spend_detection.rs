@@ -351,8 +351,15 @@ fn test_local_double_spend_detection_lifecycle() {
 
     // Bob agiert böswillig. Er umgeht die Schutzmechanismen seines Wallets (create_transfer würde das blockieren)
     // und erstellt manuell zwei widersprüchliche Transaktionen aus demselben Zustand.
+    // Wichtig: Wir fügen eine kleine Verzögerung ein, um sicherzustellen, dass die Zeitstempel
+    // der betrügerischen Transaktionen deterministisch unterscheidbar sind.
     let voucher_for_charlie = voucher_manager::create_transaction(&voucher_from_bob, &standard, &bob_identity.user_id, &bob_identity.signing_key, &charlie_identity.user_id, "100").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(10));
     let voucher_for_david = voucher_manager::create_transaction(&voucher_from_bob, &standard, &bob_identity.user_id, &bob_identity.signing_key, &david_identity.user_id, "100").unwrap();
+
+    // Wir merken uns die IDs der beiden widersprüchlichen Transaktionen.
+    let winning_tx_id = voucher_for_charlie.transactions.last().unwrap().t_id.clone();
+    let losing_tx_id = voucher_for_david.transactions.last().unwrap().t_id.clone();
 
     // Er verpackt und sendet die erste betrügerische Version an Charlie. Hierfür nutzt er die alte Methode.
     let bundle_to_charlie = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_charlie.clone()], &charlie_identity.user_id, None).unwrap();
@@ -397,12 +404,6 @@ fn test_local_double_spend_detection_lifecycle() {
     // ### Akt 4: Die Aufdeckung ###
     println!("--- Akt 4: David sendet seine widersprüchliche Version an Alice. Der Betrug wird aufgedeckt. ---");
 
-    // Wir merken uns die ID der Instanz, die Alice von Charlie erhalten hat.
-    let (active_local_id_from_charlie, _) = alice_wallet.voucher_store.vouchers.iter()
-        .find(|(_, (_, status))| *status == VoucherStatus::Active)
-        .expect("Alice sollte einen aktiven Gutschein haben.");
-    let id_to_be_quarantined = active_local_id_from_charlie.clone();
-
     // David handelt ebenfalls legitim (aus seiner Sicht) und verwendet `create_transfer`.
     // Wir klonen die ID, um den immutable borrow auf david_wallet sofort zu beenden.
     let david_local_id = david_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
@@ -422,23 +423,42 @@ fn test_local_double_spend_detection_lifecycle() {
 
     // Assertions
     assert_eq!(result2.check_result.verifiable_conflicts.len(), 1, "Ein verifizierbarer Konflikt MUSS erkannt worden sein.");
-
-    // Die Instanz, die den Konflikt ausgelöst hat (die von Charlie), muss unter Quarantäne stehen.
-    let (_final_voucher, final_status) = alice_wallet.voucher_store.vouchers.get(&id_to_be_quarantined).unwrap();
-    assert_eq!(*final_status, VoucherStatus::Quarantined, "Der ursprünglich von Charlie erhaltene Gutschein MUSS jetzt unter Quarantäne stehen!");
-
     assert_eq!(alice_wallet.voucher_store.vouchers.len(), 3, "Alices Wallet sollte am Ende drei Instanzen des Gutscheins enthalten.");
 
-    // Der Versuch, den unter Quarantäne stehenden Gutschein auszugeben, muss fehlschlagen.
+    // ### Akt 5: Überprüfung der intelligenten Konfliktlösung ###
+    println!("--- Akt 5: Überprüfe, ob die korrekte Gutschein-Instanz aktiv geblieben ist ---");
+
+    let mut winner_status: Option<VoucherStatus> = None;
+    let mut loser_status: Option<VoucherStatus> = None;
+    let mut loser_local_id: Option<String> = None;
+
+    // Finde die beiden konkurrierenden Gutschein-Instanzen in Alices Wallet und prüfe ihren Status.
+    // Wir müssen die gesamte Transaktionskette durchsuchen, nicht nur die letzte Transaktion.
+    for (local_id, (voucher, status)) in &alice_wallet.voucher_store.vouchers {
+        // Prüfe, ob die Gewinner-Transaktion Teil der Historie dieses Gutscheins ist.
+        if voucher.transactions.iter().any(|tx| tx.t_id == winning_tx_id) {
+            winner_status = Some(status.clone());
+        }
+        // Prüfe, ob die Verlierer-Transaktion Teil der Historie dieses Gutscheins ist.
+        if voucher.transactions.iter().any(|tx| tx.t_id == losing_tx_id) {
+            loser_status = Some(status.clone());
+            loser_local_id = Some(local_id.clone());
+        }
+    }
+
+    assert_eq!(winner_status, Some(VoucherStatus::Active), "Die 'Gewinner'-Instanz (von Charlie, weil früher) muss aktiv bleiben.");
+    assert_eq!(loser_status, Some(VoucherStatus::Quarantined), "Die 'Verlierer'-Instanz (von David, weil später) muss unter Quarantäne gestellt werden.");
+
+    // Der Versuch, den unter Quarantäne stehenden Gutschein (die 'Verlierer'-Instanz) auszugeben, muss fehlschlagen.
     let transfer_attempt = alice_wallet.create_transfer(
         alice_identity,
         &standard,
-        &id_to_be_quarantined,
+        &loser_local_id.unwrap(),
         &bob_identity.user_id,
         "100", None, // notes
         Some(&archive) // archive
     );
     assert!(transfer_attempt.is_err(), "Die Verwendung eines unter Quarantäne stehenden Gutscheins via create_transfer muss fehlschlagen.");
 
-    println!("Test erfolgreich: Double Spend wurde erkannt und der kompromittierte Gutschein gesperrt.");
+    println!("Test erfolgreich: Double Spend wurde erkannt, und die 'Der Früheste gewinnt'-Regel wurde korrekt angewendet.");
 }

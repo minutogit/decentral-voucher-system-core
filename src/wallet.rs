@@ -208,21 +208,51 @@ impl Wallet {
         for (conflict_hash, fingerprints) in &check_result.verifiable_conflicts {
             if let Some(archive_backend) = archive {
                 if let Some(proof) = conflict_manager::verify_conflict_and_create_proof(
-                    &mut self.voucher_store, identity, conflict_hash, fingerprints, archive_backend
+                    &self.voucher_store, identity, conflict_hash, fingerprints, archive_backend
                 )? {
                     if let Some(verdict) = &proof.layer2_verdict {
                         // TODO: Die Signatur des Verdicts hier verifizieren.
-                        if let Some((local_id, _)) = self.find_local_voucher_by_tx_id(&verdict.valid_transaction_id) {
-                            self.voucher_store.vouchers.get_mut(&local_id).unwrap().1 = VoucherStatus::Active;
-                        }
+                        // Logik für Layer-2-Urteil: Die als gültig deklarierte Transaktion wird aktiviert,
+                        // alle anderen im Konflikt stehenden werden unter Quarantäne gestellt.
                         for tx in &proof.conflicting_transactions {
-                            if tx.t_id != verdict.valid_transaction_id {
+                            if let Some((local_id, _)) = self.find_local_voucher_by_tx_id(&tx.t_id) {
+                                if let Some((_, status)) = self.voucher_store.vouchers.get_mut(&local_id) {
+                                    *status = if tx.t_id == verdict.valid_transaction_id {
+                                        VoucherStatus::Active
+                                    } else {
+                                        VoucherStatus::Quarantined
+                                    };
+                                }
+                            }
+                        }
+                    } else {
+                        // Offline "Der Früheste gewinnt"-Logik.
+                        // Findet die Transaktion mit dem frühesten Zeitstempel und erklärt sie zum Gewinner.
+                        let mut winner_tx: Option<&crate::models::voucher::Transaction> = None;
+                        let mut earliest_time = u128::MAX;
+
+                        for tx in &proof.conflicting_transactions {
+                            if let Some(fp) = fingerprints.iter().find(|f| f.t_id == tx.t_id) {
+                                if let Ok(decrypted_nanos) = conflict_manager::decrypt_transaction_timestamp(tx, fp.encrypted_timestamp) {
+                                    if decrypted_nanos < earliest_time {
+                                        earliest_time = decrypted_nanos;
+                                        winner_tx = Some(tx);
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(the_winner) = winner_tx {
+                            for tx in &proof.conflicting_transactions {
                                 if let Some((local_id, _)) = self.find_local_voucher_by_tx_id(&tx.t_id) {
-                                    self.create_and_append_blocking_transaction(&local_id, identity)?;
+                                    if let Some((_, status)) = self.voucher_store.vouchers.get_mut(&local_id) {
+                                        *status = if tx.t_id == the_winner.t_id { VoucherStatus::Active } else { VoucherStatus::Quarantined };
+                                    }
                                 }
                             }
                         }
                     }
+
                     self.proof_store.proofs.insert(proof.proof_id.clone(), proof);
                 }
             }
@@ -552,18 +582,6 @@ impl Wallet {
         data: &[u8],
     ) -> Result<usize, VoucherCoreError> {
         conflict_manager::import_foreign_fingerprints(&mut self.fingerprint_store, data)
-    }
-
-    /// Erstellt und hängt eine Sperr-Transaktion an einen als ungültig
-    /// identifizierten Gutschein an.
-    fn create_and_append_blocking_transaction(
-        &mut self,
-        _local_instance_id: &str,
-        _signing_identity: &UserIdentity,
-    ) -> Result<(), VoucherCoreError> {
-        // TODO: Diese Funktion wird implementiert, sobald die Layer-2-Interaktion
-        //       definiert ist.
-        Ok(())
     }
 
     /// Findet die lokale ID und den Status eines Gutscheins anhand einer enthaltenen Transaktions-ID.
