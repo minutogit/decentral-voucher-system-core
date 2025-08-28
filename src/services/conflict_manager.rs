@@ -17,7 +17,46 @@ use crate::models::voucher::{Transaction, Voucher};
 use crate::services::crypto_utils::{get_hash, get_pubkey_from_user_id, sign_ed25519, verify_ed25519};
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
 use crate::wallet::DoubleSpendCheckResult;
-use chrono::DateTime;
+use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat};
+
+/// Erstellt einen einzelnen, anonymisierten Fingerprint für eine gegebene Transaktion.
+/// Enthält die Logik zur Anonymisierung des `valid_until`-Zeitstempels.
+pub fn create_fingerprint_for_transaction(
+    transaction: &Transaction,
+    voucher: &Voucher,
+) -> Result<TransactionFingerprint, VoucherCoreError> {
+    // 1. Anonymisiere den `valid_until`-Zeitstempel durch Runden auf das Monatsende.
+    let valid_until_rounded = {
+        let parsed_date = DateTime::parse_from_rfc3339(&voucher.valid_until)
+            .map_err(|e| VoucherCoreError::Generic(format!("Failed to parse valid_until: {}", e)))?;
+
+        let year = parsed_date.year();
+        let month = parsed_date.month();
+
+        let first_of_next_month = if month == 12 {
+            NaiveDate::from_ymd_opt(year + 1, 1, 1)
+        } else {
+            NaiveDate::from_ymd_opt(year, month + 1, 1)
+        }
+            .ok_or_else(|| VoucherCoreError::Generic("Failed to calculate next month's date".to_string()))?;
+
+        let last_day_of_month = first_of_next_month.pred_opt().unwrap();
+        let end_of_month_dt = last_day_of_month.and_hms_micro_opt(23, 59, 59, 999999).unwrap().and_utc();
+        end_of_month_dt.to_rfc3339_opts(SecondsFormat::Micros, true)
+    };
+
+    // 2. Erstelle den Fingerprint mit dem gerundeten Zeitstempel.
+    let prev_hash_sender_id = format!("{}{}", transaction.prev_hash, transaction.sender_id);
+    let hash = get_hash(&prev_hash_sender_id);
+
+    Ok(TransactionFingerprint {
+        prvhash_senderid_hash: hash,
+        t_id: transaction.t_id.clone(),
+        sender_signature: transaction.sender_signature.clone(),
+        valid_until: valid_until_rounded,
+        encrypted_timestamp: encrypt_transaction_timestamp(transaction)?,
+    })
+}
 
 /// Durchsucht alle Gutscheine eines Nutzers und aktualisiert den `own_fingerprints`-Store.
 /// Diese Funktion sollte nach dem Empfang neuer Gutscheine aufgerufen werden.
@@ -29,20 +68,11 @@ pub fn scan_and_update_own_fingerprints(
 
     for (voucher, _) in voucher_store.vouchers.values() {
         for tx in &voucher.transactions {
-            let prev_hash_sender_id = format!("{}{}", tx.prev_hash, tx.sender_id);
-            let hash = get_hash(&prev_hash_sender_id);
-
-            let fingerprint = TransactionFingerprint {
-                prvhash_senderid_hash: hash.clone(),
-                t_id: tx.t_id.clone(),
-                sender_signature: tx.sender_signature.clone(),
-                valid_until: voucher.valid_until.clone(),
-                encrypted_timestamp: encrypt_transaction_timestamp(tx)?,
-            };
+            let fingerprint = create_fingerprint_for_transaction(tx, voucher)?;
 
             fingerprint_store
                 .own_fingerprints
-                .entry(hash)
+                .entry(fingerprint.prvhash_senderid_hash.clone())
                 .or_default()
                 .push(fingerprint);
         }

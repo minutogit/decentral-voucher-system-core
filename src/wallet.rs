@@ -377,19 +377,17 @@ impl Wallet {
         let vouchers_for_bundle = vec![new_voucher_state.clone()];
         let container_bytes = self.create_and_encrypt_transaction_bundle(identity, vouchers_for_bundle.clone(), recipient_id, notes)?;
  
-        // 7. Einen Fingerprint der Transaktion erstellen und für die Double-Spend-Erkennung speichern.
-        let created_tx = vouchers_for_bundle[0].transactions.last().unwrap();
-        let fingerprint = TransactionFingerprint {
-            prvhash_senderid_hash: fingerprint_hash.clone(),
-            t_id: created_tx.t_id.clone(),
-            sender_signature: created_tx.sender_signature.clone(),
-            valid_until: vouchers_for_bundle[0].valid_until.clone(),
-            encrypted_timestamp: conflict_manager::encrypt_transaction_timestamp(created_tx)?,
-        };
+        // 7. Einen Fingerprint der Transaktion über die zentrale Funktion erstellen und speichern.
+        let created_tx = new_voucher_state.transactions.last().unwrap();
+        let fingerprint = conflict_manager::create_fingerprint_for_transaction(
+            created_tx,
+            &new_voucher_state,
+        )?;
  
+        // Wichtig: Den Hash aus dem neu erstellten Fingerprint verwenden, um Konsistenz zu gewährleisten.
         self.fingerprint_store
             .own_fingerprints
-            .entry(fingerprint_hash)
+            .entry(fingerprint.prvhash_senderid_hash.clone())
             .or_default()
             .push(fingerprint);
  

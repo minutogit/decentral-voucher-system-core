@@ -11,6 +11,7 @@
 use std::fs;
 use voucher_lib::archive::file_archive::FileVoucherArchive;
 use lazy_static::lazy_static;
+use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat};
 use std::path::Path;
 use voucher_lib::models::conflict::TransactionFingerprint;
 use voucher_lib::models::profile::{BundleMetadataStore, UserIdentity, VoucherStatus};
@@ -163,7 +164,23 @@ fn test_fingerprint_generation() {
     let tx1 = &voucher.transactions[0];
     let expected_hash1 = get_hash(format!("{}{}", tx1.prev_hash, tx1.sender_id));
     assert!(wallet.fingerprint_store.own_fingerprints.contains_key(&expected_hash1), "Fingerprint für die init-Transaktion fehlt.");
-    assert_eq!(wallet.fingerprint_store.own_fingerprints.get(&expected_hash1).unwrap()[0].valid_until, voucher.valid_until);
+
+    // Berechne den erwarteten, auf das Monatsende gerundeten `valid_until`-Wert.
+    let expected_rounded_valid_until = {
+        let parsed_date = DateTime::parse_from_rfc3339(&voucher.valid_until).unwrap();
+        let year = parsed_date.year();
+        let month = parsed_date.month();
+        let first_of_next_month = if month == 12 {
+            NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()
+        } else {
+            NaiveDate::from_ymd_opt(year, month + 1, 1).unwrap()
+        };
+        let last_day_of_month = first_of_next_month.pred_opt().unwrap();
+        let end_of_month_dt = last_day_of_month.and_hms_micro_opt(23, 59, 59, 999999).unwrap().and_utc();
+        end_of_month_dt.to_rfc3339_opts(SecondsFormat::Micros, true)
+    };
+
+    assert_eq!(wallet.fingerprint_store.own_fingerprints.get(&expected_hash1).unwrap()[0].valid_until, expected_rounded_valid_until, "Der valid_until-Wert im Fingerprint muss dem auf das Monatsende gerundeten Wert entsprechen.");
 }
 
 #[test]
