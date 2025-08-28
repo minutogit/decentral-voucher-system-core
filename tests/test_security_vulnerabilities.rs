@@ -410,8 +410,8 @@ fn test_attack_create_inconsistent_transaction() {
     victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None::<&FileVoucherArchive>).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
     let result = voucher_validation::validate_voucher_against_standard(received_voucher, &STANDARD);
-    assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::InsufficientFunds))),
-            "Validation must fail with InsufficientFunds on overspending attempt.");
+    assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::FullTransferAmountMismatch { .. }))),
+            "Validation must fail with FullTransferAmountMismatch on overspending attempt.");
     victim_wallet.voucher_store.vouchers.clear();
 }
 
