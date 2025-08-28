@@ -211,8 +211,7 @@ pub fn create_voucher(
     let signature_payload = serde_json::json!({
         "prev_hash": init_transaction.prev_hash,
         "sender_id": init_transaction.sender_id,
-        "t_id": init_transaction.t_id,
-        "t_time": init_transaction.t_time
+        "t_id": init_transaction.t_id
     });
     let signature_payload_json = to_canonical_json(&signature_payload)?;
     let signature_hash = get_hash(signature_payload_json);
@@ -392,8 +391,7 @@ pub fn create_transaction(
     let signature_payload = serde_json::json!({
         "prev_hash": new_transaction.prev_hash,
         "sender_id": new_transaction.sender_id,
-        "t_id": new_transaction.t_id,
-        "t_time": new_transaction.t_time
+        "t_id": new_transaction.t_id
     });
     let signature_payload_hash = get_hash(to_canonical_json(&signature_payload)?);
     let signature = sign_ed25519(sender_key, signature_payload_hash.as_bytes());

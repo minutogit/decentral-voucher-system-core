@@ -236,7 +236,7 @@ fn create_hacked_tx(signer_identity: &UserIdentity, mut hacked_tx: Transaction) 
 
     let signature_payload = serde_json::json!({
         "prev_hash": hacked_tx.prev_hash, "sender_id": hacked_tx.sender_id,
-        "t_id": hacked_tx.t_id, "t_time": hacked_tx.t_time
+        "t_id": hacked_tx.t_id
     });
     let signature_payload_hash = get_hash(to_canonical_json(&signature_payload).unwrap());
     let signature = sign_ed25519(&signer_identity.signing_key, signature_payload_hash.as_bytes());

@@ -651,8 +651,7 @@ fn verify_transaction_integrity_and_signature(transaction: &crate::models::vouch
     let signature_payload = serde_json::json!({
         "prev_hash": transaction.prev_hash,
         "sender_id": transaction.sender_id,
-        "t_id": transaction.t_id,
-        "t_time": transaction.t_time,
+        "t_id": transaction.t_id
     });
     let signature_payload_hash = get_hash(to_canonical_json(&signature_payload)?);
 

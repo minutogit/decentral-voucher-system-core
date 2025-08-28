@@ -26,9 +26,9 @@ pub struct TransactionFingerprint {
     /// identischem `prvhash_senderid_hash` signalisiert einen Double Spend.
     pub t_id: String,
 
-    /// Der Zeitstempel der Transaktion (`t_time`). Hilft bei der Entscheidung,
-    /// welche Transaktion im Konfliktfall die frühere war.
-    pub t_time: String,
+    /// Der verschlüsselte Zeitstempel der Transaktion in Nanosekunden.
+    /// `encrypted_nanos = original_nanos ^ hash(prev_hash + t_id)`
+    pub encrypted_timestamp: u128,
 
     /// Die Signatur des Senders. Dient als kryptographischer Beweis, um den
     /// Betrugsversuch dem Verursacher zweifelsfrei zuordnen zu können.

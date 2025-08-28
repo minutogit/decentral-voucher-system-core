@@ -16,7 +16,6 @@ use voucher_lib::models::conflict::TransactionFingerprint;
 use voucher_lib::models::profile::{BundleMetadataStore, UserIdentity, VoucherStatus};
 use voucher_lib::models::voucher::{Address, Collateral, Creator, NominalValue, Voucher};
 use voucher_lib::services::crypto_utils::{create_user_id, get_hash};
-use voucher_lib::services::utils::get_current_timestamp;
 use voucher_lib::services::voucher_manager::{self, NewVoucherData};
 use voucher_lib::wallet::Wallet;
 
@@ -100,7 +99,7 @@ fn new_dummy_fingerprint(t_id: &str) -> TransactionFingerprint {
     TransactionFingerprint {
         prvhash_senderid_hash: "".to_string(),
         t_id: t_id.to_string(),
-        t_time: get_current_timestamp(),
+        encrypted_timestamp: 0,
         sender_signature: "".to_string(),
         valid_until: "2099-12-31T23:59:59.999999Z".to_string(),
     }

@@ -352,9 +352,9 @@ impl Wallet {
         let fingerprint = TransactionFingerprint {
             prvhash_senderid_hash: fingerprint_hash.clone(),
             t_id: created_tx.t_id.clone(),
-            t_time: created_tx.t_time.clone(),
             sender_signature: created_tx.sender_signature.clone(),
             valid_until: vouchers_for_bundle[0].valid_until.clone(),
+            encrypted_timestamp: conflict_manager::encrypt_transaction_timestamp(created_tx)?,
         };
  
         self.fingerprint_store

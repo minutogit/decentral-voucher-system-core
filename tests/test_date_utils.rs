@@ -137,7 +137,7 @@ fn test_chronological_validation_with_timezones() {
     tx.t_id = "".to_string(); // Hash-relevante Felder zurücksetzen
     tx.sender_signature = "".to_string();
     tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
-    let payload = serde_json::json!({ "prev_hash": tx.prev_hash, "sender_id": tx.sender_id, "t_id": tx.t_id, "t_time": tx.t_time });
+    let payload = serde_json::json!({ "prev_hash": tx.prev_hash, "sender_id": tx.sender_id, "t_id": tx.t_id });
     let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
     // KORREKTUR: Übergebe den korrekten `signing_key` vom Typ &SigningKey.
     tx.sender_signature = bs58::encode(crypto_utils::sign_ed25519(&signing_key, signature_hash.as_bytes()).to_bytes()).into_string();

@@ -17,6 +17,7 @@ use crate::models::voucher::{Transaction, Voucher};
 use crate::services::crypto_utils::{get_hash, get_pubkey_from_user_id, sign_ed25519, verify_ed25519};
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
 use crate::wallet::DoubleSpendCheckResult;
+use chrono::DateTime;
 
 /// Durchsucht alle Gutscheine eines Nutzers und aktualisiert den `own_fingerprints`-Store.
 /// Diese Funktion sollte nach dem Empfang neuer Gutscheine aufgerufen werden.
@@ -34,9 +35,9 @@ pub fn scan_and_update_own_fingerprints(
             let fingerprint = TransactionFingerprint {
                 prvhash_senderid_hash: hash.clone(),
                 t_id: tx.t_id.clone(),
-                t_time: tx.t_time.clone(),
                 sender_signature: tx.sender_signature.clone(),
                 valid_until: voucher.valid_until.clone(),
+                encrypted_timestamp: encrypt_transaction_timestamp(tx)?,
             };
 
             fingerprint_store
@@ -140,7 +141,7 @@ pub fn verify_conflict_and_create_proof(
 
         let signature_payload = serde_json::json!({
             "prev_hash": &tx.prev_hash, "sender_id": &tx.sender_id,
-            "t_id": &tx.t_id, "t_time": &tx.t_time
+            "t_id": &tx.t_id
         });
         let signature_payload_hash = get_hash(to_canonical_json(&signature_payload)?);
         let signature_bytes = bs58::decode(&tx.sender_signature).into_vec()?;
@@ -288,4 +289,39 @@ pub fn import_foreign_fingerprints(
         }
     }
     Ok(new_count)
+}
+
+
+/// Verschlüsselt den Zeitstempel einer Transaktion für die Verwendung in einem L2-Kontext.
+///
+/// Die Verschlüsselung erfolgt via XOR mit einem Schlüssel, der deterministisch aus der
+/// Transaktion selbst abgeleitet wird. Dies stellt sicher, dass jeder, der die
+/// widersprüchlichen Transaktionen besitzt, den Zeitstempel entschlüsseln kann.
+///
+/// # Arguments
+/// * `transaction` - Die Transaktion, deren Zeitstempel verschlüsselt werden soll.
+///
+/// # Returns
+/// Ein `u128` Wert, der den verschlüsselten Zeitstempel in Nanosekunden darstellt.
+pub fn encrypt_transaction_timestamp(transaction: &Transaction) -> Result<u128, VoucherCoreError> {
+    // a. Zeitstempel parsen und in Nanosekunden (u128) umwandeln.
+    let nanos = DateTime::parse_from_rfc3339(&transaction.t_time)
+        .map_err(|e| VoucherCoreError::Generic(format!("Failed to parse timestamp: {}", e)))?
+        .timestamp_nanos_opt()
+        .ok_or_else(|| VoucherCoreError::Generic("Invalid timestamp for nanosecond conversion".to_string()))? as u128;
+
+    // b. Schlüssel (u128) aus dem Hash von prev_hash und t_id ableiten.
+    let key_material = format!("{}{}", transaction.prev_hash, transaction.t_id);
+    let key_hash_b58 = get_hash(key_material);
+    let key_hash_bytes = bs58::decode(key_hash_b58)
+        .into_vec()
+        .map_err(|_| VoucherCoreError::Generic("Failed to decode base58 hash for key derivation".to_string()))?;
+
+    // Wir nehmen die ersten 16 Bytes (128 Bits) des Hashes als Schlüssel.
+    let key_bytes: [u8; 16] = key_hash_bytes[..16].try_into()
+        .map_err(|_| VoucherCoreError::Generic("Hash too short for key derivation".to_string()))?;
+    let key = u128::from_le_bytes(key_bytes);
+
+    // c. Zeitstempel via XOR verschlüsseln und zurückgeben.
+    Ok(nanos ^ key)
 }

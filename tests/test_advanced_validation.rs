@@ -128,8 +128,7 @@ fn resign_transaction(
     let payload = serde_json::json!({
         "prev_hash": tx.prev_hash,
         "sender_id": tx.sender_id,
-        "t_id": tx.t_id,
-        "t_time": tx.t_time
+        "t_id": tx.t_id
     });
     let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
     tx.sender_signature = bs58::encode(
