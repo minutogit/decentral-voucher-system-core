@@ -9,6 +9,7 @@ use crate::services::crypto_utils::{get_hash, sign_ed25519};
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
 
 use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
+use rand::Rng;
 // use toml::de::Error as TomlError; // ungenutzt
 use ed25519_dalek::SigningKey;
 use rust_decimal::Decimal;
@@ -104,6 +105,10 @@ pub fn create_voucher(
     creator_signing_key: &SigningKey
 ) -> Result<Voucher, VoucherCoreError> {
     let creation_date_str = get_current_timestamp();
+
+    // Erzeuge ein zufälliges Nonce für die Erstellung des ersten prev_hash.
+    let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
+    let nonce = bs58::encode(nonce_bytes).into_string();
     let creation_dt = DateTime::parse_from_rfc3339(&creation_date_str).unwrap().with_timezone(&Utc);
 
     // 1. Bestimme die zu verwendende Gültigkeitsdauer.
@@ -156,6 +161,7 @@ pub fn create_voucher(
     let mut temp_voucher = Voucher {
         voucher_standard,
         voucher_id: "".to_string(),
+        voucher_nonce: nonce,
         description: final_description,
         primary_redemption_type: standard_definition.template.fixed.primary_redemption_type.clone(),
         divisible: standard_definition.template.fixed.is_divisible,
@@ -192,7 +198,7 @@ pub fn create_voucher(
 
     let mut init_transaction = Transaction {
         t_id: "".to_string(), // Wird im nächsten Schritt berechnet
-        prev_hash: get_hash(&temp_voucher.voucher_id),
+        prev_hash: get_hash(format!("{}{}", &temp_voucher.voucher_id, &temp_voucher.voucher_nonce)),
         t_type: "init".to_string(),
         t_time: creation_date_str.clone(),
         sender_id: temp_voucher.creator.id.clone(),

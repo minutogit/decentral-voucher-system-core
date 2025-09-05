@@ -488,7 +488,7 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
     for (i, transaction) in voucher.transactions.iter().enumerate() {
         // 1. Überprüfe die kryptographische Verkettung (`prev_hash`).
         let expected_prev_hash = if i == 0 {
-            get_hash(&voucher.voucher_id)
+            get_hash(format!("{}{}", &voucher.voucher_id, &voucher.voucher_nonce))
         } else {
             let prev_transaction = &voucher.transactions[i - 1];
             get_hash(to_canonical_json(prev_transaction)?)

@@ -17,6 +17,7 @@ fn create_test_voucher(creator_id: &str, amount: &str) -> Voucher {
             uuid: "uuid-test".to_string(),
         },
         voucher_id: "voucher-123".to_string(),
+        voucher_nonce: "test-nonce".to_string(),
         description: "A test voucher".to_string(),
         primary_redemption_type: "SERVICE".to_string(),
         divisible: true,
@@ -64,7 +65,7 @@ fn create_test_voucher(creator_id: &str, amount: &str) -> Voucher {
 
     let init_transaction = Transaction {
         t_id: "t-init-abc".to_string(),
-        prev_hash: get_hash(&voucher.voucher_id),
+        prev_hash: get_hash(format!("{}{}", &voucher.voucher_id, &voucher.voucher_nonce)),
         t_type: "init".to_string(),
         t_time: get_current_timestamp(),
         sender_id: creator_id.to_string(),

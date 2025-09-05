@@ -196,6 +196,8 @@ pub struct Voucher {
     pub voucher_standard: VoucherStandard,
     /// Die eindeutige ID dieses spezifischen Gutscheins.
     pub voucher_id: String,
+    /// Ein zufälliges Nonce, um den ersten `prev_hash` unvorhersehbar zu machen.
+    pub voucher_nonce: String,
     /// Eine allgemeine, menschenlesbare Beschreibung des spezifischen Gutscheins.
     pub description: String,
     /// Der primäre Einlösezweck, übernommen vom Standard (z.B. "goods_or_services").
