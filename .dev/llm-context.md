@@ -1,11 +1,10 @@
-
 # llm-context.md für decentral-voucher-system-core
 
-Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher_core`. Sie dient als "README für die KI", um ein umfassendes Verständnis des Projekts und seiner Anforderungen zu gewährleisten.
+Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher_lib`. Sie dient als "README für die KI", um ein umfassendes Verständnis des Projekts und seiner Anforderungen zu gewährleisten.
 
 ## 1. Projekt & Zweck
 
-- **Projektname:** `voucher_core`
+- **Projektname:** `voucher_lib`
 
 - **Zweck:** Implementierung der Kernlogik eines dezentralen, vertrauensbasierten elektronischen Gutschein-Zahlungssystems.
 
@@ -50,7 +49,7 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 
 - **Testen:** Umfassende Unit- und Integrationstests.
 
-- **Keine externen Netzwerkaufrufe:** Die Core-Bibliothek soll keine direkten Netzwerkaufrufe für die Layer-2-Funktionalität enthalten. Diese Interaktionen werden von den übergeordneten Anwendungen gehandhabt, die `voucher_core` nutzen.
+- **Keine externen Netzwerkaufrufe:** Die Core-Bibliothek soll keine direkten Netzwerkaufrufe für die Layer-2-Funktionalität enthalten. Diese Interaktionen werden von den übergeordneten Anwendungen gehandhabt, die `voucher_lib` nutzen.
 
 
 ## 5. Kernkonzepte aus dem Paper (Zusammenfassung)
@@ -75,10 +74,13 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
     "uuid": "STRING"  // Die eindeutige Kennung (UUID) des Standards, zu dem dieser Gutschein gehört.
   },
   "voucher_id": "STRING", // Die eindeutige ID dieses spezifischen Gutscheins.
+  "voucher_nonce": "STRING", // Ein zufälliges Nonce, um den ersten `prev_hash` unvorhersehbar zu machen.
   "description": "STRING", // Eine allgemeine, menschenlesbare Beschreibung des Gutscheins (z.B. "Gutschein für 888 Minuten qualitativer Leistung").
+  "primary_redemption_type": "STRING", // Der primäre Einlösezweck, übernommen vom Standard (z.B. "goods_or_services").
   "divisible": "BOOLEAN", // Gibt an, ob der Gutschein in kleinere Einheiten aufgeteilt werden kann (true/false).
   "creation_date": "YYYY-MM-DDTHH:MM:SS.SSSSSSZ", // Das Erstellungsdatum des Gutscheins im ISO 8601-Format.
   "valid_until": "YYYY-MM-DDTHH:MM:SS.SSSSSSZ",    // Das Gültigkeitsdatum des Gutscheins im ISO 8601-Format.
+  "standard_minimum_issuance_validity": "STRING", // Die bei der Erstellung gültige Mindestgültigkeitsdauer aus dem Standard (ISO 8601 Duration).
   "non_redeemable_test_voucher": "BOOLEAN", // Eine Markierung, ob es sich um einen nicht einlösbaren Testgutschein handelt (true/false).
   "nominal_value": { // Definiert den Wert, den der Gutschein repräsentiert.
     "unit": "STRING",     // Die Einheit des Gutscheinwerts (z.B. "Minuten", "Unzen", "Euro").
@@ -117,6 +119,8 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
     "signature": "STRING",      // Die digitale Signatur des Erstellers. Sie signiert den Hash des initialen Gutschein-Objekts (ohne voucher_id, Signaturen und Transaktionen).
     "coordinates": "STRING"     // Geografische Koordinaten des Erstellers (z.B. "Breitengrad, Längengrad").
   },
+  "guarantor_requirements_description": "STRING", // Eine menschenlesbare Beschreibung der Bürgenanforderungen, übernommen vom Standard.
+  "footnote": "STRING", // Ein optionaler Fußnotentext, der vom Standard vorgegeben wird.
   "guarantor_signatures": [ // Ein Array von Signaturen der Bürgen.
     { // Jede Signatur ist ein in sich geschlossenes, überprüfbares Objekt.
       "voucher_id": "STRING",         // Die ID des Gutscheins, zu dem diese Signatur gehört.
@@ -149,7 +153,7 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
       "recipient_id": "STRING",         // ID des Empfängers der Transaktion.
       "amount": "STRING",               // Der Betrag, der bei dieser Transaktion bewegt wurde.
       "sender_remaining_amount": "STRING",// Der Restbetrag beim Sender. Dieses Feld existiert nur bei "split"-Transaktionen.
-      "sender_signature": "STRING"      // Digitale Signatur des Senders. Signiert ein Objekt, das aus prev_hash, sender_id, t_id und t_time besteht.
+      "sender_signature": "STRING"      // Digitale Signatur des Senders. Signiert ein Objekt, das aus prev_hash, sender_id und t_id besteht.
     }
   ],
   "additional_signatures": [ // Ein Array für zusätzliche, optionale Signaturen, die an den Gutschein angehängt werden können.
@@ -171,28 +175,30 @@ Die Transaktionen im `transactions`-Array bilden eine kryptographisch verkettete
 
 - **Verkettung:** Jede Transaktion enthält ein `prev_hash`-Feld.
 
-  - Die erste Transaktion (`t_type: "init"`) hat einen `prev_hash`, der der Hash der `voucher_id` ist.
+  - Die erste Transaktion (`t_type: "init"`) hat einen `prev_hash`, der der Hash der Konkatenation von `voucher_id` und `voucher_nonce` ist. Dies verhindert, dass der `prev_hash` erraten werden kann, was die Anonymität des Erstellers auf Layer 2 schützt.
 
   - Jede nachfolgende Transaktion hat einen `prev_hash`, der der Hash der vollständigen, kanonisierten vorherigen Transaktion ist.
 
 - **Integrität:** Jede Transaktion hat eine `t_id`, die aus dem Hash ihrer eigenen Daten (ohne `t_id` und `sender_signature`) erzeugt wird. Das stellt sicher, dass die Transaktionsdetails nicht nachträglich geändert werden können, ohne die `t_id` ungültig zu machen.
 
-- **Authentizität:** Die `sender_signature` signiert ein separates Objekt, das die Kern-Metadaten der Transaktion (`prev_hash`, `sender_id`, `t_id`, `t_time`) enthält. Dies beweist, dass der Sender die Transaktion autorisiert hat und sie an einer bestimmten Stelle in der Kette verankert ist.
+- **Authentizität:** Die `sender_signature` signiert ein separates, minimales Objekt, das nur die Kern-Metadaten der Transaktion (`prev_hash`, `sender_id`, `t_id`) enthält. Dies beweist, dass der Sender die Transaktion autorisiert hat. Der Zeitstempel (`t_time`) muss nicht explizit signiert werden, da er bereits Teil der Daten ist, die zur Erzeugung der `t_id` gehasht werden und somit implizit durch die Signatur der `t_id` geschützt ist.
 
 
 ### Double-Spending-Erkennung
 
 Ein **Double Spend** liegt vor, wenn ein Nutzer von einem bestimmten Zustand des Gutscheins (repräsentiert durch den `prev_hash` der letzten gültigen Transaktion) zwei oder mehr unterschiedliche neue Transaktionen erstellt und diese an verschiedene Personen verteilt.
 
-#### Anonymisierte Erkennung auf Layer 2
+#### Anonymisierte Erkennung auf Layer 2 mit verschlüsseltem Zeitstempel
 
 Die Transaktionsstruktur ist für eine **anonymisierte Betrugserkennung** durch ein übergeordnetes System (Layer 2) optimiert:
 
 - **Anonymer Fingerabdruck:** Anstatt `prev_hash` und `sender_id` direkt preiszugeben, erzeugt ein Client einen anonymen "Fingerabdruck": `prvhash_senderid_hash = hash(prev_hash + sender_id)`.
 
-- **Server-Upload:** Der Client lädt nur diesen Fingerabdruck zusammen mit der `t_id`, der `sender_signature` und dem `t_time` der Transaktion hoch. Der Server kann daraus weder Absender noch Gutschein-Herkunft ableiten.
+- **Server-Upload:** Der Client lädt ein `TransactionFingerprint`-Objekt hoch. Es enthält den `prvhash_senderid_hash`, die `t_id`, die `sender_signature` und einen **verschlüsselten Zeitstempel**.
 
-- **Aufdeckung & Beweis:** Ein Double Spend wird erkannt, wenn der Server für einen bekannten `prvhash_senderid_hash` einen neuen Eintrag mit einer anderen `t_id` erhält. Der Server kann dem zweiten Einreicher die Daten des ersten Eintrags als Beweis zurücksenden. Der Client hat dann zwei unterschiedliche, aber beide gültig vom selben Absender signierte Transaktionen, die vom selben `prev_hash` ausgehen. Der Betrug ist bewiesen, und der Zeitstempel `t_time` hilft bei der Entscheidung, welche Transaktion die ursprüngliche war.
+- **Verschlüsselter Zeitstempel:** Um eine zeitliche Einordnung im Konfliktfall zu ermöglichen, ohne das Datum an den Server preiszugeben, wird der Zeitstempel (in Nanosekunden) via XOR mit einem deterministischen Schlüssel verschlüsselt: `encrypted_nanos = original_nanos ^ hash(prev_hash + t_id)`. Der Server kann diesen Wert nicht entschlüsseln, da er `prev_hash` und `t_id` nicht kennt.
+
+- **Aufdeckung & Beweis:** Ein Double Spend wird erkannt, wenn der Server für einen bekannten `prvhash_senderid_hash` einen neuen Eintrag mit einer anderen `t_id` erhält. Der Server kann dem zweiten Einreicher die Daten des ersten Eintrags als Beweis zurücksenden. Ein Client, der beide widersprüchlichen Transaktionen besitzt, hat damit den Beweis für den Betrug. Er kann beide Signaturen verifizieren und **beide Zeitstempel entschlüsseln**, um festzustellen, welche Transaktion die frühere war.
 
 
 #### Erkennung ohne Layer-2-Server (durch Pfad-Vereinigung)
@@ -204,6 +210,21 @@ Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich
 - **Beispiel:** Der ursprüngliche Ersteller eines Gutscheins erhält später zwei unterschiedliche Gutschein-Dateien zur Einlösung zurück. Beide leiten ihre Herkunft von seinem ursprünglichen Gutschein ab. Beim Vergleich der Historien stellt er fest, dass beide Dateien eine unterschiedliche Transaktion enthalten, die aber vom selben `prev_hash` abstammt. Damit ist der Double Spend bewiesen.
 
 - **Voraussetzung:** Diese Methode erfordert, dass Nutzer (insbesondere Akteure wie Ersteller, die Einlösungen akzeptieren) alte Gutschein-Zustände vorhalten, um eine Vergleichsbasis zu haben.
+
+
+### Konfliktlösung: Die "Earliest Wins" Heuristik
+
+Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert, um eine pragmatische Offline-Lösung zu bieten.
+
+- **Offline-Strategie:** Wenn ein Wallet einen Konflikt ohne ein autoritatives Urteil von einem Layer-2-Server feststellt, wendet es die "Der Früheste gewinnt"-Regel an.
+
+  1. Es entschlüsselt die Zeitstempel beider widersprüchlicher Transaktionen.
+
+  2. Der Gutschein-Zweig mit der Transaktion, die den **früheren Zeitstempel** hat, wird als wahrscheinlich legitim angesehen und bleibt `Active`.
+
+  3. Der Gutschein-Zweig mit der **späteren** Transaktion wird auf `VoucherStatus::Quarantined` gesetzt, um eine weitere Nutzung zu verhindern.
+
+- **Layer-2-Urteil:** Ein von einem Server signiertes Urteil (`Layer2Verdict`) hat immer Vorrang vor der lokalen Heuristik. In diesem Fall bestimmt der Server, welcher Zweig gültig ist.
 
 
 ### Weitere relevante Konzepte (für zukünftige Erweiterungen optimieren)
@@ -228,7 +249,8 @@ Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich
 ├── examples
 │   ├── playground_crypto_utils.rs
 │   ├── playground_utils.rs
-│   └── playground_voucher_lifecycle.rs
+│   ├── playground_voucher_lifecycle.rs
+│   └── playground_wallet.rs
 ├── output.txt
 ├── README.md
 ├── src
@@ -333,7 +355,7 @@ Definiert die `Wallet`-Fassade, die die zentrale, öffentliche Schnittstelle der
 
   - Fügt empfangene Gutscheine dem Wallet hinzu oder **verarbeitet empfangene Signaturen** durch Aufruf von `process_and_attach_signature`.
 
-  - Führt eine **reaktive Double-Spend-Prüfung** durch Aufruf des `conflict_manager` durch.
+  - Führt eine **reaktive Double-Spend-Prüfung** durch Aufruf des `conflict_manager` durch und wendet die **"Earliest Wins"-Konfliktlösungsstrategie** an, falls kein L2-Urteil vorliegt.
 
 - `pub fn create_signing_request(...) -> Result<Vec<u8>, VoucherCoreError>`
 
@@ -416,13 +438,13 @@ Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierun
 
 Dieses Modul stellt die Kernlogik für die Erstellung und Verarbeitung von Gutscheinen bereit.
 
-- `pub fn create_voucher(data: NewVoucherData, standard_definition: &VoucherStandardDefinition, creator_signing_key: &SigningKey) -> Result<Voucher, VoucherManagerError>`
+- `pub fn create_voucher(data: NewVoucherData, standard_definition: &VoucherStandardDefinition, creator_signing_key: &SigningKey) -> Result<Voucher, VoucherCoreError>`
 
-  - Orchestriert die Erstellung eines neuen, vollständigen Gutscheins. Nutzt eine korrigierte Logik zur Berechnung von Gültigkeitsdauern, die Schaltjahre und Monatsenden korrekt behandelt.
+  - Orchestriert die Erstellung eines neuen, vollständigen Gutscheins. Erzeugt eine `voucher_nonce`, um den initialen `prev_hash` unvorhersehbar zu machen und so die Anonymität des Erstellers auf Layer 2 zu schützen. Nutzt eine korrigierte Logik zur Berechnung von Gültigkeitsdauern.
 
 - `pub fn create_transaction(voucher: &Voucher, standard: &VoucherStandardDefinition, sender_id: &str, sender_key: &SigningKey, recipient_id: &str, amount_to_send_str: &str) -> Result<Voucher, VoucherCoreError>`
 
-  - Erstellt eine Kopie des Gutscheins mit einer neuen Transaktion. Verwendet `decimal_utils` zur **strengen Validierung der Betragspräzision** und zur **kanonischen Formatierung** der gespeicherten Werte, um Rundungsfehler zu vermeiden.
+  - Erstellt eine Kopie des Gutscheins mit einer neuen Transaktion. Die Signatur der Transaktion sichert nun ein minimales Objekt (`{prev_hash, sender_id, t_id}`). Verwendet `decimal_utils` zur **strengen Validierung der Betragspräzision** und zur **kanonischen Formatierung** der Werte.
 
 
 ### `services::voucher_validation` Modul
@@ -431,112 +453,4 @@ Dieses Modul enthält die Logik zur Validierung eines `Voucher`-Objekts gegen di
 
 - `pub fn validate_voucher_against_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError>`
 
-  - Führt eine umfassende Prüfung des Gutscheins durch.
-
-- `pub fn get_spendable_balance(voucher: &Voucher, user_id: &str, standard: &VoucherStandardDefinition) -> Result<Decimal, ValidationError>`
-
-  - Berechnet das aktuell verfügbare Guthaben für einen Nutzer.
-
-
-### `services::secure_container_manager.rs` Modul
-
-Dieses Modul implementiert die Kernlogik für den `SecureContainer`.
-
-- `pub fn create_secure_container(...) -> Result<SecureContainer, VoucherCoreError>`
-
-  - Erstellt, verschlüsselt und signiert einen `SecureContainer` für einen oder mehrere Empfänger.
-
-- `pub fn open_secure_container(...) -> Result<(Vec<u8>, PayloadType), VoucherCoreError>`
-
-  - Verifiziert und entschlüsselt einen `SecureContainer` für einen berechtigten Empfänger.
-
-
-### `services::bundle_processor.rs` Modul
-
-Dieses Modul kapselt die Logik für die Verarbeitung von `TransactionBundle`-Objekten.
-
-- `pub fn create_and_encrypt_bundle(...) -> Result<(Vec<u8>, TransactionBundle), VoucherCoreError>`
-
-  - Erstellt ein `TransactionBundle`, signiert es und verpackt es in einen `SecureContainer`.
-
-- `pub fn open_and_verify_bundle(...) -> Result<TransactionBundle, VoucherCoreError>`
-
-  - Öffnet einen `SecureContainer`, extrahiert das `TransactionBundle` und verifiziert dessen Signatur.
-
-
-### `services::conflict_manager.rs` Modul
-
-Dieses Modul kapselt die gesamte Geschäftslogik zur Erkennung und Verwaltung von Double-Spending-Konflikten.
-
-- `pub fn scan_and_update_own_fingerprints(...) -> Result<(), VoucherCoreError>`
-
-  - Durchsucht die Gutscheine eines Wallets und aktualisiert dessen Fingerprint-Speicher.
-
-- `pub fn check_for_double_spend(...) -> DoubleSpendCheckResult`
-
-  - Vergleicht eigene und fremde Fingerprints, um Konflikte zu finden.
-
-- `pub fn verify_conflict_and_create_proof(...) -> Result<Option<ProofOfDoubleSpend>, VoucherCoreError>`
-
-  - Führt die kryptographische Verifizierung eines Konflikts durch und erstellt einen fälschungssicheren Beweis.
-
-- `pub fn import_foreign_fingerprints(...) -> Result<usize, VoucherCoreError>`
-
-  - Importiert Fingerprints von anderen Peers.
-
-
-### `services::signature_manager.rs` Modul
-
-Dieses neue Modul kapselt die Logik für den Signatur-Workflow.
-
-- `pub fn complete_and_sign_detached_signature(...) -> Result<DetachedSignature, VoucherCoreError>`
-
-  - Nimmt die Metadaten einer Signatur, vervollständigt die kryptographischen Felder (`signature_id`, `signature`) und gibt das signierte Objekt zurück.
-
-- `pub fn validate_detached_signature(...) -> Result<(), VoucherCoreError>`
-
-  - Führt die vollständige kryptographische Validierung einer empfangenen `DetachedSignature` durch.
-
-
-### `services::decimal_utils.rs` Modul
-
-Dieses neue Modul zentralisiert die Behandlung von `Decimal`-Werten.
-
-- `pub fn validate_precision(amount: &Decimal, allowed_places: u32) -> Result<(), VoucherCoreError>`
-
-  - Stellt sicher, dass ein Betrag nicht mehr Nachkommastellen hat, als der Standard erlaubt.
-
-- `pub fn format_for_storage(amount: &Decimal, places: u32) -> String`
-
-  - Formatiert einen `Decimal` in einen String mit einer festen Anzahl von Nachkommastellen für die kanonische Speicherung.
-
-
-### `src/error.rs` Modul
-
-Dieses Modul definiert den zentralen, einheitlichen Fehlertyp für die Bibliothek.
-
-- `pub enum VoucherCoreError`
-
-  - Ein `thiserror`-basiertes Enum, das alle spezifischen Fehler aus den verschiedenen Modulen bündelt.
-
-
-### `src/models` Module
-
-Diese Module definieren die zentralen Datenstrukturen der Bibliothek.
-
-- **`profile.rs`:** Definiert die Strukturen des Nutzer-Wallets (`UserIdentity`, `VoucherStore`, `BundleMetadataStore` etc.) und den `VoucherStatus`-Enum.
-
-- **`conflict.rs`:** Definiert die Strukturen für die Double-Spend-Erkennung (`TransactionFingerprint`, `FingerprintStore`, `ProofOfDoubleSpend`).
-
-- **`secure_container.rs`:** Definiert den generischen, verschlüsselten `SecureContainer` und den `PayloadType`-Enum, der nun auch `DetachedSignature` enthält.
-
-- **`signature.rs`:** Definiert die neue `DetachedSignature`-Enum, einen Wrapper für `GuarantorSignature` und `AdditionalSignature`, der im Signatur-Workflow verwendet wird.
-
-- **`voucher.rs`:** Definiert die Kernstruktur eines `Voucher`-Objekts mit all seinen Feldern.
-
-- **`voucher_standard_definition.rs`:** Definiert die Struktur für das Parsen der TOML-basierten Regelwerke, inklusive des neuen `is_fungible`-Flags.
-
-
-### Beispiel-Playgrounds und Tests
-
-Die Dateien `playground_utils.rs` und `playground_crypto_utils.rs` demonstrieren die Nutzung von Hilfsfunktionen. Die Datei `playground_voucher_lifecycle.rs` ist ein umfassendes Beispiel für den Lebenszyklus eines Gutscheins. Neue Test-Dateien wie `test_wallet_signatures.rs`, `test_advanced_validation.rs`, `test_transaction_math.rs` und `test_date_utils.rs` decken die neuen Funktionalitäten und gehärteten Logiken mit umfassenden Integrationstests ab. Diese Dateien sind nicht Teil der `voucher_core` API.
+  - Führt eine umfassende Prüfung des Gutscheins durch, inklusive der korrekten Verkettung unter Einbeziehung des `voucher_nonce`, der Validierung der vereinfachten Transaktions-Signatur und neuer Geschäftsregeln (z.B. keine Transaktionen an sich selbst).
