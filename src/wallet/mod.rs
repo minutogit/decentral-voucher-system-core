@@ -192,7 +192,7 @@ impl Wallet {
         &mut self,
         identity: &UserIdentity,
         container_bytes: &[u8],
-        archive: Option<&impl VoucherArchive>,
+        archive: Option<&dyn VoucherArchive>,
     ) -> Result<ProcessBundleResult, VoucherCoreError> {
         let bundle = bundle_processor::open_and_verify_bundle(identity, container_bytes)?;
 
@@ -359,7 +359,7 @@ impl Wallet {
         recipient_id: &str,
         amount_to_send: &str,
         notes: Option<String>,
-        archive: Option<&impl VoucherArchive>,
+        archive: Option<&dyn VoucherArchive>,
     ) -> Result<(Vec<u8>, Voucher), VoucherCoreError> {
         let (voucher_to_spend, status) = self
             .voucher_store

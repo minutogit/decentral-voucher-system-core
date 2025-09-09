@@ -141,7 +141,7 @@ pub fn verify_conflict_and_create_proof(
     identity: &UserIdentity,
     _conflict_hash: &str,
     fingerprints: &[TransactionFingerprint],
-    archive: &impl VoucherArchive,
+    archive: &dyn VoucherArchive,
 ) -> Result<Option<ProofOfDoubleSpend>, VoucherCoreError> {
     let mut conflicting_transactions = Vec::new();
 
@@ -219,7 +219,7 @@ pub fn verify_conflict_and_create_proof(
 fn find_transaction_in_stores(
     voucher_store: &VoucherStore,
     t_id: &str,
-    archive: &impl VoucherArchive,
+    archive: &dyn VoucherArchive,
 ) -> Result<Option<Transaction>, VoucherCoreError> {
     // Zuerst im aktiven Store suchen
     for (voucher, _) in voucher_store.vouchers.values() {
@@ -238,7 +238,7 @@ fn find_transaction_in_stores(
 fn find_voucher_for_transaction(
     voucher_store: &VoucherStore,
     t_id: &str,
-    archive: &impl VoucherArchive,
+    archive: &dyn VoucherArchive,
 ) -> Result<Option<Voucher>, VoucherCoreError> {
     // Zuerst im aktiven Store suchen
     for (voucher, _) in voucher_store.vouchers.values() {

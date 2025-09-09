@@ -30,6 +30,7 @@ toml = "0.8.14"
 rust_decimal = "1.35"
 thiserror = "1.0"
 rust_decimal_macros = "1.35"
+anyhow = "1.0.99"
 
 [lib]
 name = "voucher_lib"
