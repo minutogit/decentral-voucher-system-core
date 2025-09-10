@@ -13,6 +13,7 @@ use zeroize::ZeroizeOnDrop;
 /// Repräsentiert die kryptographische Identität eines Nutzers.
 /// Der private Schlüssel wird sicher im Speicher gehalten und beim Verlassen des Gültigkeitsbereichs genullt.
 #[derive(ZeroizeOnDrop)]
+#[derive(Clone)]
 pub struct UserIdentity {
     /// Der private Ed25519-Schlüssel des Nutzers.
     /// **Wichtig:** Dieser Schlüssel wird nicht serialisiert und verlässt niemals das Profil.

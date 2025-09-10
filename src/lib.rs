@@ -7,6 +7,7 @@
 // Deklariert die Hauptmodule der Bibliothek und macht sie öffentlich.
 pub mod models;
 pub mod error;
+pub mod app_service;
 pub mod archive;
 pub mod storage;
 pub mod wallet;

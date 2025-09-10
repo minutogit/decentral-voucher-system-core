@@ -2,6 +2,7 @@
 //!
 //! Hilfsfunktionen für die Integrationstests, um Boilerplate-Code zu reduzieren.
 
+use bip39::Language;
 use std::fs;
 use std::path::PathBuf;
 use voucher_lib::models::{
@@ -12,6 +13,7 @@ use voucher_lib::models::signature::DetachedSignature;
 use voucher_lib::models::voucher::{Address, GuarantorSignature, Voucher};
 use voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition;
 use voucher_lib::services::crypto_utils::{
+    self,
     create_user_id, generate_ed25519_keypair_for_tests,
 };
 use voucher_lib::services::secure_container_manager;
@@ -26,6 +28,13 @@ use voucher_lib::{
     VoucherCoreError,
 };
 
+// --- Neue Hilfsfunktionen ---
+/// Generiert eine neue, valide 12-Wort BIP39 Mnemonic-Phrase für Tests.
+pub fn generate_valid_mnemonic() -> String {
+    crypto_utils::generate_mnemonic(12, Language::English)
+        .expect("Test mnemonic generation should not fail")
+}
+
 // --- Öffentliche Hilfsfunktionen für Integrationstests ---
 
 /// Lädt eine Standard-Definition aus dem `voucher_standards`-Verzeichnis.
@@ -39,6 +48,7 @@ pub fn load_standard_definition(filename: &str) -> Result<VoucherStandardDefinit
 }
 
 /// Erstellt ein neues Test-Wallet aus einem deterministischen Seed.
+#[allow(dead_code)]
 pub fn create_test_wallet(
     seed_phrase_extra: &str,
 ) -> Result<(Wallet, UserIdentity), VoucherCoreError> {
@@ -69,6 +79,7 @@ pub fn create_test_wallet(
 }
 
 /// Erstellt ein Test-Wallet und fügt sofort einen Gutschein mit dem angegebenen Betrag hinzu.
+#[allow(dead_code)]
 pub fn create_test_wallet_with_voucher(
     seed_phrase_extra: &str,
     amount: &str,
