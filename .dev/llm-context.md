@@ -2,7 +2,7 @@
 
 Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher_lib`. Sie dient als "README für die KI", um ein umfassendes Verständnis des Projekts und seiner Anforderungen zu gewährleisten.
 
-## 1. Projekt & Zweck
+## 1\. Projekt & Zweck
 
 - **Projektname:** `voucher_lib`
 
@@ -12,8 +12,7 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 
 - **Kernfunktionalität:** Erstellung, Verwaltung und Verifizierung von digitalen Gutscheinen und deren Transaktionshistorie.
 
-
-## 2. Tech-Stack
+## 2\. Tech-Stack
 
 - **Sprache:** Rust
 
@@ -21,8 +20,7 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 
 - **Kryptographie:** Standard-Rust-Kryptographie-Bibliotheken für digitale Signaturen und Hashing.
 
-
-## 3. Architektur & Designprinzipien
+## 3\. Architektur & Designprinzipien
 
 - **Modulare Architektur:** Die Bibliothek ist in logische Module unterteilt. Die Architektur trennt klar die Geschäftslogik (in einer `Wallet`-Fassade) von der Persistenz (hinter einem `Storage`-Trait), um Flexibilität und Testbarkeit zu maximieren.
 
@@ -34,12 +32,11 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 
 - **Fokus auf Betrugserkennung, nicht -vermeidung:** Da es kein globales Ledger gibt, kann die Core-Bibliothek nicht verhindern, dass ein Nutzer widersprüchliche Transaktionshistorien (Double Spending) erzeugt. Das System stellt stattdessen sicher, dass jeder Betrugsversuch durch digitale Signaturen kryptographisch beweisbar ist, was eine Erkennung und soziale Sanktionen in einem übergeordneten System (Layer 2) ermöglicht.
 
-- **Fokus auf Kernlogik:** Zunächst wird nur die grundlegende Funktionalität der Gutschein- und Transaktionsverwaltung implementiert. Die "Transaction Verification Layer" und "User Trust Verification Layer" (Layer 2 mit Servern) sollen _nicht_ implementiert werden, aber die Struktur der Transaktionsketten sollte so optimiert werden, dass eine spätere Erweiterung um diese Layer möglich ist.
+- **Fokus auf Kernlogik:** Zunächst wird nur die grundlegende Funktionalität der Gutschein- und Transaktionsverwaltung implementiert. Die "Transaction Verification Layer" und "User Trust Verification Layer" (Layer 2 mit Servern) sollen *nicht* implementiert werden, aber die Struktur der Transaktionsketten sollte so optimiert werden, dass eine spätere Erweiterung um diese Layer möglich ist.
 
 - **FFI/WASM-Kompatibilität:** Rust-Typen und -Funktionen müssen so gestaltet sein, dass sie einfach über FFI und WASM exponiert werden können (z.B. durch Verwendung von `#[no_mangle]`, C-kompatiblen Datentypen und `wasm_bindgen`).
 
-
-## 4. Coding-Standards & Wichtige Regeln
+## 4\. Coding-Standards & Wichtige Regeln
 
 - **Rust Best Practices:** Einhaltung der idiomatischen Rust-Programmierung, Fokus auf Sicherheit, Performance und Speichereffizienz.
 
@@ -51,12 +48,11 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 
 - **Keine externen Netzwerkaufrufe:** Die Core-Bibliothek soll keine direkten Netzwerkaufrufe für die Layer-2-Funktionalität enthalten. Diese Interaktionen werden von den übergeordneten Anwendungen gehandhabt, die `voucher_lib` nutzen.
 
-
-## 5. Kernkonzepte aus dem Paper (Zusammenfassung)
+## 5\. Kernkonzepte aus dem Paper (Zusammenfassung)
 
 Gutschein-Struktur: Das universelle Gutschein-Container-Format
 
-Ein Gutschein ist im Wesentlichen eine Textdatei (repräsentiert als JSON), die alle möglichen Informationen enthält, die ein Gutschein jemals haben könnte. Jede einzelne Gutscheininstitution wird in diesem einheitlichen JSON-Schema abgebildet. Die spezifischen Regeln und Eigenschaften eines Gutscheintyps (wie "Minuto-Gutschein" oder "Silber-Umlauf-Gutschein") werden in separaten Standard-Definitionen (voucher_standard_definitions) festgelegt.
+Ein Gutschein ist im Wesentlichen eine Textdatei (repräsentiert als JSON), die alle möglichen Informationen enthält, die ein Gutschein jemals haben könnte. Jede einzelne Gutscheininstitution wird in diesem einheitlichen JSON-Schema abgebildet. Die spezifischen Regeln und Eigenschaften eines Gutscheintyps (wie "Minuto-Gutschein" oder "Silber-Umlauf-Gutschein") werden in separaten Standard-Definitionen (voucher\_standard\_definitions) festgelegt.
 
 Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_standards/`-Verzeichnis) bereitgestellt und zur Laufzeit geparst. Die TOML-Struktur ist klar in drei Blocker unterteilt:
 
@@ -183,7 +179,6 @@ Die Transaktionen im `transactions`-Array bilden eine kryptographisch verkettete
 
 - **Authentizität:** Die `sender_signature` signiert ein separates, minimales Objekt, das nur die Kern-Metadaten der Transaktion (`prev_hash`, `sender_id`, `t_id`) enthält. Dies beweist, dass der Sender die Transaktion autorisiert hat. Der Zeitstempel (`t_time`) muss nicht explizit signiert werden, da er bereits Teil der Daten ist, die zur Erzeugung der `t_id` gehasht werden und somit implizit durch die Signatur der `t_id` geschützt ist.
 
-
 ### Double-Spending-Erkennung
 
 Ein **Double Spend** liegt vor, wenn ein Nutzer von einem bestimmten Zustand des Gutscheins (repräsentiert durch den `prev_hash` der letzten gültigen Transaktion) zwei oder mehr unterschiedliche neue Transaktionen erstellt und diese an verschiedene Personen verteilt.
@@ -200,7 +195,6 @@ Die Transaktionsstruktur ist für eine **anonymisierte Betrugserkennung** durch 
 
 - **Aufdeckung & Beweis:** Ein Double Spend wird erkannt, wenn der Server für einen bekannten `prvhash_senderid_hash` einen neuen Eintrag mit einer anderen `t_id` erhält. Der Server kann dem zweiten Einreicher die Daten des ersten Eintrags als Beweis zurücksenden. Ein Client, der beide widersprüchlichen Transaktionen besitzt, hat damit den Beweis für den Betrug. Er kann beide Signaturen verifizieren und **beide Zeitstempel entschlüsseln**, um festzustellen, welche Transaktion die frühere war.
 
-
 #### Erkennung ohne Layer-2-Server (durch Pfad-Vereinigung)
 
 Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich die aufgespaltenen Transaktionspfade bei einem späteren Nutzer wieder treffen. Da Gutscheine im System zirkulieren und oft beim Ersteller wieder eingelöst werden, ist dies ein praxisnaher Anwendungsfall.
@@ -211,21 +205,19 @@ Ein Double Spend kann auch ohne einen zentralen Server erkannt werden, wenn sich
 
 - **Voraussetzung:** Diese Methode erfordert, dass Nutzer (insbesondere Akteure wie Ersteller, die Einlösungen akzeptieren) alte Gutschein-Zustände vorhalten, um eine Vergleichsbasis zu haben.
 
-
 ### Konfliktlösung: Die "Earliest Wins" Heuristik
 
 Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert, um eine pragmatische Offline-Lösung zu bieten.
 
 - **Offline-Strategie:** Wenn ein Wallet einen Konflikt ohne ein autoritatives Urteil von einem Layer-2-Server feststellt, wendet es die "Der Früheste gewinnt"-Regel an.
 
-  1. Es entschlüsselt die Zeitstempel beider widersprüchlicher Transaktionen.
+  1.  Es entschlüsselt die Zeitstempel beider widersprüchlicher Transaktionen.
 
-  2. Der Gutschein-Zweig mit der Transaktion, die den **früheren Zeitstempel** hat, wird als wahrscheinlich legitim angesehen und bleibt `Active`.
+  2.  Der Gutschein-Zweig mit der Transaktion, die den **früheren Zeitstempel** hat, wird als wahrscheinlich legitim angesehen und bleibt `Active`.
 
-  3. Der Gutschein-Zweig mit der **späteren** Transaktion wird auf `VoucherStatus::Quarantined` gesetzt, um eine weitere Nutzung zu verhindern.
+  3.  Der Gutschein-Zweig mit der **späteren** Transaktion wird auf `VoucherStatus::Quarantined` gesetzt, um eine weitere Nutzung zu verhindern.
 
 - **Layer-2-Urteil:** Ein von einem Server signiertes Urteil (`Layer2Verdict`) hat immer Vorrang vor der lokalen Heuristik. In diesem Fall bestimmt der Server, welcher Zweig gültig ist.
-
 
 ### Weitere relevante Konzepte (für zukünftige Erweiterungen optimieren)
 
@@ -237,10 +229,9 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 
 - **Begrenzte Gültigkeitsdauer:** Gutscheine sollen nach einer bestimmten Zeit ihre Gültigkeit verlieren.
 
-- **Keine Layer 2 Implementierung:** Die Logik für die "Transaction Verification Layer" (Server-basiertes Double-Spending-Matching) und die "User Trust Verification Layer" (Reputationsmanagement) wird in dieser Core-Bibliothek _nicht_ implementiert. Die Datenstrukturen für Transaktionsketten sollen jedoch eine spätere Anbindung an solche Systeme ermöglichen.
+- **Keine Layer 2 Implementierung:** Die Logik für die "Transaction Verification Layer" (Server-basiertes Double-Spending-Matching) und die "User Trust Verification Layer" (Reputationsmanagement) wird in dieser Core-Bibliothek *nicht* implementiert. Die Datenstrukturen für Transaktionsketten sollen jedoch eine spätere Anbindung an solche Systeme ermöglichen.
 
-
-## 6. Aktueller Projektstrukturbaum
+## 6\. Aktueller Projektstrukturbaum
 
 ```
 .
@@ -254,6 +245,8 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 ├── output.txt
 ├── README.md
 ├── src
+│   ├── app_service
+│   │   └── mod.rs
 │   ├── archive
 │   │   ├── file_archive.rs
 │   │   └── mod.rs
@@ -285,10 +278,15 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   │   ├── file_storage.rs
 │   │   └── mod.rs
 │   ├── utilities
-│   └── wallet.rs
+│   └── wallet
+│       ├── conflict_handler.rs
+│       ├── mod.rs
+│       ├── queries.rs
+│       └── signature_handler.rs
 ├── tests
-│   ├── gtest_archive.rs
 │   ├── test_advanced_validation.rs
+│   ├── test_app_service.rs
+│   ├── test_archive.rs
 │   ├── test_crypto_utils.rs
 │   ├── test_date_utils.rs
 │   ├── test_file_storage.rs
@@ -299,6 +297,7 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   ├── test_transaction_math.rs
 │   ├── test_utils.rs
 │   ├── test_voucher_lifecycle.rs
+│   ├── test_wallet_integration.rs
 │   └── test_wallet_signatures.rs
 ├── todo.md
 └── voucher_standards
@@ -307,150 +306,103 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
     └── standard_template.toml
 ```
 
-## 7. Implementierte Kernfunktionen
+## 7\. Implementierte Kernfunktionen
 
 Basierend auf den bereitgestellten Dateien:
 
-### `src/wallet.rs` Modul
+### `src/app_service` Modul
 
-Definiert die `Wallet`-Fassade, die die zentrale, öffentliche Schnittstelle der Bibliothek darstellt. Sie kapselt den In-Memory-Zustand des Nutzers und **orchestriert** alle Operationen durch Aufrufe an spezialisierte Service-Module.
+Definiert den `AppService`, eine übergeordnete Fassade, die die `Wallet`-Logik für Client-Anwendungen (z.B. GUIs) vereinfacht.
 
-- `pub struct Wallet`
+- `pub struct AppService`
+  - Verwaltet den Anwendungszustand (`Locked`/`Unlocked`).
+  - Kapselt `UserIdentity` und `Storage`-Implementierung.
+  - Stellt sicher, dass Zustandsänderungen im Wallet automatisch gespeichert werden.
+- `pub fn create_profile(...) -> Result<(), String>`
+  - Erstellt ein komplett neues Wallet und Profil, speichert es und setzt den Service in den `Unlocked`-Zustand.
+- `pub fn login(...) -> Result<(), String>`
+  - Entsperrt ein existierendes Wallet und lädt es in den Speicher.
+- `pub fn logout(&mut self)`
+  - Sperrt das Wallet und entfernt sensible Daten aus dem Speicher.
+- `pub fn create_transfer_bundle(...) -> Result<Vec<u8>, String>`
+  - Führt einen Transfer aus und speichert den neuen Wallet-Zustand.
+- `pub fn receive_bundle(...) -> Result<ProcessBundleResult, String>`
+  - Verarbeitet ein empfangenes Bundle und speichert den neuen Wallet-Zustand.
+- Stellt diverse Query-Methoden bereit, die Lesezugriffe auf das Wallet ermöglichen (z.B. `get_voucher_summaries`, `get_total_balance_by_currency`).
 
+### `src/wallet` Modul
+
+Das `wallet`-Modul wurde refaktorisiert, um die Komplexität zu reduzieren und die Verantwortlichkeiten klarer zu trennen. Die `Wallet`-Struktur ist weiterhin die zentrale Fassade der Kernlogik, delegiert aber spezifische Aufgaben an Sub-Module.
+
+- `pub struct Wallet` (`mod.rs`)
   - Hält `UserProfile`, `VoucherStore`, `BundleMetadataStore`, `FingerprintStore` und `ProofStore` als In-Memory-Zustand.
-
-- `pub fn new_from_mnemonic(mnemonic_phrase: &str, user_prefix: Option<&str>) -> Result<(Self, UserIdentity), VoucherCoreError>`
-
-  - Erstellt ein brandneues, leeres Wallet und die dazugehörige `UserIdentity` (mit privatem Schlüssel) aus einer Mnemonic-Phrase.
-
-- `pub fn load<S: Storage>(storage: &S, auth: &AuthMethod, identity: UserIdentity) -> Result<Self, VoucherCoreError>`
-
-  - Lädt ein existierendes Wallet aus einer `Storage`-Implementierung.
-
-- `pub fn save<S: Storage>(&self, storage: &mut S, identity: &UserIdentity, password: &str) -> Result<(), StorageError>`
-
-  - Speichert den aktuellen Zustand aller Datenspeicher des Wallets.
-
-- `pub fn reset_password<S: Storage>(storage: &mut S, identity: &UserIdentity, new_password: &str) -> Result<(), StorageError>`
-
-  - Eine Wrapper-Funktion, die die Passwort-Zurücksetzung im `Storage`-Layer aufruft.
-
-- `pub fn create_transfer(...) -> Result<(Vec<u8>, Voucher), VoucherCoreError>`
-
-  - Die zentrale, sichere Methode zum Senden von Gutscheinen mit überarbeitetem Zustandsmanagement.
-
-  - Führt eine **proaktive Double-Spend-Prüfung** durch.
-
-  - Delegiert die Erstellung der Transaktion an den `voucher_manager`.
-
-  - **Zustandsmanagement:** Die alte, ausgegebene Gutschein-Instanz wird aus dem aktiven Store **entfernt**. Falls ein Restbetrag existiert, wird eine **neue Instanz** mit dem Restbetrag als `Active` hinzugefügt. Der gesendete Zustand wird für die Historie als `Archived` hinzugefügt.
-
-  - Delegiert die Erstellung des `SecureContainer` an den `bundle_processor`.
-
-- `pub fn process_encrypted_transaction_bundle(...) -> Result<ProcessBundleResult, VoucherCoreError>`
-
-  - Kapselt die Geschäftslogik zum Empfangen von Daten.
-
-  - Delegiert das Öffnen des `SecureContainer` an den `bundle_processor`.
-
-  - Fügt empfangene Gutscheine dem Wallet hinzu oder **verarbeitet empfangene Signaturen** durch Aufruf von `process_and_attach_signature`.
-
-  - Führt eine **reaktive Double-Spend-Prüfung** durch Aufruf des `conflict_manager` durch und wendet die **"Earliest Wins"-Konfliktlösungsstrategie** an, falls kein L2-Urteil vorliegt.
-
-- `pub fn create_signing_request(...) -> Result<Vec<u8>, VoucherCoreError>`
-
-  - Erstellt einen `SecureContainer` (Payload-Typ: `VoucherForSigning`), um einen Gutschein zur Unterzeichnung an einen anderen Nutzer (z.B. Bürgen) zu senden.
-
-- `pub fn create_detached_signature_response(...) -> Result<Vec<u8>, VoucherCoreError>`
-
-  - Erstellt eine losgelöste Signatur (`DetachedSignature`), signiert sie und verpackt sie in einem `SecureContainer` (Payload-Typ: `DetachedSignature`) für den Rückversand an den Gutschein-Ersteller.
-
-- `pub fn process_and_attach_signature(...) -> Result<(), VoucherCoreError>`
-
-  - Öffnet einen `SecureContainer`, der eine `DetachedSignature` enthält, validiert diese kryptographisch und fügt sie dem entsprechenden Gutschein im Wallet hinzu.
-
+- **Lebenszyklus & Kernoperationen** (`mod.rs`)
+  - `pub fn new_from_mnemonic(...)`: Erstellt ein brandneues Wallet.
+  - `pub fn load(...)`: Lädt ein existierendes Wallet aus dem Storage.
+  - `pub fn save(...)`: Speichert den aktuellen Zustand des Wallets.
+  - `pub fn create_new_voucher(...)`: Erstellt einen neuen Gutschein und fügt ihn direkt zum Wallet hinzu.
+  - `pub fn create_transfer(...)`: Führt einen Transfer durch und managt den internen Zustand (Archivierung, Restbetrag).
+  - `pub fn process_encrypted_transaction_bundle(...)`: Verarbeitet eingehende Gutscheine oder Signaturen.
+- **Abfragen & Ansichten** (`queries.rs`)
+  - `pub fn list_vouchers(&self) -> Vec<VoucherSummary>`: Gibt eine vereinfachte Liste aller Gutscheine zurück.
+  - `pub fn get_voucher_details(...) -> Result<VoucherDetails, ...>`: Gibt detaillierte Informationen zu einem Gutschein zurück.
+  - `pub fn get_total_balance_by_currency(&self) -> HashMap<String, String>`: Aggregiert alle Guthaben nach Währung.
+  - `pub fn get_user_id(&self) -> &str`: Gibt die ID des Wallet-Inhabers zurück.
+- **Signatur-Workflows** (`signature_handler.rs`)
+  - `pub fn create_signing_request(...)`: Erstellt einen `SecureContainer` zur Anforderung einer Signatur.
+  - `pub fn create_detached_signature_response(...)`: Erstellt eine signierte Antwort auf eine Anfrage.
+  - `pub fn process_and_attach_signature(...)`: Verarbeitet eine empfangene Signatur und fügt sie dem passenden Gutschein hinzu.
+- **Konflikt-Management** (`conflict_handler.rs`)
+  - `pub fn scan_and_update_own_fingerprints(...)`: Scannt das Wallet und aktualisiert den Fingerprint-Store.
+  - `pub fn check_for_double_spend(&self) -> DoubleSpendCheckResult`: Prüft auf Double-Spending-Konflikte.
+  - `pub fn export_own_fingerprints(...)` & `import_foreign_fingerprints(...)`: Ermöglichen den Austausch von Fingerprints zwischen Wallets.
 
 ### `src/storage` Modul (`mod.rs`, `file_storage.rs`)
 
 Definiert die Abstraktion für die persistente Speicherung und stellt eine Standardimplementierung für das Dateisystem bereit.
 
 - `pub trait Storage`
-
   - Definiert die Schnittstelle für Speicheroperationen, die nun für jeden Datenspeicher separat existieren (`load/save_wallet`, `load/save_bundle_metadata`, `load/save_fingerprints`, `load/save_proofs`).
-
 - `pub struct FileStorage`
-
   - Implementiert den `Storage`-Trait.
-
   - Verwaltet die Ver- und Entschlüsselung der Wallet-Daten in mehreren separaten Dateien (`profile.enc`, `vouchers.enc`, `bundles.meta.enc`, `fingerprints.enc`, `proofs.enc`).
-
   - Implementiert die "Zwei-Schloss"-Mechanik mit Key-Wrapping für den Passwort-Zugriff und die Mnemonic-Wiederherstellung.
-
 
 ### `src/archive` Modul (`mod.rs`, `file_archive.rs`)
 
 Definiert die Abstraktion für ein persistentes Archiv von Gutschein-Zuständen.
 
 - `pub trait VoucherArchive`
-
   - Definiert die Schnittstelle für ein Archiv, das dazu dient, **jeden jemals gesehenen Zustand** eines Gutscheins zu speichern (forensische Analyse). Die Archivierung erfolgt **unabhängig vom Guthaben**.
-
+  - Wallet-Methoden, die ein Archiv verwenden, akzeptieren nun `&dyn VoucherArchive` (dynamic dispatch).
 - `pub struct FileVoucherArchive`
-
   - Eine Implementierung, die jeden archivierten Gutschein-Zustand als separate JSON-Datei in einer **hierarchischen Struktur** speichert: `{archive_dir}/{voucher_id}/{t_id}.json`.
-
-
-### `services::utils` Modul
-
-Dieses Modul enthält Hilfsfunktionen für Zeitstempel.
-
-- `pub fn get_timestamp(years_to_add: i32, end_of_year: bool) -> String`
-
-  - Gibt den aktuellen Zeitstempel im ISO 8601-Format (UTC) mit Mikrosekundenpräzision zurück.
-
-- `pub fn get_current_timestamp() -> String`
-
-  - Eine Komfortfunktion, die den aktuellen Zeitstempel im ISO 8601-Format (UTC) zurückgibt.
-
 
 ### `services::crypto_utils` Modul
 
 Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierung, Hashing, Signaturen und User ID-Verwaltung.
 
 - `pub fn get_hash(input: impl AsRef<[u8]>) -> String`
-
   - Berechnet einen SHA3-256-Hash der Eingabe und gibt ihn als Base58-kodierten String zurück.
-
 - `pub fn derive_ed25519_keypair(mnemonic_phrase: &str, passphrase: Option<&str>) -> Result<(EdPublicKey, SigningKey), VoucherCoreError>`
-
-  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase über einen **gehärteten, mehrstufigen Prozess** (BIP-39 Seed -> PBKDF2 Stretch -> HKDF Expand) ab, um die Sicherheit zu erhöhen.
-
+  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase über einen **gehärteten, mehrstufigen Prozess** (BIP-39 Seed -\> PBKDF2 Stretch -\> HKDF Expand) ab, um die Sicherheit zu erhöhen.
 - `pub fn create_user_id(public_key: &EdPublicKey, user_prefix: Option<&str>) -> Result<String, UserIdError>`
-
   - Generiert eine User ID konform zum **`did:key`-Standard**. Das Format ist `[prefix]@[did:key:z...Ed25519-PublicKey...]` oder nur `did:key:z...`.
-
 - `pub fn get_pubkey_from_user_id(user_id: &str) -> Result<EdPublicKey, GetPubkeyError>`
-
   - Extrahiert den Ed25519 Public Key aus einer `did:key`-basierten User ID-Zeichenkette.
-
 
 ### `services::voucher_manager` Modul
 
 Dieses Modul stellt die Kernlogik für die Erstellung und Verarbeitung von Gutscheinen bereit.
 
 - `pub fn create_voucher(data: NewVoucherData, standard_definition: &VoucherStandardDefinition, creator_signing_key: &SigningKey) -> Result<Voucher, VoucherCoreError>`
-
   - Orchestriert die Erstellung eines neuen, vollständigen Gutscheins. Erzeugt eine `voucher_nonce`, um den initialen `prev_hash` unvorhersehbar zu machen und so die Anonymität des Erstellers auf Layer 2 zu schützen. Nutzt eine korrigierte Logik zur Berechnung von Gültigkeitsdauern.
-
 - `pub fn create_transaction(voucher: &Voucher, standard: &VoucherStandardDefinition, sender_id: &str, sender_key: &SigningKey, recipient_id: &str, amount_to_send_str: &str) -> Result<Voucher, VoucherCoreError>`
-
   - Erstellt eine Kopie des Gutscheins mit einer neuen Transaktion. Die Signatur der Transaktion sichert nun ein minimales Objekt (`{prev_hash, sender_id, t_id}`). Verwendet `decimal_utils` zur **strengen Validierung der Betragspräzision** und zur **kanonischen Formatierung** der Werte.
-
 
 ### `services::voucher_validation` Modul
 
 Dieses Modul enthält die Logik zur Validierung eines `Voucher`-Objekts gegen die Regeln seines Standards. **Die Validierungslogik wurde erheblich gehärtet.**
 
 - `pub fn validate_voucher_against_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError>`
-
   - Führt eine umfassende Prüfung des Gutscheins durch, inklusive der korrekten Verkettung unter Einbeziehung des `voucher_nonce`, der Validierung der vereinfachten Transaktions-Signatur und neuer Geschäftsregeln (z.B. keine Transaktionen an sich selbst).
