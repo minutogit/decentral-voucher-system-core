@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &bob_identity.user_id,
         "0.5", // Teilbetrag, dies erzeugt eine Split-Transaktion
         Some("Payment for services".to_string()), // Notizen
-        None::<&voucher_lib::archive::file_archive::FileVoucherArchive>, // Kein Archiv
+        None::<&dyn voucher_lib::archive::VoucherArchive>, // Kein Archiv
     )?;
     println!("✅ Transaktion erfolgreich durchgeführt. Wallet-Zustand wurde aktualisiert.");
 

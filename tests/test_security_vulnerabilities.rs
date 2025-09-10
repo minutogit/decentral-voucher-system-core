@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 use std::fs;
-use voucher_lib::{archive::file_archive::FileVoucherArchive, crypto_utils};
+use voucher_lib::crypto_utils;
 use voucher_lib::models::profile::{BundleMetadataStore, TransactionBundle, UserIdentity, VoucherStore, VoucherStatus};
 use voucher_lib::models::voucher::{Collateral, Creator, GuarantorSignature, NominalValue, Transaction, Voucher};
 use voucher_lib::services::crypto_utils::{create_user_id, get_hash, sign_ed25519};
@@ -289,8 +289,8 @@ fn test_attack_tamper_core_data_and_guarantors() {
     issuer_wallet.voucher_store.vouchers.insert(local_id.clone(), (valid_voucher, Default::default()));
 
     // Issuer sendet den Gutschein an den Hacker, der ihn nun für Angriffe besitzt.
-    let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, &STANDARD, &local_id, &ACTORS.hacker.user_id, "100", None, None::<&FileVoucherArchive>).unwrap();
-    hacker_wallet.process_encrypted_transaction_bundle(&ACTORS.hacker, &container_to_hacker, None::<&FileVoucherArchive>).unwrap();
+    let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, &STANDARD, &local_id, &ACTORS.hacker.user_id, "100", None, None).unwrap();
+    hacker_wallet.process_encrypted_transaction_bundle(&ACTORS.hacker, &container_to_hacker, None).unwrap();
     let (_, (voucher_in_hacker_wallet, _)) = hacker_wallet.voucher_store.vouchers.iter().next().unwrap();
 
     // ### SZENARIO 1a: WERTINFLATION ###
@@ -313,7 +313,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
     inflated_voucher.transactions.push(final_tx);
 
     let hacked_container = create_hacked_bundle_and_container(&ACTORS.hacker, &ACTORS.victim.user_id, inflated_voucher);
-    victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None::<&FileVoucherArchive>).unwrap();
+    victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
     let result = voucher_validation::validate_voucher_against_standard(received_voucher, &STANDARD);
     assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::InvalidCreatorSignature { .. }))),
@@ -337,7 +337,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
     tampered_guarantor_voucher.transactions.push(final_tx_2);
 
     let hacked_container = create_hacked_bundle_and_container(&ACTORS.hacker, &ACTORS.victim.user_id, tampered_guarantor_voucher);
-    victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None::<&FileVoucherArchive>).unwrap();
+    victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
     let result = voucher_validation::validate_voucher_against_standard(received_voucher, &STANDARD);
     assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::InvalidSignatureId(_)))),
@@ -358,8 +358,8 @@ fn test_attack_tamper_transaction_history() {
     let voucher_a = voucher_manager::create_voucher(data, &STANDARD, &ACTORS.alice.signing_key).unwrap();
     let local_id_a = Wallet::calculate_local_instance_id(&voucher_a, &ACTORS.alice.user_id).unwrap();
     alice_wallet.voucher_store.vouchers.insert(local_id_a.clone(), (voucher_a, Default::default()));
-    let (container_to_bob, _) = alice_wallet.create_transfer(&ACTORS.alice, &STANDARD, &local_id_a, &ACTORS.bob.user_id, "100", None, None::<&FileVoucherArchive>).unwrap();
-    bob_wallet_hacker.process_encrypted_transaction_bundle(&ACTORS.bob, &container_to_bob, None::<&FileVoucherArchive>).unwrap();
+    let (container_to_bob, _) = alice_wallet.create_transfer(&ACTORS.alice, &STANDARD, &local_id_a, &ACTORS.bob.user_id, "100", None, None).unwrap();
+    bob_wallet_hacker.process_encrypted_transaction_bundle(&ACTORS.bob, &container_to_bob, None).unwrap();
     let (_, (voucher_in_bob_wallet, _)) = bob_wallet_hacker.voucher_store.vouchers.iter().next().unwrap();
 
     // ### ANGRIFF ###
@@ -389,8 +389,8 @@ fn test_attack_create_inconsistent_transaction() {
     let initial_voucher = voucher_manager::create_voucher(data, &STANDARD, &ACTORS.issuer.signing_key).unwrap();
     let local_id_issuer = Wallet::calculate_local_instance_id(&initial_voucher, &ACTORS.issuer.user_id).unwrap();
     issuer_wallet.voucher_store.vouchers.insert(local_id_issuer.clone(), (initial_voucher, Default::default()));
-    let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, &STANDARD, &local_id_issuer, &ACTORS.hacker.user_id, "100", None, None::<&FileVoucherArchive>).unwrap();
-    hacker_wallet.process_encrypted_transaction_bundle(&ACTORS.hacker, &container_to_hacker, None::<&FileVoucherArchive>).unwrap();
+    let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, &STANDARD, &local_id_issuer, &ACTORS.hacker.user_id, "100", None, None).unwrap();
+    hacker_wallet.process_encrypted_transaction_bundle(&ACTORS.hacker, &container_to_hacker, None).unwrap();
     let (_, (voucher_in_hacker_wallet, _)) = hacker_wallet.voucher_store.vouchers.iter().next().unwrap();
 
     // ### SZENARIO 3a: OVERSPENDING ###
@@ -407,7 +407,7 @@ fn test_attack_create_inconsistent_transaction() {
     let overspend_tx = create_hacked_tx(&ACTORS.hacker, overspend_tx_unsigned);
     overspend_voucher.transactions.push(overspend_tx);
     let hacked_container = create_hacked_bundle_and_container(&ACTORS.hacker, &ACTORS.victim.user_id, overspend_voucher);
-    victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None::<&FileVoucherArchive>).unwrap();
+    victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
     let result = voucher_validation::validate_voucher_against_standard(received_voucher, &STANDARD);
     assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::FullTransferAmountMismatch { .. }))),
@@ -512,10 +512,10 @@ fn test_wallet_state_management_on_split() {
         &b_identity.user_id,
         "40",
         None,
-        None::<&FileVoucherArchive>,
+        None,
     ).unwrap();
 
-    wallet_b.process_encrypted_transaction_bundle(&b_identity, &bundle_to_b, None::<&FileVoucherArchive>).unwrap();
+    wallet_b.process_encrypted_transaction_bundle(&b_identity, &bundle_to_b, None).unwrap();
 
     // 4. Verifizierung (Wallet A)
     // NACH ÄNDERUNG: Wallet A sollte jetzt nur noch EINE Instanz haben - den aktiven Restbetrag.
@@ -567,8 +567,8 @@ fn test_collaborative_fraud_detection_with_fingerprints() {
     let bundle_to_alice = eve_wallet.create_and_encrypt_transaction_bundle(&eve_identity, vec![voucher_for_alice], &a_identity.user_id, None).unwrap();
     let bundle_to_bob = eve_wallet.create_and_encrypt_transaction_bundle(&eve_identity, vec![voucher_for_bob], &b_identity.user_id, None).unwrap();
 
-    alice_wallet.process_encrypted_transaction_bundle(&a_identity, &bundle_to_alice, None::<&FileVoucherArchive>).unwrap();
-    bob_wallet.process_encrypted_transaction_bundle(&b_identity, &bundle_to_bob, None::<&FileVoucherArchive>).unwrap();
+    alice_wallet.process_encrypted_transaction_bundle(&a_identity, &bundle_to_alice, None).unwrap();
+    bob_wallet.process_encrypted_transaction_bundle(&b_identity, &bundle_to_bob, None).unwrap();
 
     // 3. Akt 2 (Austausch)
     alice_wallet.scan_and_update_own_fingerprints().unwrap();

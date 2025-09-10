@@ -29,6 +29,7 @@ use voucher_lib::{
 };
 
 // --- Neue Hilfsfunktionen ---
+#[allow(dead_code)]
 /// Generiert eine neue, valide 12-Wort BIP39 Mnemonic-Phrase für Tests.
 pub fn generate_valid_mnemonic() -> String {
     crypto_utils::generate_mnemonic(12, Language::English)

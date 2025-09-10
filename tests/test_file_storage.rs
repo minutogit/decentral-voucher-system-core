@@ -3,7 +3,6 @@
 //! Enthält Integrationstests für das refaktorierte Profil- und VoucherStore-Management,
 //! inklusive der Passwort-Wiederherstellungslogik und Randbedingungen.
 
-use voucher_lib::archive::file_archive::FileVoucherArchive;
 use rust_decimal::Decimal;
 use voucher_lib::error::VoucherCoreError;
 use voucher_lib::models::conflict::FingerprintStore;
@@ -322,7 +321,7 @@ fn test_save_and_load_with_bundle_history() {
             &bob_identity.user_id,
             "100", // Sende den vollen Betrag
             Some("Test transfer".to_string()),
-            None::<&FileVoucherArchive>,
+            None::<&dyn voucher_lib::archive::VoucherArchive>,
         )
         .expect("Transfer failed");
 

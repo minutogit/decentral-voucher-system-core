@@ -287,7 +287,7 @@ fn test_proactive_double_spend_prevention_in_wallet() {
         &recipient1_identity.user_id,
         "100",
         None,
-        None::<&FileVoucherArchive>,
+        None,
     );
     assert!(transfer1_result.is_ok(), "Die erste Transaktion sollte erfolgreich sein.");
     assert_eq!(sender_wallet.fingerprint_store.own_fingerprints.len(), 1, "Ein Fingerprint sollte nach der ersten Transaktion existieren.");
@@ -308,7 +308,7 @@ fn test_proactive_double_spend_prevention_in_wallet() {
         &recipient2_identity.user_id,
         "100",
         None,
-        None::<&FileVoucherArchive>,
+        None,
     );
 
     assert!(transfer2_result.is_err(), "Die zweite Transaktion von demselben Zustand aus muss fehlschlagen.");
