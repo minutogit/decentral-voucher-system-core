@@ -271,6 +271,46 @@ fn test_proactive_double_spend_prevention() {
     ));
 }
 
+/// 1.4. Szenario (Happy Path): Erstellen eines neuen Gutscheins direkt im Wallet.
+#[test]
+fn test_create_new_voucher_and_get_user_id() {
+    let standard = load_standard_definition("minuto_standard.toml").unwrap();
+    let (mut wallet, identity) = create_test_wallet("creator wallet").unwrap();
+
+    // Test 1: get_user_id
+    assert_eq!(
+        wallet.get_user_id(),
+        identity.user_id,
+        "get_user_id should return the correct user id"
+    );
+
+    // Test 2: create_new_voucher
+    // Setup: Daten für den neuen Gutschein vorbereiten.
+    let new_voucher_data = voucher_lib::services::voucher_manager::NewVoucherData {
+        creator: voucher_lib::models::voucher::Creator {
+            id: identity.user_id.clone(),
+            first_name: "Test".to_string(),
+            last_name: "Creator".to_string(),
+            ..Default::default()
+        },
+        nominal_value: voucher_lib::models::voucher::NominalValue {
+            amount: "500".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // Aktion: Neuen Gutschein erstellen
+    let created_voucher = wallet.create_new_voucher(&identity, &standard, new_voucher_data).unwrap();
+    assert_eq!(created_voucher.transactions.len(), 1, "A new voucher must have exactly one 'init' transaction.");
+
+    // Assert: Gutschein ist im Wallet vorhanden und aktiv
+    let summary = wallet.list_vouchers().pop().expect("Wallet should contain one voucher");
+    assert_eq!(summary.current_amount, "500");
+    assert_eq!(summary.status, VoucherStatus::Active);
+    assert_eq!(wallet.voucher_store.vouchers.len(), 1);
+}
+
 /// 1.3. Szenario (Konflikt): Reaktive Double-Spend-Erkennung ("Earliest Wins").
 #[test]
 #[ignore] // Diesen Test erst aktivieren, wenn Helfer zum Erzeugen von Konflikten bereitstehen.

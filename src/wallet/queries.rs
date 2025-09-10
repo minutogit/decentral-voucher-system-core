@@ -120,4 +120,13 @@ impl Wallet {
             .map(|(unit, total)| (unit, total.to_string()))
             .collect()
     }
+
+
+    /// Gibt die User-ID des Wallet-Inhabers zurück.
+    ///
+    /// # Returns
+    /// Eine Referenz auf die User-ID-Zeichenkette.
+    pub fn get_user_id(&self) -> &str {
+        &self.profile.user_id
+    }
 }

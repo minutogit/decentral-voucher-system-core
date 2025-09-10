@@ -16,7 +16,7 @@ use crate::models::conflict::{FingerprintStore, ProofStore};
 use crate::models::profile::{
     BundleMetadataStore, TransactionBundleHeader, TransactionDirection, UserIdentity, UserProfile,
     VoucherStatus, VoucherStore,
-};
+}; // NEW
 use crate::models::secure_container::{PayloadType, SecureContainer};
 use crate::models::voucher::Voucher;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
@@ -27,6 +27,7 @@ use crate::storage::{AuthMethod, Storage, StorageError};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use crate::services::voucher_manager::NewVoucherData;
 
 /// Die zentrale Verwaltungsstruktur für ein Nutzer-Wallet.
 /// Hält den In-Memory-Zustand und interagiert mit dem Speichersystem.
@@ -440,6 +441,35 @@ impl Wallet {
             .push(fingerprint);
 
         Ok((container_bytes, new_voucher_state))
+    }
+
+    /// Erstellt einen brandneuen Gutschein und fügt ihn direkt zum Wallet hinzu.
+    ///
+    /// Diese Methode orchestriert die Erstellung eines neuen Gutscheins basierend auf
+    /// einem Standard, signiert ihn mit der Identität des Erstellers und speichert
+    /// ihn sofort im `VoucherStore` mit dem Status `Active`.
+    ///
+    /// # Arguments
+    /// * `identity` - Die Identität des Erstellers, enthält den Signierschlüssel.
+    /// * `standard_definition` - Die Regeln und Vorlagen des Gutschein-Standards.
+    /// * `data` - Die spezifischen Daten für den neuen Gutschein (z.B. Betrag).
+    ///
+    /// # Returns
+    /// Ein `Result` mit dem vollständig erstellten `Voucher` bei Erfolg.
+    pub fn create_new_voucher(
+        &mut self,
+        identity: &UserIdentity,
+        standard_definition: &VoucherStandardDefinition,
+        data: NewVoucherData,
+    ) -> Result<Voucher, VoucherCoreError> {
+        let new_voucher = voucher_manager::create_voucher(
+            data,
+            standard_definition,
+            &identity.signing_key,
+        )?;
+
+        self.add_voucher_to_store(new_voucher.clone(), VoucherStatus::Active, &identity.user_id)?;
+        Ok(new_voucher)
     }
 
     /// Führt Wartungsarbeiten am Wallet-Speicher durch, um veraltete Daten zu entfernen.
