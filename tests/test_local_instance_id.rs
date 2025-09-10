@@ -7,10 +7,12 @@ use voucher_lib::services::crypto_utils::get_hash;
 use voucher_lib::services::utils::get_current_timestamp;
 use voucher_lib::wallet::Wallet;
 use voucher_lib::VoucherCoreError;
+mod test_utils;
+use test_utils::ACTORS;
 
 /// Hilfsfunktion, um einen einfachen Test-Gutschein zu erstellen.
 /// Initialisiert alle Felder manuell, um die fehlende `Default`-Implementierung zu umgehen.
-fn create_test_voucher(creator_id: &str, amount: &str) -> Voucher {
+fn create_base_voucher(creator_id: &str, amount: &str) -> Voucher {
     let voucher = Voucher {
         voucher_standard: VoucherStandard {
             name: "Test Standard".to_string(),
@@ -63,6 +65,7 @@ fn create_test_voucher(creator_id: &str, amount: &str) -> Voucher {
         additional_signatures: vec![],
     };
 
+    let mut voucher = voucher;
     let init_transaction = Transaction {
         t_id: "t-init-abc".to_string(),
         prev_hash: get_hash(format!("{}{}", &voucher.voucher_id, &voucher.voucher_nonce)),
@@ -74,7 +77,6 @@ fn create_test_voucher(creator_id: &str, amount: &str) -> Voucher {
         sender_remaining_amount: None,
         sender_signature: "sig-init".to_string(),
     };
-    let mut voucher = voucher; // Mache die Instanz veränderbar
     voucher.transactions.push(init_transaction);
     voucher
 }
@@ -83,15 +85,15 @@ fn create_test_voucher(creator_id: &str, amount: &str) -> Voucher {
 /// korrekt auf Basis der `init`-Transaktion berechnet wird.
 #[test]
 fn test_local_id_for_initial_creator() {
-    let creator_id = "user-creator-1";
-    let voucher = create_test_voucher(creator_id, "100");
+    let creator = &ACTORS.alice;
+    let voucher = create_base_voucher(&creator.user_id, "100");
 
-    let result = Wallet::calculate_local_instance_id(&voucher, creator_id);
+    let result = Wallet::calculate_local_instance_id(&voucher, &creator.user_id);
     assert!(result.is_ok());
     let local_id = result.unwrap();
 
     let expected_combined_string =
-        format!("{}{}{}", voucher.voucher_id, "t-init-abc", creator_id);
+        format!("{}{}{}", voucher.voucher_id, "t-init-abc", &creator.user_id);
     let expected_hash = get_hash(expected_combined_string);
 
     assert_eq!(local_id, expected_hash);
@@ -101,17 +103,17 @@ fn test_local_id_for_initial_creator() {
 /// vollständigen Transfer korrekt auf Basis der Transfer-Transaktion berechnet wird.
 #[test]
 fn test_local_id_after_full_transfer() {
-    let creator_id = "user-creator-2";
-    let recipient_id = "user-recipient-2";
-    let mut voucher = create_test_voucher(creator_id, "100");
+    let creator = &ACTORS.alice;
+    let recipient = &ACTORS.bob;
+    let mut voucher = create_base_voucher(&creator.user_id, "100");
 
     let transfer_tx = Transaction {
         t_id: "t-transfer-def".to_string(),
         prev_hash: get_hash("..."),
         t_type: "".to_string(), // Voller Transfer
         t_time: get_current_timestamp(),
-        sender_id: creator_id.to_string(),
-        recipient_id: recipient_id.to_string(),
+        sender_id: creator.user_id.clone(),
+        recipient_id: recipient.user_id.clone(),
         amount: "100".to_string(),
         sender_remaining_amount: None, // Kein Restbetrag
         sender_signature: "sig-transfer".to_string(),
@@ -119,22 +121,22 @@ fn test_local_id_after_full_transfer() {
     voucher.transactions.push(transfer_tx);
 
     // ID für den neuen Besitzer (Empfänger)
-    let result_recipient = Wallet::calculate_local_instance_id(&voucher, recipient_id);
+    let result_recipient = Wallet::calculate_local_instance_id(&voucher, &recipient.user_id);
     assert!(result_recipient.is_ok());
     let local_id_recipient = result_recipient.unwrap();
 
     let expected_combined_string =
-        format!("{}{}{}", voucher.voucher_id, "t-transfer-def", recipient_id);
+        format!("{}{}{}", voucher.voucher_id, "t-transfer-def", &recipient.user_id);
     let expected_hash = get_hash(expected_combined_string);
 
     assert_eq!(local_id_recipient, expected_hash);
 
     // ID für den ursprünglichen Besitzer (jetzt archiviert)
     // NACH ÄNDERUNG: Die ID muss nun auf der Transfer-Transaktion basieren, da der Creator dort der Sender war.
-    let result_creator = Wallet::calculate_local_instance_id(&voucher, creator_id);
+    let result_creator = Wallet::calculate_local_instance_id(&voucher, &creator.user_id);
     assert!(result_creator.is_ok());
     let creators_archived_id = result_creator.unwrap();
-    let expected_archived_string = format!("{}{}{}", voucher.voucher_id, "t-transfer-def", creator_id);
+    let expected_archived_string = format!("{}{}{}", voucher.voucher_id, "t-transfer-def", &creator.user_id);
     assert_eq!(creators_archived_id, get_hash(expected_archived_string), "Die archivierte ID des Erstellers sollte auf der Transfer-Transaktion basieren.");
 }
 
@@ -142,17 +144,17 @@ fn test_local_id_after_full_transfer() {
 /// Beide IDs müssen auf der Split-Transaktion basieren.
 #[test]
 fn test_local_id_after_split() {
-    let sender_id = "user-sender-3";
-    let recipient_id = "user-recipient-3";
-    let mut voucher = create_test_voucher(sender_id, "100");
+    let sender = &ACTORS.sender;
+    let recipient = &ACTORS.recipient1;
+    let mut voucher = create_base_voucher(&sender.user_id, "100");
 
     let split_tx = Transaction {
         t_id: "t-split-ghi".to_string(),
         prev_hash: get_hash("..."),
         t_type: "split".to_string(),
         t_time: get_current_timestamp(),
-        sender_id: sender_id.to_string(),
-        recipient_id: recipient_id.to_string(),
+        sender_id: sender.user_id.clone(),
+        recipient_id: recipient.user_id.clone(),
         amount: "40".to_string(),
         sender_remaining_amount: Some("60".to_string()),
         sender_signature: "sig-split".to_string(),
@@ -160,19 +162,19 @@ fn test_local_id_after_split() {
     voucher.transactions.push(split_tx);
 
     // ID für den Sender (hat noch Restguthaben)
-    let result_sender = Wallet::calculate_local_instance_id(&voucher, sender_id);
+    let result_sender = Wallet::calculate_local_instance_id(&voucher, &sender.user_id);
     assert!(result_sender.is_ok());
     let local_id_sender = result_sender.unwrap();
     let expected_combined_sender =
-        format!("{}{}{}", voucher.voucher_id, "t-split-ghi", sender_id);
+        format!("{}{}{}", voucher.voucher_id, "t-split-ghi", &sender.user_id);
     assert_eq!(local_id_sender, get_hash(expected_combined_sender));
 
     // ID für den Empfänger des Teilbetrags
-    let result_recipient = Wallet::calculate_local_instance_id(&voucher, recipient_id);
+    let result_recipient = Wallet::calculate_local_instance_id(&voucher, &recipient.user_id);
     assert!(result_recipient.is_ok());
     let local_id_recipient = result_recipient.unwrap();
     let expected_combined_recipient =
-        format!("{}{}{}", voucher.voucher_id, "t-split-ghi", recipient_id);
+        format!("{}{}{}", voucher.voucher_id, "t-split-ghi", &recipient.user_id);
     assert_eq!(local_id_recipient, get_hash(expected_combined_recipient));
 }
 
@@ -180,11 +182,11 @@ fn test_local_id_after_split() {
 /// angegebene Nutzer den Gutschein nie besessen hat.
 #[test]
 fn test_local_id_for_non_owner() {
-    let creator_id = "user-creator-4";
-    let non_owner_id = "user-non-owner-4";
-    let voucher = create_test_voucher(creator_id, "100");
+    let creator = &ACTORS.alice;
+    let non_owner = &ACTORS.hacker;
+    let voucher = create_base_voucher(&creator.user_id, "100");
 
-    let result = Wallet::calculate_local_instance_id(&voucher, non_owner_id);
+    let result = Wallet::calculate_local_instance_id(&voucher, &non_owner.user_id);
     assert!(result.is_err());
     assert!(
         matches!(result.unwrap_err(), VoucherCoreError::Generic(msg) if msg.contains("never owned"))
@@ -195,12 +197,12 @@ fn test_local_id_for_non_owner() {
 /// erst weggeschickt und dann wieder zurückempfangen wird.
 #[test]
 fn test_local_id_changes_on_round_trip() {
-    let alice_id = "user-alice-5";
-    let bob_id = "user-bob-5";
-    let mut voucher = create_test_voucher(alice_id, "100");
+    let alice = &ACTORS.alice;
+    let bob = &ACTORS.bob;
+    let mut voucher = create_base_voucher(&alice.user_id, "100");
 
     // 1. Alice's initialer Zustand
-    let initial_alice_id = Wallet::calculate_local_instance_id(&voucher, alice_id)
+    let initial_alice_id = Wallet::calculate_local_instance_id(&voucher, &alice.user_id)
         .expect("Alice should own the voucher initially");
     assert!(!initial_alice_id.is_empty());
 
@@ -210,8 +212,8 @@ fn test_local_id_changes_on_round_trip() {
         prev_hash: get_hash("..."),
         t_type: "".to_string(),
         t_time: get_current_timestamp(),
-        sender_id: alice_id.to_string(),
-        recipient_id: bob_id.to_string(),
+        sender_id: alice.user_id.clone(),
+        recipient_id: bob.user_id.clone(),
         amount: "100".to_string(),
         sender_remaining_amount: None,
         sender_signature: "sig-to-bob".to_string(),
@@ -219,15 +221,15 @@ fn test_local_id_changes_on_round_trip() {
     voucher.transactions.push(tx_to_bob);
 
     // 3. Überprüfen: Bob besitzt ihn jetzt, Alice nicht mehr
-    let _bobs_id = Wallet::calculate_local_instance_id(&voucher, bob_id)
+    let _bobs_id = Wallet::calculate_local_instance_id(&voucher, &bob.user_id)
         .expect("Bob should now own the voucher");
-    let alice_result_after_send = Wallet::calculate_local_instance_id(&voucher, alice_id);
+    let alice_result_after_send = Wallet::calculate_local_instance_id(&voucher, &alice.user_id);
     // NACH ÄNDERUNG: Alice's Aufruf muss erfolgreich sein und eine NEUE ID zurückgeben, die
     // auf der Transaktion basiert, bei der sie die Senderin war.
     assert!(alice_result_after_send.is_ok());
     let alice_archived_id = alice_result_after_send.unwrap();
     assert_ne!(initial_alice_id, alice_archived_id, "Alice's archived ID should NOT be her initial ID.");
-    let expected_archived_string = format!("{}{}{}", voucher.voucher_id, "t-alice-to-bob", alice_id);
+    let expected_archived_string = format!("{}{}{}", voucher.voucher_id, "t-alice-to-bob", &alice.user_id);
     assert_eq!(alice_archived_id, get_hash(expected_archived_string), "Alice's archived ID should be based on the transaction to Bob.");
 
     // 4. Bob sendet den Gutschein zurück an Alice
@@ -236,8 +238,8 @@ fn test_local_id_changes_on_round_trip() {
         prev_hash: get_hash("..."),
         t_type: "".to_string(),
         t_time: get_current_timestamp(),
-        sender_id: bob_id.to_string(),
-        recipient_id: alice_id.to_string(),
+        sender_id: bob.user_id.clone(),
+        recipient_id: alice.user_id.clone(),
         amount: "100".to_string(),
         sender_remaining_amount: None,
         sender_signature: "sig-to-alice".to_string(),
@@ -245,9 +247,9 @@ fn test_local_id_changes_on_round_trip() {
     voucher.transactions.push(tx_to_alice);
 
     // 5. Finale Überprüfung: Alice besitzt ihn wieder, aber mit einer NEUEN ID. Bob besitzt ihn nicht mehr.
-    let final_alice_id = Wallet::calculate_local_instance_id(&voucher, alice_id)
+    let final_alice_id = Wallet::calculate_local_instance_id(&voucher, &alice.user_id)
         .expect("Alice should own the voucher again");
-    let bob_result_after_send = Wallet::calculate_local_instance_id(&voucher, bob_id);
+    let bob_result_after_send = Wallet::calculate_local_instance_id(&voucher, &bob.user_id);
     // NACH ÄNDERUNG: Bob's Aufruf muss erfolgreich sein und seine ID aus der Transaktion zu ihm zurückgeben.
     assert!(bob_result_after_send.is_ok());
 
@@ -259,6 +261,6 @@ fn test_local_id_changes_on_round_trip() {
 
     // Die neue ID muss auf der letzten Transaktion basieren.
     let expected_final_string =
-        format!("{}{}{}", voucher.voucher_id, "t-bob-to-alice", alice_id);
+        format!("{}{}{}", voucher.voucher_id, "t-bob-to-alice", &alice.user_id);
     assert_eq!(final_alice_id, get_hash(expected_final_string));
 }

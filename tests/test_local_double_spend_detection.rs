@@ -8,15 +8,16 @@
 //! 2.  **Integrationstest:** Simuliert ein vollständiges End-to-End-Szenario,
 //!     bei dem ein Betrug begangen und vom System korrekt erkannt und behandelt wird.
 
-use std::fs;
+mod test_utils;
+
 use voucher_lib::archive::file_archive::FileVoucherArchive;
-use lazy_static::lazy_static;
 use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat};
 use std::path::Path;
-use voucher_lib::models::conflict::TransactionFingerprint;
-use voucher_lib::models::profile::{BundleMetadataStore, UserIdentity, VoucherStatus};
+use test_utils::{setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
+use voucher_lib::models::conflict::TransactionFingerprint; 
+use voucher_lib::{UserIdentity, VoucherStatus};
 use voucher_lib::models::voucher::{Address, Collateral, Creator, NominalValue, Voucher};
-use voucher_lib::services::crypto_utils::{create_user_id, get_hash};
+use voucher_lib::services::crypto_utils::{get_hash};
 use voucher_lib::services::voucher_manager::{self, NewVoucherData};
 use voucher_lib::wallet::Wallet;
 
@@ -24,75 +25,16 @@ use voucher_lib::wallet::Wallet;
 // HILFSFUNKTIONEN
 // ===================================================================================
 
-/// Erstellt eine deterministische `UserIdentity` aus einem Seed-String für Testzwecke.
-fn identity_from_seed(seed: &str) -> UserIdentity {
-    let (public_key, signing_key) =
-        voucher_lib::services::crypto_utils::generate_ed25519_keypair_for_tests(Some(seed));
-    let user_id = create_user_id(&public_key, Some("te")).unwrap();
-
-    UserIdentity {
-        signing_key,
-        public_key,
-        user_id,
-    }
-}
-
-/// Eine Struktur, die alle wiederverwendbaren Test-Akteure enthält.
-struct TestActors {
-    alice: UserIdentity,
-    bob: UserIdentity,
-    charlie: UserIdentity,
-    david: UserIdentity,
-    sender: UserIdentity,
-    recipient1: UserIdentity,
-    recipient2: UserIdentity,
-    test_user: UserIdentity,
-}
-
-lazy_static! {
-    /// Initialisiert einmalig alle für die Tests benötigten Benutzeridentitäten.
-    /// Dies beschleunigt die Tests erheblich, da die teure Schlüsselableitung nur einmal erfolgt.
-    static ref ACTORS: TestActors = TestActors {
-        alice: identity_from_seed("alice"),
-        bob: identity_from_seed("bob"),
-        charlie: identity_from_seed("charlie"),
-        david: identity_from_seed("david"),
-        sender: identity_from_seed("sender"),
-        recipient1: identity_from_seed("recipient1"),
-        recipient2: identity_from_seed("recipient2"),
-        test_user: identity_from_seed("test_user"),
-    };
-}
-
 /// Erstellt für einen Test ein frisches, leeres Wallet für eine vordefinierte Identität.
 /// Stellt die Test-Isolation durch separates Speichern sicher.
 fn setup_test_wallet(identity: &UserIdentity, _name: &str, _storage_dir: &Path) -> Wallet {
-    // Erstelle ein neues, leeres Wallet direkt über die Struct-Felder.
-    let profile = voucher_lib::models::profile::UserProfile {
-        user_id: identity.user_id.clone(),
-        ..Default::default()
-    };
-    // Das Wallet muss nicht gespeichert und neu geladen werden, ein In-Memory-Wallet reicht für die Tests.
-    // Dies vermeidet das komplexe Cloning-Problem der UserIdentity.
-    Wallet {
-        profile,
-        voucher_store: Default::default(),
-        bundle_meta_store: BundleMetadataStore::default(),
-        fingerprint_store: Default::default(),
-        proof_store: Default::default(),
-    }
+    setup_in_memory_wallet(identity)
 }
 
 /// Extrahiert den einzigen Gutschein aus dem Wallet eines Akteurs.
 fn get_voucher_from_wallet(wallet: &Wallet) -> Voucher {
     assert_eq!(wallet.voucher_store.vouchers.len(), 1, "Expected exactly one voucher in the wallet");
     wallet.voucher_store.vouchers.values().next().unwrap().0.clone()
-}
-
-/// Lädt die Standard-Definition.
-fn load_test_standard() -> voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition {
-    let standard_toml = fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
-    voucher_manager::load_standard_definition(&standard_toml).unwrap()
 }
 
 /// Erstellt einen leeren Fingerprint für Testzwecke.
@@ -143,16 +85,15 @@ fn new_test_voucher_data(creator_id: String) -> NewVoucherData {
 
 #[test]
 fn test_fingerprint_generation() {
-    let temp_dir = tempfile::tempdir().unwrap();
+    let _temp_dir = tempfile::tempdir().unwrap();
     let identity = &ACTORS.test_user;
-    let mut wallet = setup_test_wallet(identity, "test_user", temp_dir.path());
-    let standard = load_test_standard();
+    let mut wallet = setup_in_memory_wallet(identity);
 
     // Erstelle einen Gutschein mit 2 Transaktionen (init + transfer)
     let voucher_data = new_test_voucher_data(identity.user_id.clone());
     // create_voucher erwartet den &SigningKey, nicht die ganze Identity.
-    let mut voucher = voucher_manager::create_voucher(voucher_data, &standard, &identity.signing_key).unwrap();
-    voucher = voucher_manager::create_transaction(&voucher, &standard, &identity.user_id, &identity.signing_key, "recipient_id", "50").unwrap();
+    let mut voucher = voucher_manager::create_voucher(voucher_data, &SILVER_STANDARD, &identity.signing_key).unwrap();
+    voucher = voucher_manager::create_transaction(&voucher, &SILVER_STANDARD, &identity.user_id, &identity.signing_key, "recipient_id", "50").unwrap();
     wallet.add_voucher_to_store(voucher.clone(), VoucherStatus::Active, &identity.user_id).unwrap();
 
     // Aktion
@@ -185,9 +126,8 @@ fn test_fingerprint_generation() {
 
 #[test]
 fn test_fingerprint_exchange() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let mut sender_wallet = setup_test_wallet(&ACTORS.sender, "sender", temp_dir.path());
-    let mut receiver_wallet = setup_test_wallet(&ACTORS.recipient1, "receiver", temp_dir.path());
+    let mut sender_wallet = setup_in_memory_wallet(&ACTORS.sender);
+    let mut receiver_wallet = setup_in_memory_wallet(&ACTORS.recipient1);
 
     // Setup: Erzeuge Fingerprints im Sender-Wallet
     let mut fp1 = new_dummy_fingerprint("t1");
@@ -208,8 +148,7 @@ fn test_fingerprint_exchange() {
 
 #[test]
 fn test_conflict_classification() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let mut wallet = setup_test_wallet(&ACTORS.test_user, "test_user", temp_dir.path());
+    let mut wallet = setup_in_memory_wallet(&ACTORS.test_user);
 
     let conflict_hash = "shared_hash".to_string();
     let fp1 = new_dummy_fingerprint("t_id_1");
@@ -234,8 +173,7 @@ fn test_conflict_classification() {
 
 #[test]
 fn test_cleanup_expired_fingerprints() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let mut wallet = setup_test_wallet(&ACTORS.test_user, "test_user", temp_dir.path());
+    let mut wallet = setup_in_memory_wallet(&ACTORS.test_user);
 
     let mut expired_fp = new_dummy_fingerprint("t1");
     expired_fp.valid_until = "2020-01-01T00:00:00Z".to_string();
@@ -261,18 +199,16 @@ fn test_cleanup_expired_fingerprints() {
 fn test_proactive_double_spend_prevention_in_wallet() {
     // ### Setup ###
     // Erstellt einen Sender und zwei potenzielle Empfänger.
-    let temp_dir = tempfile::tempdir().unwrap();
-    let storage_path = temp_dir.path();
-    let standard = load_test_standard();
+    let _temp_dir = tempfile::tempdir().unwrap();
 
     let sender_identity = &ACTORS.sender;
-    let mut sender_wallet = setup_test_wallet(sender_identity, "sender", storage_path);
+    let mut sender_wallet = setup_in_memory_wallet(sender_identity);
     let recipient1_identity = &ACTORS.recipient1;
     let recipient2_identity = &ACTORS.recipient2;
 
     // Sender erhält einen initialen Gutschein.
     let voucher_data = new_test_voucher_data(sender_identity.user_id.clone());
-    let initial_voucher = voucher_manager::create_voucher(voucher_data, &standard, &sender_identity.signing_key).unwrap();
+    let initial_voucher = voucher_manager::create_voucher(voucher_data, &SILVER_STANDARD, &sender_identity.signing_key).unwrap();
     // Wir klonen den Gutschein hier, damit die 'initial_voucher'-Variable für den späteren Test gültig bleibt.
     sender_wallet.add_voucher_to_store(initial_voucher.clone(), VoucherStatus::Active, &sender_identity.user_id).unwrap();
     let initial_local_id = sender_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
@@ -282,7 +218,7 @@ fn test_proactive_double_spend_prevention_in_wallet() {
     // Dies sollte erfolgreich sein und den Fingerprint der Transaktion im Wallet des Senders speichern.
     let transfer1_result = sender_wallet.create_transfer(
         sender_identity,
-        &standard,
+        &SILVER_STANDARD,
         &initial_local_id,
         &recipient1_identity.user_id,
         "100",
@@ -303,7 +239,7 @@ fn test_proactive_double_spend_prevention_in_wallet() {
     // Dies MUSS fehlschlagen, weil `create_transfer` den existierenden Fingerprint aus der ersten Transaktion erkennt.
     let transfer2_result = sender_wallet.create_transfer(
         sender_identity,
-        &standard,
+        &SILVER_STANDARD,
         &initial_local_id, // Wichtig: Dieselbe lokale ID wird wiederverwendet
         &recipient2_identity.user_id,
         "100",
@@ -324,7 +260,6 @@ fn test_local_double_spend_detection_lifecycle() {
     let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_path = temp_dir.path();
     let archive = FileVoucherArchive::new(storage_path.join("archive"));
-    let standard = load_test_standard();
 
     // ### Akt 1: Initialisierung & Erster Transfer ###
     println!("--- Akt 1: Alice erstellt einen Gutschein und sendet ihn an Bob ---");
@@ -335,7 +270,7 @@ fn test_local_double_spend_detection_lifecycle() {
     let mut bob_wallet = setup_test_wallet(bob_identity, "bob", storage_path);
 
     let voucher_data = new_test_voucher_data(alice_identity.user_id.clone());
-    let initial_voucher = voucher_manager::create_voucher(voucher_data, &standard, &alice_identity.signing_key).unwrap();
+    let initial_voucher = voucher_manager::create_voucher(voucher_data, &SILVER_STANDARD, &alice_identity.signing_key).unwrap();
     alice_wallet.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &alice_identity.user_id).unwrap();
 
     // Alice verwendet die neue, korrekte Methode, um den Gutschein an Bob zu senden.
@@ -343,7 +278,7 @@ fn test_local_double_spend_detection_lifecycle() {
     let alice_initial_local_id = alice_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
     let (bundle_to_bob, _) = alice_wallet.create_transfer(
         alice_identity,
-        &standard,
+        &SILVER_STANDARD,
         &alice_initial_local_id,
         &bob_identity.user_id,
         "100",
@@ -370,9 +305,9 @@ fn test_local_double_spend_detection_lifecycle() {
     // und erstellt manuell zwei widersprüchliche Transaktionen aus demselben Zustand.
     // Wichtig: Wir fügen eine kleine Verzögerung ein, um sicherzustellen, dass die Zeitstempel
     // der betrügerischen Transaktionen deterministisch unterscheidbar sind.
-    let voucher_for_charlie = voucher_manager::create_transaction(&voucher_from_bob, &standard, &bob_identity.user_id, &bob_identity.signing_key, &charlie_identity.user_id, "100").unwrap();
+    let voucher_for_charlie = voucher_manager::create_transaction(&voucher_from_bob, &SILVER_STANDARD, &bob_identity.user_id, &bob_identity.signing_key, &charlie_identity.user_id, "100").unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));
-    let voucher_for_david = voucher_manager::create_transaction(&voucher_from_bob, &standard, &bob_identity.user_id, &bob_identity.signing_key, &david_identity.user_id, "100").unwrap();
+    let voucher_for_david = voucher_manager::create_transaction(&voucher_from_bob, &SILVER_STANDARD, &bob_identity.user_id, &bob_identity.signing_key, &david_identity.user_id, "100").unwrap();
 
     // Wir merken uns die IDs der beiden widersprüchlichen Transaktionen.
     let winning_tx_id = voucher_for_charlie.transactions.last().unwrap().t_id.clone();
@@ -398,7 +333,7 @@ fn test_local_double_spend_detection_lifecycle() {
     let charlie_local_id = charlie_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
     let (bundle_to_alice_1, _) = charlie_wallet.create_transfer(
         charlie_identity,
-        &standard,
+        &SILVER_STANDARD,
         &charlie_local_id,
         &alice_identity.user_id,
         "100",
@@ -426,7 +361,7 @@ fn test_local_double_spend_detection_lifecycle() {
     let david_local_id = david_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
     let (bundle_to_alice_2, _) = david_wallet.create_transfer(
         david_identity,
-        &standard,
+        &SILVER_STANDARD,
         &david_local_id,
         &alice_identity.user_id,
         "100",
@@ -469,7 +404,7 @@ fn test_local_double_spend_detection_lifecycle() {
     // Der Versuch, den unter Quarantäne stehenden Gutschein (die 'Verlierer'-Instanz) auszugeben, muss fehlschlagen.
     let transfer_attempt = alice_wallet.create_transfer(
         alice_identity,
-        &standard,
+        &SILVER_STANDARD,
         &loser_local_id.unwrap(),
         &bob_identity.user_id,
         "100", None, // notes

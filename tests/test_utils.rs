@@ -1,14 +1,13 @@
 //! # tests/test_utils.rs
 //!
 //! Hilfsfunktionen für die Integrationstests, um Boilerplate-Code zu reduzieren.
-
+use lazy_static::lazy_static;
 use bip39::Language;
-use std::fs;
-use std::path::PathBuf;
 use voucher_lib::models::{
     conflict::{FingerprintStore, ProofStore},
-    profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore},
+    profile::{BundleMetadataStore, UserProfile, VoucherStore},
 };
+use voucher_lib::{UserIdentity};
 use voucher_lib::models::signature::DetachedSignature;
 use voucher_lib::models::voucher::{Address, GuarantorSignature, Voucher};
 use voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition;
@@ -28,6 +27,62 @@ use voucher_lib::{
     VoucherCoreError,
 };
 
+// --- Zentralisierte Akteure und Standards ---
+
+/// Eine private Hilfsfunktion, um eine deterministische UserIdentity aus einem Seed zu erstellen.
+fn identity_from_seed(seed: &str, prefix: &str) -> UserIdentity {
+    let (public_key, signing_key) =
+        generate_ed25519_keypair_for_tests(Some(seed));
+    let user_id = create_user_id(&public_key, Some(prefix)).unwrap();
+    UserIdentity { signing_key, public_key, user_id }
+}
+
+/// Eine Struktur, die alle für Tests benötigten, einmalig erstellten Identitäten enthält.
+#[allow(dead_code)]
+pub struct TestActors {
+    pub alice: UserIdentity,
+    pub bob: UserIdentity,
+    pub charlie: UserIdentity,
+    pub david: UserIdentity,
+    pub issuer: UserIdentity,
+    pub hacker: UserIdentity,
+    pub guarantor1: UserIdentity,
+    pub guarantor2: UserIdentity,
+    pub sender: UserIdentity,
+    pub recipient1: UserIdentity,
+    pub recipient2: UserIdentity,
+    pub test_user: UserIdentity,
+    pub victim: UserIdentity,
+}
+
+lazy_static! {
+    /// Initialisiert einmalig alle Akteure, sodass sie in allen Tests wiederverwendet werden können.
+    pub static ref ACTORS: TestActors = TestActors {
+        alice: identity_from_seed("alice", "al"),
+        bob: identity_from_seed("bob", "bo"),
+        charlie: identity_from_seed("charlie", "ch"),
+        david: identity_from_seed("david", "da"),
+        issuer: identity_from_seed("issuer", "is"),
+        hacker: identity_from_seed("hacker", "ha"),
+        guarantor1: identity_from_seed("guarantor1", "g1"),
+        guarantor2: identity_from_seed("guarantor2", "g2"),
+        sender: identity_from_seed("sender", "se"),
+        recipient1: identity_from_seed("recipient1", "r1"),
+        recipient2: identity_from_seed("recipient2", "r2"),
+        test_user: identity_from_seed("test_user", "tu"),
+        victim: identity_from_seed("victim", "vi"),
+    };
+
+    pub static ref MINUTO_STANDARD: VoucherStandardDefinition = {
+        let toml_str = include_str!("../voucher_standards/minuto_standard.toml");
+        voucher_manager::load_standard_definition(toml_str).expect("Failed to load Minuto standard for tests")
+    };
+    pub static ref SILVER_STANDARD: VoucherStandardDefinition = {
+        let toml_str = include_str!("../voucher_standards/silver_standard.toml");
+        voucher_manager::load_standard_definition(toml_str).expect("Failed to load Silver standard for tests")
+    };
+}
+
 // --- Neue Hilfsfunktionen ---
 #[allow(dead_code)]
 /// Generiert eine neue, valide 12-Wort BIP39 Mnemonic-Phrase für Tests.
@@ -36,16 +91,31 @@ pub fn generate_valid_mnemonic() -> String {
         .expect("Test mnemonic generation should not fail")
 }
 
-// --- Öffentliche Hilfsfunktionen für Integrationstests ---
-
 /// Lädt eine Standard-Definition aus dem `voucher_standards`-Verzeichnis.
+#[allow(dead_code)]
 pub fn load_standard_definition(filename: &str) -> Result<VoucherStandardDefinition, anyhow::Error> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("voucher_standards");
-    path.push(filename);
-    let content = fs::read_to_string(path)?;
+    let content = std::fs::read_to_string(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("voucher_standards").join(filename))?;
     let standard: VoucherStandardDefinition = toml::from_str(&content)?;
     Ok(standard)
+}
+
+// --- Öffentliche Hilfsfunktionen für Integrationstests ---
+
+
+
+/// Erstellt ein frisches, leeres In-Memory-Wallet für einen gegebenen Akteur.
+#[allow(dead_code)]
+pub fn setup_in_memory_wallet(identity: &UserIdentity) -> Wallet {
+    let profile = UserProfile {
+        user_id: identity.user_id.clone(),
+    };
+    Wallet {
+        profile,
+        voucher_store: VoucherStore::default(),
+        bundle_meta_store: BundleMetadataStore::default(),
+        fingerprint_store: FingerprintStore::default(),
+        proof_store: ProofStore::default(),
+    }
 }
 
 /// Erstellt ein neues Test-Wallet aus einem deterministischen Seed.
@@ -81,14 +151,13 @@ pub fn create_test_wallet(
 
 /// Erstellt ein Test-Wallet und fügt sofort einen Gutschein mit dem angegebenen Betrag hinzu.
 #[allow(dead_code)]
-pub fn create_test_wallet_with_voucher(
-    seed_phrase_extra: &str,
+pub fn add_voucher_to_wallet(
+    wallet: &mut Wallet,
+    identity: &UserIdentity,
     amount: &str,
     standard: &VoucherStandardDefinition,
     with_valid_guarantors: bool,
-) -> Result<(Wallet, UserIdentity, String), VoucherCoreError> {
-    let (mut wallet, identity) = create_test_wallet(seed_phrase_extra)?;
-
+) -> Result<String, VoucherCoreError> {
     // Erstelle die Creator- und NominalValue-Strukturen, die für NewVoucherData benötigt werden.
     let creator_info = Creator {
         id: identity.user_id.clone(),
@@ -116,23 +185,20 @@ pub fn create_test_wallet_with_voucher(
     )?;
 
     if with_valid_guarantors {
-        let (_guarantor1_wallet, guarantor1_identity) = create_test_wallet("guarantor1")?;
-        let (_guarantor2_wallet, guarantor2_identity) = create_test_wallet("guarantor2")?;
-
         let sig_data1 =
-            create_guarantor_signature_data(&guarantor1_identity, "1", &voucher.voucher_id);
+            create_guarantor_signature_data(&ACTORS.guarantor1, "1", &voucher.voucher_id);
         let sig_data2 =
-            create_guarantor_signature_data(&guarantor2_identity, "2", &voucher.voucher_id);
+            create_guarantor_signature_data(&ACTORS.guarantor2, "2", &voucher.voucher_id);
 
         let signed_sig1 = signature_manager::complete_and_sign_detached_signature(
             sig_data1,
             &voucher.voucher_id,
-            &guarantor1_identity,
+            &ACTORS.guarantor1,
         )?;
         let signed_sig2 = signature_manager::complete_and_sign_detached_signature(
             sig_data2,
             &voucher.voucher_id,
-            &guarantor2_identity,
+            &ACTORS.guarantor2,
         )?;
 
         if let DetachedSignature::Guarantor(s) = signed_sig1 {
@@ -147,7 +213,7 @@ pub fn create_test_wallet_with_voucher(
     wallet
         .add_voucher_to_store(voucher, VoucherStatus::Active, &identity.user_id)?;
 
-    Ok((wallet, identity, local_id))
+    Ok(local_id)
 }
 
 /// Erstellt die Metadaten für eine Bürgen-Signatur.
@@ -178,6 +244,7 @@ pub fn create_guarantor_signature_data(
 }
 
 /// Eine Helferfunktion, um einen SecureContainer für Testzwecke zu öffnen.
+#[allow(dead_code)]
 pub fn debug_open_container(
     container_bytes: &[u8],
     recipient_identity: &UserIdentity,

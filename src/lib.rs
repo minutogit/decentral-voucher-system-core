@@ -24,7 +24,7 @@ pub use models::voucher::{
 pub use models::voucher_standard_definition::{
     VoucherStandardDefinition,
 };
-pub use models::profile::{UserIdentity, UserProfile, VoucherStore};
+pub use models::profile::{UserIdentity, UserProfile, VoucherStore, VoucherStatus};
 pub use error::VoucherCoreError;
 
 // Wallet & Storage Fassaden

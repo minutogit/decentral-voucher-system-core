@@ -4,8 +4,9 @@
 
 use voucher_lib::{
     archive::file_archive::FileVoucherArchive,
+    UserIdentity,
     models::{
-        profile::{UserIdentity, UserProfile},
+        profile::{UserProfile},
         voucher::{Address, Creator, NominalValue},
         voucher_standard_definition::VoucherStandardDefinition,
     },

@@ -4,26 +4,13 @@
 //! Diese Tests überprüfen die Kernfunktionalität des `SecureContainer`,
 //! insbesondere die Multi-Empfänger-Verschlüsselung und die Fehlerbehandlung.
 
-use voucher_lib::{
-    crypto_utils,
-    models::{
-        profile::UserIdentity,
-        secure_container::PayloadType,
-    },
-    services::secure_container_manager::{create_secure_container, open_secure_container, ContainerManagerError},
-    VoucherCoreError,
+use voucher_lib::models::secure_container::PayloadType;
+use voucher_lib::services::secure_container_manager::{
+    create_secure_container, open_secure_container, ContainerManagerError,
 };
-
-/// Erstellt eine Test-Identität für einen Benutzer.
-fn setup_test_identity(name: &str, prefix: &str) -> UserIdentity {
-    let (public_key, signing_key) = crypto_utils::generate_ed25519_keypair_for_tests(Some(name));
-    let user_id = crypto_utils::create_user_id(&public_key, Some(prefix)).unwrap();
-    UserIdentity {
-        signing_key,
-        public_key,
-        user_id,
-    }
-}
+use voucher_lib::VoucherCoreError;
+mod test_utils;
+use test_utils::ACTORS;
 
 #[test]
 fn test_multi_recipient_secure_container() {
@@ -31,10 +18,10 @@ fn test_multi_recipient_secure_container() {
     // Erstelle einen Sender (Alice) und drei weitere Personen.
     // Bob und Carol werden die legitimen Empfänger sein.
     // Dave ist ein unbefugter Dritter.
-    let alice_identity = setup_test_identity("alice", "al");
-    let bob_identity = setup_test_identity("bob", "bo");
-    let carol_identity = setup_test_identity("carol", "ca");
-    let dave_identity = setup_test_identity("dave", "da");
+    let alice_identity = &ACTORS.alice;
+    let bob_identity = &ACTORS.bob;
+    let carol_identity = &ACTORS.charlie; // Charlie represents Carol
+    let david_identity = &ACTORS.david;
 
     // --- 2. CONTAINER CREATION ---
     // Alice erstellt eine geheime Nachricht für Bob und Carol.
@@ -67,12 +54,12 @@ fn test_multi_recipient_secure_container() {
 
     // --- 4. VERIFICATION FAILURE BY UNAUTHORIZED USER ---
 
-    // Dave versucht, den Container zu öffnen. Dies muss fehlschlagen.
-    let dave_result = open_secure_container(&container, &dave_identity);
-    assert!(dave_result.is_err());
+    // David versucht, den Container zu öffnen. Dies muss fehlschlagen.
+    let david_result = open_secure_container(&container, david_identity);
+    assert!(david_result.is_err());
 
     // Überprüfe, ob der Fehler der richtige ist.
-    match dave_result.unwrap_err() {
+    match david_result.unwrap_err() {
         VoucherCoreError::Container(ContainerManagerError::NotAnIntendedRecipient) => {
             // Korrekter Fehlertyp
             println!("SUCCESS: Dave was correctly denied access.");

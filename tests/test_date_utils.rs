@@ -5,12 +5,14 @@
 // als `pub` oder `pub(crate)` deklariert werden, um von außerhalb sichtbar zu sein.
 
 use voucher_lib::{
-    self, create_voucher, crypto_utils, load_standard_definition, to_canonical_json,
-    validate_voucher_against_standard, NewVoucherData, VoucherCoreError,
+    self, create_voucher, crypto_utils, to_canonical_json, validate_voucher_against_standard,
+    NewVoucherData, VoucherCoreError,
 };
 use voucher_lib::services::voucher_manager::{self};
 use voucher_lib::services::voucher_validation::ValidationError;
 use chrono::{DateTime, Utc};
+mod test_utils;
+use test_utils::{ACTORS, SILVER_STANDARD};
 
 #[test]
 fn test_iso8601_duration_date_math_correctness() {
@@ -106,14 +108,11 @@ fn test_round_up_date_logic() {
 #[test]
 fn test_chronological_validation_with_timezones() {
     // 1. Setup
-    let standard_toml =
-        std::fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
-    let standard = load_standard_definition(&standard_toml).unwrap();
-    // KORREKTUR: Benenne die Schlüssel korrekt, um Verwirrung zu vermeiden.
-    let (public_key, signing_key) = crypto_utils::generate_ed25519_keypair_for_tests(Some("tz_test"));
+    let standard = &SILVER_STANDARD;
+    let test_user = &ACTORS.test_user;
+
     let creator_data = voucher_lib::Creator {
-        // KORREKTUR: Übergebe den `public_key` direkt.
-        id: crypto_utils::create_user_id(&public_key, Some("cr")).unwrap(),
+        id: test_user.user_id.clone(),
         ..Default::default()
     };
     let voucher_data = NewVoucherData {
@@ -126,7 +125,7 @@ fn test_chronological_validation_with_timezones() {
         ..Default::default()
     };
     // KORREKTUR: Übergebe den korrekten `signing_key` vom Typ &SigningKey.
-    let mut voucher = create_voucher(voucher_data, &standard, &signing_key).unwrap();
+    let mut voucher = create_voucher(voucher_data, standard, &test_user.signing_key).unwrap();
 
     // 2. Manipuliere den Zeitstempel der `init`-Transaktion so, dass er VOR dem Erstellungsdatum des Gutscheins liegt.
     // Die Validierung sollte dies als Fehler erkennen.
@@ -140,12 +139,12 @@ fn test_chronological_validation_with_timezones() {
     let payload = serde_json::json!({ "prev_hash": tx.prev_hash, "sender_id": tx.sender_id, "t_id": tx.t_id });
     let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
     // KORREKTUR: Übergebe den korrekten `signing_key` vom Typ &SigningKey.
-    tx.sender_signature = bs58::encode(crypto_utils::sign_ed25519(&signing_key, signature_hash.as_bytes()).to_bytes()).into_string();
+    tx.sender_signature = bs58::encode(crypto_utils::sign_ed25519(&test_user.signing_key, signature_hash.as_bytes()).to_bytes()).into_string();
     voucher.transactions[0] = tx;
 
     // 3. Validierung: Die Transaktionszeit (`2020`) liegt nun vor dem Erstellungsdatum (`~2025`).
     // Die Validierung muss dies als `InvalidTimeOrder` erkennen.
-    let result = validate_voucher_against_standard(&voucher, &standard);
+    let result = validate_voucher_against_standard(&voucher, standard);
 
     // Verbessere die Fehlerausgabe wie gewünscht.
     let err = result.expect_err("Validation should have failed but returned Ok");
