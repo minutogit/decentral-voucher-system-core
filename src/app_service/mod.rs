@@ -59,6 +59,7 @@ use crate::services::voucher_manager::NewVoucherData;
 use crate::storage::file_storage::FileStorage;
 use crate::storage::{AuthMethod, Storage};
 use crate::wallet::{ProcessBundleResult, VoucherDetails, VoucherSummary, Wallet};
+use bip39::Language;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -108,6 +109,38 @@ impl AppService {
             storage,
             state: AppState::Locked,
         })
+    }
+
+    /// Generiert eine neue BIP-39 Mnemonic-Phrase (Seed-Wörter).
+    ///
+    /// Diese Methode ist statisch und kann ohne geladenes Wallet aufgerufen werden.
+    ///
+    /// # Arguments
+    /// * `word_count` - Die gewünschte Anzahl an Wörtern. Gültige Werte sind
+    ///   typischerweise 12, 15, 18, 21 oder 24.
+    ///
+    /// # Returns
+    /// Ein `Result` mit der Mnemonic-Phrase als `String` oder einer Fehlermeldung.
+    pub fn generate_mnemonic(word_count: u32) -> Result<String, String> {
+        crate::services::crypto_utils::generate_mnemonic(word_count as usize, Language::English)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Validiert eine vom Benutzer eingegebene BIP-39 Mnemonic-Phrase.
+    ///
+    /// Überprüft, ob die Wörter korrekt sind und die interne Prüfsumme der Phrase
+    /// gültig ist. Nützlich, um dem Benutzer direktes Feedback zu geben, bevor
+    /// ein Wallet wiederhergestellt wird.
+    ///
+    /// Diese Methode ist statisch und kann ohne geladenes Wallet aufgerufen werden.
+    ///
+    /// # Arguments
+    /// * `mnemonic` - Die zu überprüfende Mnemonic-Phrase.
+    ///
+    /// # Returns
+    /// `Ok(())` bei Erfolg, andernfalls ein `Err` mit der Fehlerursache.
+    pub fn validate_mnemonic(mnemonic: &str) -> Result<(), String> {
+        crate::services::crypto_utils::validate_mnemonic_phrase(mnemonic)
     }
 
     /// Erstellt ein komplett neues Benutzerprofil und Wallet und speichert es verschlüsselt.

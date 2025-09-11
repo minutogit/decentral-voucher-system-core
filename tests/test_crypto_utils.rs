@@ -18,6 +18,7 @@ mod tests {
         create_user_id,
         validate_user_id,
         get_pubkey_from_user_id,
+        validate_mnemonic_phrase,
     };
     use bip39::Language;
     use hex;
@@ -42,6 +43,28 @@ mod tests {
         println!("Ed25519 Public Key: {}", hex::encode(ed_pub.to_bytes()));
         println!("Ed25519 Private Key: {}", hex::encode(ed_priv.to_bytes()));
         Ok(())
+    }
+
+    #[test]
+    fn test_validate_mnemonic() {
+        // 1. Test mit einer bekanntermaßen gültigen Phrase
+        let valid_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let result = validate_mnemonic_phrase(valid_mnemonic);
+        assert!(result.is_ok(), "Validation of a correct mnemonic failed. Error: {:?}", result.err());
+        println!("SUCCESS: Correctly validated a valid mnemonic.");
+
+        // 2. Test mit einem ungültigen Wort
+        let invalid_word_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon hello";
+        let result = validate_mnemonic_phrase(invalid_word_mnemonic);
+        assert!(result.is_err(), "Validation should have failed for an invalid word.");
+        println!("SUCCESS: Correctly identified a mnemonic with an invalid word.");
+
+        // 3. Test mit einer ungültigen Prüfsumme
+        // "about" wurde durch "abandon" ersetzt, was die Prüfsumme ungültig macht.
+        let bad_checksum_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+        let result = validate_mnemonic_phrase(bad_checksum_mnemonic);
+        assert!(result.is_err(), "Validation should have failed for a bad checksum.");
+        println!("SUCCESS: Correctly identified a mnemonic with a bad checksum.");
     }
 
     #[test]

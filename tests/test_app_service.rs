@@ -116,6 +116,33 @@ fn test_app_service_full_lifecycle() {
     assert_eq!(service_bob.get_voucher_summaries().unwrap()[0].status, VoucherStatus::Active);
 }
 
+/// Testet die statischen Mnemonic-Hilfsfunktionen des AppService.
+#[test]
+fn test_app_service_mnemonic_helpers() {
+    // --- 1. Test der Generierung ---
+    // Erfolgreiche Generierung mit gültiger Wortanzahl
+    let mnemonic_result = AppService::generate_mnemonic(12);
+    assert!(mnemonic_result.is_ok(), "Should generate a 12-word mnemonic");
+    let mnemonic = mnemonic_result.unwrap();
+    assert_eq!(mnemonic.split_whitespace().count(), 12, "Mnemonic should have 12 words");
+
+    // Fehlgeschlagene Generierung mit ungültiger Wortanzahl
+    let invalid_result = AppService::generate_mnemonic(11);
+    assert!(invalid_result.is_err(), "Should fail with invalid word count");
+
+    // --- 2. Test der Validierung ---
+    // Erfolgreiche Validierung einer frisch generierten Mnemonic
+    let validation_result = AppService::validate_mnemonic(&mnemonic);
+    assert!(validation_result.is_ok(), "A freshly generated mnemonic should be valid");
+
+    // Fehlgeschlagene Validierung mit ungültigem Wort
+    let invalid_word_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon hello";
+    assert!(AppService::validate_mnemonic(invalid_word_mnemonic).is_err(), "Should fail with an invalid word");
+
+    // Fehlgeschlagene Validierung mit schlechter Prüfsumme
+    let bad_checksum_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+    assert!(AppService::validate_mnemonic(bad_checksum_mnemonic).is_err(), "Should fail with a bad checksum");
+}
 /// Testet den Signatur-Workflow über die AppService-Fassade.
 #[test]
 fn test_app_service_signature_roundtrip() {

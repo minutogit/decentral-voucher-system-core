@@ -64,6 +64,24 @@ pub fn generate_mnemonic(word_count: usize, language: Language) -> Result<String
     Ok(mnemonic.to_string())
 }
 
+/// Validates a BIP-39 mnemonic phrase.
+///
+/// This function checks if the given phrase consists of valid words from the
+/// English wordlist and if the checksum is correct.
+///
+/// # Arguments
+///
+/// * `phrase` - The mnemonic phrase to validate.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the phrase is valid, otherwise an `Err` with a descriptive message.
+pub fn validate_mnemonic_phrase(phrase: &str) -> Result<(), String> {
+    Mnemonic::parse_in_normalized(Language::English, phrase)
+        .map(|_| ()) // We only care about success, not the Mnemonic object itself.
+        .map_err(|e| e.to_string())
+}
+
 /// Computes a SHA3-256 hash of the input and returns it as a base58-encoded string.
 ///
 /// # Arguments
