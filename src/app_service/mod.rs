@@ -6,6 +6,49 @@
 //! Diese Schicht verwaltet den Anwendungszustand (Locked/Unlocked), kapselt
 //! die `UserIdentity` und stellt sicher, dass Zustandsänderungen im Wallet
 //! automatisch gespeichert werden.
+//!
+//! ## Konzept: Zustandsmanagement
+//!
+//! Der Service operiert in zwei Zuständen:
+//! - **`Locked`**: Kein Wallet geladen. Nur Operationen wie `create_profile` oder `login` sind möglich.
+//! - **`Unlocked`**: Ein Wallet ist geladen und entschlüsselt. Alle Operationen (Transfers, Abfragen etc.) sind verfügbar.
+//!
+//! Aktionen, die den internen Zustand des Wallets verändern (z.B. `create_new_voucher`, `receive_bundle`),
+//! speichern das Wallet bei Erfolg automatisch und sicher auf dem Datenträger.
+//!
+//! ## Beispiel: Typischer Lebenszyklus
+//!
+//! ```no_run
+//! use voucher_lib::app_service::AppService;
+//! use std::path::Path;
+//! # use voucher_lib::services::voucher_manager::NewVoucherData;
+//! # use voucher_lib::models::voucher::Creator;
+//! # use voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition;
+//!
+//! // 1. Initialisierung des Services
+//! let storage_path = Path::new("/tmp/my_wallet_docs");
+//! let mut app = AppService::new(storage_path).expect("Service konnte nicht erstellt werden.");
+//!
+//! // 2. Neues Profil erstellen (dies entsperrt das Wallet)
+//! // In einer echten Anwendung wird die Mnemonic sicher generiert und gespeichert.
+//! let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+//! app.create_profile(&mnemonic, Some("user"), "sicheres-passwort-123")
+//!    .expect("Profil konnte nicht erstellt werden.");
+//!
+//! // 3. Eine Aktion ausführen (z.B. Guthaben prüfen)
+//! let balance = app.get_total_balance_by_currency().unwrap();
+//! assert!(balance.is_empty()); // Wallet ist noch leer.
+//!
+//! // 4. Wallet sperren
+//! app.logout();
+//!
+//! // 5. Erneut anmelden
+//! app.login(&mnemonic, "sicheres-passwort-123").expect("Login fehlgeschlagen.");
+//!
+//! // 6. Die User-ID abrufen
+//! let user_id = app.get_user_id().unwrap();
+//! println!("Angemeldet als: {}", user_id);
+//! ```
 
 use crate::archive::VoucherArchive;
 use crate::models::profile::UserIdentity;
@@ -49,12 +92,12 @@ pub struct AppService {
 }
 
 impl AppService {
-    // --- Schritt 2: Lebenszyklus-Management ---
+    // --- Lebenszyklus-Management ---
 
-    /// Initialisiert einen neuen `AppService`.
+    /// Initialisiert einen neuen `AppService` im `Locked`-Zustand.
     ///
-    /// Erstellt eine `FileStorage`-Instanz für den angegebenen Pfad und setzt
-    /// den initialen Zustand auf `Locked`.
+    /// Erstellt eine `FileStorage`-Instanz für den angegebenen Pfad. Das Verzeichnis
+    /// wird bei Bedarf erstellt.
     ///
     /// # Arguments
     /// * `storage_path` - Der Pfad zum Verzeichnis, in dem die Wallet-Daten
@@ -67,14 +110,17 @@ impl AppService {
         })
     }
 
-    /// Erstellt ein komplett neues Benutzerprofil und Wallet und speichert es.
+    /// Erstellt ein komplett neues Benutzerprofil und Wallet und speichert es verschlüsselt.
     ///
     /// Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
     ///
     /// # Arguments
-    /// * `mnemonic` - Die Mnemonic-Phrase zur Generierung der Master-Keys.
-    /// * `user_prefix` - Ein optionales Präfix für die User-ID.
+    /// * `mnemonic` - Die BIP39 Mnemonic-Phrase zur Generierung der Master-Keys.
+    /// * `user_prefix` - Ein optionales Präfix für die `did:key`-basierte User-ID.
     /// * `password` - Das Passwort, mit dem das neue Wallet verschlüsselt wird.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn die Mnemonic-Phrase ungültig ist oder das Speichern fehlschlägt.
     pub fn create_profile(
         &mut self,
         mnemonic: &str,
@@ -101,13 +147,12 @@ impl AppService {
     /// # Arguments
     /// * `mnemonic` - Die Mnemonic-Phrase des Wallets.
     /// * `password` - Das Passwort zum Entschlüsseln des Wallets.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn die Mnemonic-Phrase oder das Passwort falsch sind, oder wenn
+    /// die Wallet-Dateien nicht gelesen werden können.
     pub fn login(&mut self, mnemonic: &str, password: &str) -> Result<(), String> {
         // Zuerst das Profil laden, um die korrekte User ID (inkl. Präfix) zu erhalten.
-        // Dies dient gleichzeitig als Überprüfung von Mnemonic und Passwort.
-        // HINWEIS: Die Wallet-API unterstützt kein direktes Laden nur mit Mnemonic.
-        // Wir müssen die Identität zuerst vollständig ableiten.
-        // DIESE IMPLEMENTIERUNG FUNKTIONIERT NUR FÜR USER-IDS OHNE PRÄFIX.
-
         let (profile, _) = self
             .storage.load_wallet(&AuthMethod::Password(password))
             .map_err(|e| format!("Login failed (check mnemonic/password): {}", e))?;
@@ -133,12 +178,12 @@ impl AppService {
 
     /// Sperrt das Wallet und entfernt sensible Daten (privater Schlüssel) aus dem Speicher.
     ///
-    /// Setzt den Zustand zurück auf `Locked`.
+    /// Setzt den Zustand zurück auf `Locked`. Diese Operation kann nicht fehlschlagen.
     pub fn logout(&mut self) {
         self.state = AppState::Locked;
     }
 
-    // --- Schritt 3: Implementierung der Datenabfragen (Queries) ---
+    // --- Datenabfragen (Queries) ---
 
     /// Eine private Hilfsfunktion für den Nur-Lese-Zugriff auf das Wallet.
     /// Stellt sicher, dass das Wallet entsperrt ist, bevor eine Operation ausgeführt wird.
@@ -150,18 +195,39 @@ impl AppService {
     }
 
     /// Gibt eine Liste von Zusammenfassungen aller Gutscheine im Wallet zurück.
+    ///
+    /// # Returns
+    /// Ein `Vec<VoucherSummary>` mit den wichtigsten Daten jedes Gutscheins.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt (`Locked`) ist.
     pub fn get_voucher_summaries(&self) -> Result<Vec<VoucherSummary>, String> {
         let wallet = self.get_wallet()?;
         Ok(wallet.list_vouchers())
     }
 
     /// Aggregiert die Guthaben aller aktiven Gutscheine, gruppiert nach Währung.
+    ///
+    /// # Returns
+    /// Eine `HashMap`, die von der Währungseinheit (z.B. "Minuten") auf den Gesamtbetrag abbildet.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt (`Locked`) ist.
     pub fn get_total_balance_by_currency(&self) -> Result<HashMap<String, String>, String> {
         let wallet = self.get_wallet()?;
         Ok(wallet.get_total_balance_by_currency())
     }
 
     /// Ruft eine detaillierte Ansicht für einen einzelnen Gutschein ab.
+    ///
+    /// # Arguments
+    /// * `local_id` - Die lokale, eindeutige ID der Gutschein-Instanz im Wallet.
+    ///
+    /// # Returns
+    /// Die `VoucherDetails`-Struktur mit dem vollständigen Gutschein-Objekt.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt ist oder keine Gutschein-Instanz mit dieser ID existiert.
     pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String> {
         let wallet = self.get_wallet()?;
         wallet
@@ -170,14 +236,31 @@ impl AppService {
     }
 
     /// Gibt die User-ID des Wallet-Inhabers zurück.
+    ///
+    /// # Returns
+    /// Die `did:key`-basierte User-ID als String.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt (`Locked`) ist.
     pub fn get_user_id(&self) -> Result<String, String> {
         let wallet = self.get_wallet()?;
         Ok(wallet.get_user_id().to_string())
     }
 
-    // --- Schritt 4: Implementierung der Aktionen (Commands) ---
+    // --- Aktionen (Commands) ---
 
     /// Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand.
+    ///
+    /// # Arguments
+    /// * `standard_definition` - Die Regeln des Standards, nach dem der Gutschein erstellt wird.
+    /// * `data` - Die spezifischen Daten für den neuen Gutschein (z.B. Betrag).
+    /// * `password` - Das Passwort, um den aktualisierten Wallet-Zustand zu speichern.
+    ///
+    /// # Returns
+    /// Das vollständig erstellte `Voucher`-Objekt.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt ist, die Erstellung fehlschlägt oder der Speicherzugriff misslingt.
     pub fn create_new_voucher(
         &mut self,
         standard_definition: &VoucherStandardDefinition,
@@ -208,6 +291,20 @@ impl AppService {
     }
 
     /// Erstellt eine Transaktion, verpackt sie in ein `SecureContainer`-Bundle und speichert den neuen Wallet-Zustand.
+    ///
+    /// # Arguments
+    /// * `local_instance_id` - Die ID des zu verwendenden Gutscheins.
+    /// * `recipient_id` - Die User-ID des Empfängers.
+    /// * `amount_to_send` - Der zu sendende Betrag als String.
+    /// * `notes` - Optionale Notizen für den Empfänger.
+    /// * `archive` - Ein optionaler `VoucherArchive`-Trait, um den neuen Zustand forensisch zu sichern.
+    /// * `password` - Das Passwort, um den aktualisierten Wallet-Zustand zu speichern.
+    ///
+    /// # Returns
+    /// Die serialisierten Bytes des verschlüsselten `SecureContainer`-Bundles, bereit zum Versand.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt ist, die Transaktion ungültig ist oder der Speicherzugriff misslingt.
     pub fn create_transfer_bundle(
         &mut self,
         standard_definition: &VoucherStandardDefinition,
@@ -232,7 +329,7 @@ impl AppService {
                     archive,
                 ) {
                     Ok((bundle_bytes, _)) => {
-                         if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
+                        if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
                             (Err(e.to_string()), AppState::Unlocked { wallet, identity })
                         } else {
                             (Ok(bundle_bytes), AppState::Unlocked { wallet, identity })
@@ -248,6 +345,17 @@ impl AppService {
     }
 
     /// Verarbeitet ein empfangenes Transaktions- oder Signatur-Bundle und speichert den neuen Wallet-Zustand.
+    ///
+    /// # Arguments
+    /// * `bundle_data` - Die rohen Bytes des empfangenen `SecureContainer`.
+    /// * `archive` - Ein optionaler `VoucherArchive`-Trait, um die neuen Zustände zu sichern.
+    /// * `password` - Das Passwort, um den aktualisierten Wallet-Zustand zu speichern.
+    ///
+    /// # Returns
+    /// Ein `ProcessBundleResult`, das Metadaten und das Ergebnis einer eventuellen Double-Spend-Prüfung enthält.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt ist, das Bundle ungültig ist oder der Speicherzugriff misslingt.
     pub fn receive_bundle(
         &mut self,
         bundle_data: &[u8],
@@ -276,14 +384,20 @@ impl AppService {
     }
 
     /// Erstellt ein Bundle, um einen Gutschein zur Unterzeichnung an einen Bürgen zu senden.
+    ///
     /// Diese Operation verändert den Wallet-Zustand nicht und erfordert kein Speichern.
+    ///
+    /// # Returns
+    /// Die serialisierten Bytes des `SecureContainer`, bereit zum Versand an den Bürgen.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt ist oder der angeforderte Gutschein nicht existiert.
     pub fn create_signing_request_bundle(
         &self,
         local_instance_id: &str,
         recipient_id: &str,
     ) -> Result<Vec<u8>, String> {
         let wallet = self.get_wallet()?;
-        // Die Identität wird hier nur für die Verschlüsselung benötigt.
         let identity = match &self.state {
             AppState::Unlocked { identity, .. } => identity,
             AppState::Locked => return Err("Wallet is locked".to_string()),
@@ -294,7 +408,14 @@ impl AppService {
     }
 
     /// Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage.
-    /// Diese Operation verändert den Wallet-Zustand nicht.
+    ///
+    /// Diese Operation wird vom Bürgen aufgerufen und verändert dessen Wallet-Zustand nicht.
+    ///
+    /// # Returns
+    /// Die serialisierten Bytes des `SecureContainer` mit der Signatur, bereit für den Rückversand.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet des Bürgen gesperrt ist.
     pub fn create_detached_signature_response_bundle(
         &self,
         voucher_to_sign: &Voucher,
@@ -305,7 +426,6 @@ impl AppService {
             AppState::Unlocked { identity, .. } => identity,
             AppState::Locked => return Err("Wallet is locked".to_string()),
         };
-        // Das Wallet-Objekt wird hier nicht benötigt, nur die Identität des Unterzeichners.
         let wallet = self.get_wallet()?;
         wallet
             .create_detached_signature_response(identity, voucher_to_sign, signature_data, original_sender_id)
@@ -313,6 +433,14 @@ impl AppService {
     }
 
     /// Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Zustand.
+    ///
+    /// # Arguments
+    /// * `container_bytes` - Die rohen Bytes des `SecureContainer`, der die Signatur enthält.
+    /// * `password` - Das Passwort, um den aktualisierten Wallet-Zustand zu speichern.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt ist, die Signatur ungültig ist, der zugehörige Gutschein nicht gefunden
+    /// wird oder der Speicherzugriff misslingt.
     pub fn process_and_attach_signature(
         &mut self,
         container_bytes: &[u8],
