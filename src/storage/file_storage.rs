@@ -1,13 +1,14 @@
 //! # src/storage/file_storage.rs
 //!
-//! Eine Implementierung des `Storage`-Traits, die Daten in zwei verschlüsselten
-//! Dateien (`profile.enc`, `vouchers.enc`) im Dateisystem speichert.
+//! Eine Implementierung des `Storage`-Traits, die Daten in mehreren verschlüsselten
+//! Dateien im Dateisystem speichert.
 
 use super::{AuthMethod, Storage, StorageError};
-use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
 use crate::models::conflict::{FingerprintStore, ProofStore};
-use crate::services::crypto_utils; 
+use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
+use crate::services::crypto_utils;
 use argon2::Argon2;
+use ed25519_dalek::SigningKey;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
@@ -30,6 +31,13 @@ struct ProfileStorageContainer {
     mnemonic_kdf_salt: [u8; SALT_SIZE],
     mnemonic_wrapped_key_with_nonce: Vec<u8>,
     encrypted_profile_payload: Vec<u8>,
+}
+
+/// Bündelt das Profil und den privaten Schlüssel für die Speicherung.
+#[derive(Serialize, Deserialize, Clone)]
+struct ProfilePayload {
+    profile: UserProfile,
+    signing_key_bytes: Vec<u8>,
 }
 
 /// Container für den verschlüsselten Gutschein-Store.
@@ -78,7 +86,10 @@ impl Storage for FileStorage {
         self.wallet_directory.join(PROFILE_FILE_NAME).exists()
     }
 
-    fn load_wallet(&self, auth: &AuthMethod) -> Result<(UserProfile, VoucherStore), StorageError> {
+    fn load_wallet(
+        &self,
+        auth: &AuthMethod,
+    ) -> Result<(UserProfile, VoucherStore, UserIdentity), StorageError> {
         let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
         let store_path = self.wallet_directory.join(VOUCHER_STORE_FILE_NAME);
 
@@ -93,17 +104,17 @@ impl Storage for FileStorage {
 
         // Entschlüssle den Master-Dateischlüssel basierend auf der Authentifizierungsmethode.
         let file_key_bytes = get_file_key(auth, &profile_container)?;
-
         let file_key: [u8; KEY_SIZE] = file_key_bytes
             .try_into()
             .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
 
-        // Entschlüssele die Nutzdaten.
-        let profile_bytes = crypto_utils::decrypt_data(&file_key, &profile_container.encrypted_profile_payload)
-            .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt profile: {}", e)))?;
-        let profile: UserProfile = serde_json::from_slice(&profile_bytes)
+        // Entschlüssele den Payload, der Profil und privaten Schlüssel enthält.
+        let payload_bytes = crypto_utils::decrypt_data(&file_key, &profile_container.encrypted_profile_payload)
+            .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt profile payload: {}", e)))?;
+        let payload: ProfilePayload = serde_json::from_slice(&payload_bytes)
             .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
 
+        // Lade den VoucherStore.
         let store = if store_path.exists() {
             let store_container_bytes = fs::read(store_path)?;
             let store_container: VoucherStorageContainer =
@@ -117,7 +128,22 @@ impl Storage for FileStorage {
             VoucherStore::default()
         };
 
-        Ok((profile, store))
+        // Rekonstruiere die UserIdentity.
+        let signing_key_bytes: &[u8; 32] = payload
+            .signing_key_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| StorageError::InvalidFormat("Invalid signing key length in storage".to_string()))?;
+        let signing_key = SigningKey::from_bytes(signing_key_bytes);
+        let public_key = signing_key.verifying_key();
+
+        let identity = UserIdentity {
+            signing_key,
+            public_key,
+            user_id: payload.profile.user_id.clone(),
+        };
+
+        Ok((payload.profile, store, identity))
     }
 
     fn save_wallet(
@@ -134,7 +160,13 @@ impl Storage for FileStorage {
         let file_key: [u8; KEY_SIZE];
         let profile_container: ProfileStorageContainer;
 
+        let payload = ProfilePayload {
+            profile: profile.clone(),
+            signing_key_bytes: identity.signing_key.to_bytes().to_vec(),
+        };
+
         if !profile_path.exists() {
+            // Erstmaliges Speichern: Generiere alle Schlüssel und Salze.
             let mut new_file_key = [0u8; KEY_SIZE];
             OsRng.fill_bytes(&mut new_file_key);
             file_key = new_file_key;
@@ -147,11 +179,11 @@ impl Storage for FileStorage {
 
             let mut mn_salt = [0u8; SALT_SIZE];
             OsRng.fill_bytes(&mut mn_salt);
-            let mnemonic_key = derive_key_from_identity(identity, &mn_salt)?;
+            let mnemonic_key = derive_key_from_signing_key(&identity.signing_key, &mn_salt)?;
             let mn_wrapped_key = crypto_utils::encrypt_data(&mnemonic_key, &file_key)
                 .map_err(|e| StorageError::Generic(e.to_string()))?;
 
-            let profile_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(profile).unwrap())
+            let profile_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(&payload).unwrap())
                 .map_err(|e| StorageError::Generic(e.to_string()))?;
 
             profile_container = ProfileStorageContainer {
@@ -162,6 +194,7 @@ impl Storage for FileStorage {
                 encrypted_profile_payload: profile_payload,
             };
         } else {
+            // Aktualisieren eines bestehenden Wallets: Lade Container, entschlüssele Schlüssel und verschlüssele neuen Payload.
             let existing_container_bytes = fs::read(&profile_path)?;
             let mut existing_container: ProfileStorageContainer =
                 serde_json::from_slice(&existing_container_bytes)
@@ -180,17 +213,19 @@ impl Storage for FileStorage {
                 .map_err(|_| StorageError::InvalidFormat("Invalid file key".to_string()))?;
 
             existing_container.encrypted_profile_payload =
-                crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(profile).unwrap())
+                crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(&payload).unwrap())
                     .map_err(|e| StorageError::Generic(e.to_string()))?;
             profile_container = existing_container;
         }
 
+        // Speichere den VoucherStore.
         let store_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(store).unwrap())
             .map_err(|e| StorageError::Generic(e.to_string()))?;
         let store_container = VoucherStorageContainer {
             encrypted_store_payload: store_payload,
         };
 
+        // Atomares Schreiben über temporäre Dateien.
         let profile_tmp_path = self.wallet_directory.join(format!("{}.tmp", PROFILE_FILE_NAME));
         let store_tmp_path = self.wallet_directory.join(format!("{}.tmp", VOUCHER_STORE_FILE_NAME));
 
@@ -217,7 +252,7 @@ impl Storage for FileStorage {
         let mut container: ProfileStorageContainer = serde_json::from_slice(&container_bytes)
             .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
 
-        let mnemonic_key = derive_key_from_identity(identity, &container.mnemonic_kdf_salt)?;
+        let mnemonic_key = derive_key_from_signing_key(&identity.signing_key, &container.mnemonic_kdf_salt)?;
         let file_key = crypto_utils::decrypt_data(
             &mnemonic_key,
             &container.mnemonic_wrapped_key_with_nonce,
@@ -257,26 +292,21 @@ impl Storage for FileStorage {
             serde_json::from_slice(&profile_container_bytes)
                 .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
 
-        // Leite den Master-Dateischlüssel ab, um die Fingerprint-Datei zu entschlüsseln.
         let file_key_bytes = get_file_key(auth, &profile_container)?;
-        
         let file_key: [u8; KEY_SIZE] = file_key_bytes
             .try_into()
             .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
 
-        // Lade und entschlüssele den FingerprintStore.
         let fingerprint_container_bytes = fs::read(fingerprint_path)?;
         let fingerprint_container: FingerprintStorageContainer =
             serde_json::from_slice(&fingerprint_container_bytes)
                 .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
-        
+
         let store_bytes = crypto_utils::decrypt_data(&file_key, &fingerprint_container.encrypted_store_payload)
             .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt fingerprint store: {}", e)))?;
-        
-        let store: FingerprintStore = serde_json::from_slice(&store_bytes)
-            .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
 
-        Ok(store)
+        serde_json::from_slice(&store_bytes)
+            .map_err(|e| StorageError::InvalidFormat(e.to_string()))
     }
 
     fn save_fingerprints(
@@ -303,7 +333,7 @@ impl Storage for FileStorage {
             &password_key,
             &profile_container.password_wrapped_key_with_nonce,
         ).map_err(|_| StorageError::AuthenticationFailed)?;
-        
+
         let file_key: [u8; KEY_SIZE] = file_key_bytes
             .try_into()
             .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
@@ -351,14 +381,12 @@ impl Storage for FileStorage {
         let meta_container: BundleMetadataContainer =
             serde_json::from_slice(&meta_container_bytes)
                 .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
-        
+
         let store_bytes = crypto_utils::decrypt_data(&file_key, &meta_container.encrypted_store_payload)
             .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt bundle metadata: {}", e)))?;
-        
-        let store: BundleMetadataStore = serde_json::from_slice(&store_bytes)
-            .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
 
-        Ok(store)
+        serde_json::from_slice(&store_bytes)
+            .map_err(|e| StorageError::InvalidFormat(e.to_string()))
     }
 
     fn save_bundle_metadata(
@@ -385,7 +413,7 @@ impl Storage for FileStorage {
             &password_key,
             &profile_container.password_wrapped_key_with_nonce,
         ).map_err(|_| StorageError::AuthenticationFailed)?;
-        
+
         let file_key: [u8; KEY_SIZE] = file_key_bytes
             .try_into()
             .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
@@ -429,14 +457,12 @@ impl Storage for FileStorage {
         let proof_container: ProofStorageContainer =
             serde_json::from_slice(&proof_container_bytes)
                 .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
-        
+
         let store_bytes = crypto_utils::decrypt_data(&file_key, &proof_container.encrypted_store_payload)
             .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt proof store: {}", e)))?;
-        
-        let store: ProofStore = serde_json::from_slice(&store_bytes)
-            .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
 
-        Ok(store)
+        serde_json::from_slice(&store_bytes)
+            .map_err(|e| StorageError::InvalidFormat(e.to_string()))
     }
 
     fn save_proofs(
@@ -463,12 +489,11 @@ impl Storage for FileStorage {
             &password_key,
             &profile_container.password_wrapped_key_with_nonce,
         ).map_err(|_| StorageError::AuthenticationFailed)?;
-        
+
         let file_key: [u8; KEY_SIZE] = file_key_bytes
             .try_into()
             .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
 
-        // Wenn der ProofStore leer ist, löschen wir die Datei, anstatt eine leere zu speichern.
         if proof_store.proofs.is_empty() {
             if proof_path.exists() {
                 fs::remove_file(proof_path)?;
@@ -507,9 +532,21 @@ fn get_file_key(
             )
                 .map_err(|_| StorageError::AuthenticationFailed)
         }
+        AuthMethod::Mnemonic(mnemonic) => {
+            let (_, signing_key) =
+                crypto_utils::derive_ed25519_keypair(mnemonic, None)
+                    .map_err(|e| StorageError::Generic(format!("Key derivation from mnemonic failed: {}", e)))?;
+            let mnemonic_key =
+                derive_key_from_signing_key(&signing_key, &container.mnemonic_kdf_salt)?;
+            crypto_utils::decrypt_data(
+                &mnemonic_key,
+                &container.mnemonic_wrapped_key_with_nonce,
+            )
+                .map_err(|_| StorageError::AuthenticationFailed)
+        }
         AuthMethod::RecoveryIdentity(identity) => {
             let mnemonic_key =
-                derive_key_from_identity(identity, &container.mnemonic_kdf_salt)?;
+                derive_key_from_signing_key(&identity.signing_key, &container.mnemonic_kdf_salt)?;
             crypto_utils::decrypt_data(
                 &mnemonic_key,
                 &container.mnemonic_wrapped_key_with_nonce,
@@ -519,7 +556,7 @@ fn get_file_key(
     }
 }
 
-
+/// Leitet einen kryptographischen Schlüssel aus einem Passwort und Salt ab.
 fn derive_key_from_password(
     password: &str,
     salt: &[u8; SALT_SIZE],
@@ -527,17 +564,18 @@ fn derive_key_from_password(
     let mut key = [0u8; KEY_SIZE];
     Argon2::default()
         .hash_password_into(password.as_bytes(), salt, &mut key)
-        .map_err(|e| StorageError::Generic(format!("Key derivation failed: {}", e)))?;
+        .map_err(|e| StorageError::Generic(format!("Password key derivation failed: {}", e)))?;
     Ok(key)
 }
 
-fn derive_key_from_identity(
-    identity: &UserIdentity,
+/// Leitet einen kryptographischen Schlüssel aus dem privaten Schlüssel der Identität ab.
+fn derive_key_from_signing_key(
+    signing_key: &SigningKey,
     salt: &[u8; SALT_SIZE],
 ) -> Result<[u8; KEY_SIZE], StorageError> {
     let mut key = [0u8; KEY_SIZE];
     Argon2::default()
-        .hash_password_into(identity.signing_key.to_bytes().as_ref(), salt, &mut key)
-        .map_err(|e| StorageError::Generic(format!("Key derivation failed: {}", e)))?;
+        .hash_password_into(signing_key.to_bytes().as_ref(), salt, &mut key)
+        .map_err(|e| StorageError::Generic(format!("Identity key derivation failed: {}", e)))?;
     Ok(key)
 }

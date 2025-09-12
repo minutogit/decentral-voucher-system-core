@@ -12,7 +12,7 @@ use voucher_lib::models::voucher::{Creator, NominalValue, Voucher};
 use voucher_lib::services::voucher_manager::NewVoucherData;
 use voucher_lib::services::voucher_manager;
 use voucher_lib::error::VoucherCoreError;
-use voucher_lib::{AuthMethod, FileStorage, StorageError, Wallet};
+use voucher_lib::{AuthMethod, FileStorage, Storage, StorageError, Wallet};
 mod test_utils;
 use test_utils::{add_voucher_to_wallet, setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD};
 
@@ -57,13 +57,14 @@ fn test_wallet_creation_save_and_load() {
     wallet.save(&mut storage, identity, password).expect("Failed to save wallet");
 
     // 3. Laden und Verifizieren
-    let loaded_wallet = Wallet::load(&storage, &AuthMethod::Password(password), identity.clone())
-        .expect("Failed to load wallet");
+    let (loaded_wallet, loaded_identity) =
+        Wallet::load(&storage, &AuthMethod::Password(password)).expect("Failed to load wallet");
     assert_eq!(wallet.profile.user_id, loaded_wallet.profile.user_id);
+    assert_eq!(identity.user_id, loaded_identity.user_id);
     assert!(loaded_wallet.voucher_store.vouchers.is_empty());
 
     // 4. Fehlerfall: Falsches Passwort
-    let result = Wallet::load(&storage, &AuthMethod::Password("wrongpassword"), identity.clone());
+    let result = Wallet::load(&storage, &AuthMethod::Password("wrongpassword"));
     assert!(matches!(result, Err(VoucherCoreError::Storage(StorageError::AuthenticationFailed))));
 }
 
@@ -87,31 +88,29 @@ fn test_password_recovery_and_reset_with_data() {
 
     // 2. Wiederherstellung mit der Mnemonic-Phrase (Identität).
     // Erzeuge eine Identität für die Referenz (borrow) und eine zweite für die Wertübergabe (move).
-    let recovered_wallet = Wallet::load(
-        &storage,
-        &AuthMethod::RecoveryIdentity(identity),
-        identity.clone(),
-    )
-        .expect("Recovery with correct identity should succeed");
+    let (recovered_wallet, recovered_identity) =
+        Wallet::load(&storage, &AuthMethod::RecoveryIdentity(identity))
+            .expect("Recovery with correct identity should succeed");
 
     // Überprüfe, ob die wiederhergestellten Daten (inkl. Gutschein) korrekt sind.
     assert_eq!(wallet.profile.user_id, recovered_wallet.profile.user_id);
+    assert_eq!(identity.user_id, recovered_identity.user_id);
     assert_eq!(recovered_wallet.voucher_store.vouchers.len(), 1, "Voucher should be present after recovery");
     assert!(recovered_wallet.voucher_store.vouchers.contains_key(&local_id));
 
     // 3. Passwort zurücksetzen.
     let new_password = "my-new-strong-password-456";
-    Wallet::reset_password(&mut storage, identity, new_password)
+    storage
+        .reset_password(identity, new_password)
         .expect("Password reset should succeed");
 
     // 4. Verifizierung nach dem Reset.
     // Login mit altem Passwort muss fehlschlagen.
-    let result = Wallet::load(&storage, &AuthMethod::Password(initial_password), identity.clone());
+    let result = Wallet::load(&storage, &AuthMethod::Password(initial_password));
     assert!(matches!(result, Err(VoucherCoreError::Storage(StorageError::AuthenticationFailed))));
 
     // Login mit neuem Passwort muss erfolgreich sein und die Daten müssen intakt sein.
-    let final_wallet =
-        Wallet::load(&storage, &AuthMethod::Password(new_password), identity.clone())
+    let (final_wallet, _) = Wallet::load(&storage, &AuthMethod::Password(new_password))
         .expect("Login with new password should succeed");
 
     assert_eq!(wallet.profile.user_id, final_wallet.profile.user_id);
@@ -120,11 +119,7 @@ fn test_password_recovery_and_reset_with_data() {
 
     // 5. Fehlerfall: Wiederherstellung mit der falschen Identität.
     let imposter_identity = &ACTORS.hacker;
-    let result = Wallet::load(
-        &storage,
-        &AuthMethod::RecoveryIdentity(imposter_identity),
-        imposter_identity.clone(),
-    );
+    let result = Wallet::load(&storage, &AuthMethod::RecoveryIdentity(imposter_identity));
     assert!(matches!(result, Err(VoucherCoreError::Storage(StorageError::AuthenticationFailed))));
 }
 
@@ -141,7 +136,7 @@ fn test_load_with_missing_voucher_store() {
     fs::remove_file(temp_dir.path().join("vouchers.enc")).unwrap();
 
     // Das Laden sollte trotzdem erfolgreich sein und einen leeren Store zurückgeben
-    let loaded_wallet = Wallet::load(&storage, &AuthMethod::Password(password), identity.clone())
+    let (loaded_wallet, _) = Wallet::load(&storage, &AuthMethod::Password(password))
         .expect("Loading with missing voucher store should succeed");
 
     assert_eq!(wallet.profile.user_id, loaded_wallet.profile.user_id);
@@ -164,7 +159,7 @@ fn test_load_from_corrupted_profile_file() {
     fs::write(&profile_path, contents).unwrap();
 
     // Das Laden sollte mit einem Deserialisierungs- oder Formatfehler fehlschlagen
-    let result = Wallet::load(&storage, &AuthMethod::Password(password), identity.clone());
+    let result = Wallet::load(&storage, &AuthMethod::Password(password));
     assert!(matches!(result, Err(VoucherCoreError::Storage(StorageError::InvalidFormat(_)))));
 }
 
@@ -180,16 +175,12 @@ fn test_empty_password_handling() {
     wallet.save(&mut storage, identity, empty_password).expect("Saving with empty password should succeed");
 
     // Laden mit leerem Passwort sollte funktionieren
-    let loaded_wallet = Wallet::load(&storage, &AuthMethod::Password(empty_password), identity.clone())
+    let (loaded_wallet, _) = Wallet::load(&storage, &AuthMethod::Password(empty_password))
         .expect("Loading with empty password should succeed");
     assert_eq!(wallet.profile.user_id, loaded_wallet.profile.user_id);
 
     // Laden mit einem falschen, nicht-leeren Passwort sollte fehlschlagen
-    let result = Wallet::load(
-        &storage,
-        &AuthMethod::Password("a-real-password"),
-        identity.clone(),
-    );
+    let result = Wallet::load(&storage, &AuthMethod::Password("a-real-password"));
     assert!(matches!(result, Err(VoucherCoreError::Storage(StorageError::AuthenticationFailed))));
 }
 
@@ -242,9 +233,8 @@ fn test_save_and_load_with_bundle_history() {
     assert!(temp_dir.path().join("bundles.meta.enc").exists());
 
     // 4. Laden und Verifizieren
-    let loaded_wallet =
-        Wallet::load(&storage, &AuthMethod::Password(password), alice_identity.clone())
-            .expect("Failed to load wallet");
+    let (loaded_wallet, _) = Wallet::load(&storage, &AuthMethod::Password(password))
+        .expect("Failed to load wallet");
 
     // **Die entscheidende Prüfung:** Wurde die Historie korrekt geladen?
     assert_eq!(

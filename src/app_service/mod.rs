@@ -43,7 +43,7 @@
 //! app.logout();
 //!
 //! // 5. Erneut anmelden
-//! app.login(&mnemonic, "sicheres-passwort-123").expect("Login fehlgeschlagen.");
+//! app.login("sicheres-passwort-123").expect("Login fehlgeschlagen.");
 //!
 //! // 6. Die User-ID abrufen
 //! let user_id = app.get_user_id().unwrap();
@@ -57,7 +57,7 @@ use crate::models::voucher::Voucher;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::voucher_manager::NewVoucherData;
 use crate::storage::file_storage::FileStorage;
-use crate::storage::{AuthMethod, Storage};
+use crate::storage::AuthMethod;
 use crate::wallet::{ProcessBundleResult, VoucherDetails, VoucherSummary, Wallet};
 use bip39::Language;
 use std::collections::HashMap;
@@ -173,37 +173,49 @@ impl AppService {
 
     /// Entsperrt ein existierendes Wallet und lädt es in den Speicher.
     ///
-    /// Leitet die `UserIdentity` aus der Mnemonic ab und verwendet sie zusammen
-    /// mit dem Passwort, um die Wallet-Daten zu entschlüsseln und zu laden.
+    /// Verwendet das Passwort, um die Wallet-Daten zu entschlüsseln und zu laden.
     /// Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
     ///
     /// # Arguments
-    /// * `mnemonic` - Die Mnemonic-Phrase des Wallets.
     /// * `password` - Das Passwort zum Entschlüsseln des Wallets.
     ///
     /// # Errors
-    /// Schlägt fehl, wenn die Mnemonic-Phrase oder das Passwort falsch sind, oder wenn
+    /// Schlägt fehl, wenn das Passwort falsch ist, oder wenn
     /// die Wallet-Dateien nicht gelesen werden können.
-    pub fn login(&mut self, mnemonic: &str, password: &str) -> Result<(), String> {
-        // Zuerst das Profil laden, um die korrekte User ID (inkl. Präfix) zu erhalten.
-        let (profile, _) = self
-            .storage.load_wallet(&AuthMethod::Password(password))
-            .map_err(|e| format!("Login failed (check mnemonic/password): {}", e))?;
+    pub fn login(&mut self, password: &str) -> Result<(), String> {
+        // Rufe die refaktorisierte Wallet::load-Funktion auf.
+        // Diese gibt nun das Wallet UND die entschlüsselte UserIdentity zurück.
+        let (wallet, identity) = Wallet::load(&self.storage, &AuthMethod::Password(password))
+            .map_err(|e| format!("Login failed (check password): {}", e))?;
+ 
+        self.state = AppState::Unlocked { wallet, identity };
+        Ok(())
+    }
 
-        // Nun die vollständige Identität mit der geladenen User ID neu ableiten.
-        let (public_key, signing_key) =
-            crate::services::crypto_utils::derive_ed25519_keypair(mnemonic, None)
-                .map_err(|e| format!("Failed to derive keypair: {}", e))?;
+    /// Stellt ein Wallet mit der Mnemonic-Phrase wieder her und setzt ein neues Passwort.
+    ///
+    /// Diese Funktion ist für den Fall vorgesehen, dass der Benutzer sein Passwort vergessen hat.
+    /// Sie lädt das Wallet mit der Mnemonic, speichert es sofort mit dem neuen Passwort
+    /// erneut und versetzt den Service bei Erfolg in den `Unlocked`-Zustand.
+    ///
+    /// # Arguments
+    /// * `mnemonic` - Die Mnemonic-Phrase zur Wiederherstellung des Wallets.
+    /// * `new_password` - Das neue Passwort, mit dem das Wallet verschlüsselt werden soll.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn die Mnemonic-Phrase ungültig ist oder der Speicherzugriff misslingt.
+    pub fn recover_wallet_and_set_new_password(
+        &mut self,
+        mnemonic: &str,
+        new_password: &str,
+    ) -> Result<(), String> {
+        // 1. Lade das Wallet mit der Mnemonic-Phrase (öffnet das "zweite Schloss").
+        let (wallet, identity) = Wallet::load(&self.storage, &AuthMethod::Mnemonic(mnemonic))
+            .map_err(|e| format!("Recovery failed (check mnemonic phrase): {}", e))?;
 
-        let identity = UserIdentity {
-            signing_key,
-            public_key,
-            user_id: profile.user_id.clone(),
-        };
-
-        // Mit der vollständigen Identität das gesamte Wallet laden.
-        let wallet = Wallet::load(&self.storage, &AuthMethod::Password(password), identity.clone())
-            .map_err(|e| format!("Failed to load full wallet state: {}", e))?;
+        // 2. Setze das Passwort zurück, indem das Mnemonic-Schloss geöffnet und das Passwort-Schloss neu geschrieben wird.
+        Wallet::reset_password(&mut self.storage, &identity, new_password)
+            .map_err(|e| format!("Failed to set new password: {}", e))?;
 
         self.state = AppState::Unlocked { wallet, identity };
         Ok(())

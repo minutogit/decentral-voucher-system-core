@@ -42,13 +42,16 @@ fn test_wallet_lifecycle() {
 
     // 3. Wallet laden
     let auth = AuthMethod::Password("password123");
-    let wallet_b =
-        Wallet::load(&storage, &auth, identity_a).expect("Loading wallet failed");
+    let (wallet_b, identity_b) = Wallet::load(&storage, &auth).expect("Loading wallet failed");
 
     // 4. Prüfen, ob der Zustand wiederhergestellt wurde
     assert_eq!(
         wallet_b.profile.user_id, original_user_id,
         "Loaded user ID should match the original"
+    );
+    assert_eq!(
+        identity_a.user_id, identity_b.user_id,
+        "Loaded identity should match original"
     );
 }
 

@@ -31,6 +31,8 @@ pub enum StorageError {
 pub enum AuthMethod<'a> {
     /// Authentifizierung mittels eines Passworts.
     Password(&'a str),
+    /// Authentifizierung mittels einer Mnemonic-Phrase (für die Wiederherstellung).
+    Mnemonic(&'a str),
     /// Authentifizierung mittels der kryptographischen Identität (für die Wiederherstellung).
     RecoveryIdentity(&'a UserIdentity),
 }
@@ -49,7 +51,10 @@ impl<'a> AuthMethod<'a> {
 /// Jede Methode ist eine atomare Operation für ein komplettes Wallet.
 pub trait Storage {
     /// Lädt und entschlüsselt das Kern-Wallet (Profil und VoucherStore).
-    fn load_wallet(&self, auth: &AuthMethod) -> Result<(UserProfile, VoucherStore), StorageError>;
+    fn load_wallet(
+        &self,
+        auth: &AuthMethod,
+    ) -> Result<(UserProfile, VoucherStore, UserIdentity), StorageError>;
 
     /// Speichert und verschlüsselt das Kern-Wallet (Profil und VoucherStore).
     /// Muss auch die `UserIdentity` erhalten, um beim ersten Speichern den Wiederherstellungs-Schlüssel zu erstellen.

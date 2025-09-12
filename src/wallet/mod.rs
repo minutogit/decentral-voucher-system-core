@@ -113,27 +113,30 @@ impl Wallet {
     }
 
     /// Lädt ein existierendes Wallet aus einem `Storage`-Backend.
+    /// Gibt das Wallet und die entschlüsselte UserIdentity zurück.
     pub fn load<S: Storage>(
         storage: &S,
         auth: &AuthMethod,
-        identity: UserIdentity,
-    ) -> Result<Self, VoucherCoreError> {
-        let (profile, voucher_store) = storage.load_wallet(auth)?;
+    ) -> Result<(Self, UserIdentity), VoucherCoreError> {
+        let (profile, voucher_store, identity) = storage.load_wallet(auth)?;
         let bundle_meta_store = storage.load_bundle_metadata(&identity.user_id, auth)?;
         let fingerprint_store = storage.load_fingerprints(&identity.user_id, auth)?;
         let proof_store = storage.load_proofs(&identity.user_id, auth)?;
 
+        // Sicherheitsüberprüfung, um sicherzustellen, dass die entschlüsselte Identität
+        // mit den Profildaten übereinstimmt.
         if profile.user_id != identity.user_id {
             return Err(StorageError::AuthenticationFailed.into());
         }
 
-        Ok(Wallet {
+        let wallet = Wallet {
             profile,
             voucher_store,
             bundle_meta_store,
             fingerprint_store,
             proof_store,
-        })
+        };
+        Ok((wallet, identity))
     }
 
     /// Speichert den aktuellen Zustand des Wallets in einem `Storage`-Backend.

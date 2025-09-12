@@ -57,11 +57,11 @@ fn test_app_service_full_lifecycle() {
         "Service should be locked after logout"
     );
     assert!(
-        service_alice.login(&mnemonic_alice, "wrongpassword").is_err(),
+        service_alice.login("wrongpassword").is_err(),
         "Login with wrong password should fail"
     );
     service_alice
-        .login(&mnemonic_alice, password)
+        .login(password)
         .expect("Login with correct password should succeed");
     assert_eq!(service_alice.get_user_id().unwrap(), id_alice);
 
@@ -192,7 +192,7 @@ fn test_app_service_signature_roundtrip() {
 
     // 2. Guarantor empfängt, signiert und antwortet
     let (voucher_to_sign, sender_id) = {
-        service_guarantor.login(&mnemonic_guarantor, password).unwrap();
+        service_guarantor.login(password).unwrap();
         let guarantor_identity = service_guarantor.get_unlocked_mut_for_test().1;
         debug_open_container(&request_bytes, guarantor_identity).unwrap()
     };
@@ -212,4 +212,71 @@ fn test_app_service_signature_roundtrip() {
     let details = service_creator.get_voucher_details(&local_id).unwrap();
     assert_eq!(details.voucher.guarantor_signatures.len(), 1);
     assert_eq!(details.voucher.guarantor_signatures[0].guarantor_id, id_guarantor);
+}
+
+/// Testet die Passwort-Wiederherstellungsfunktion des AppService.
+///
+/// Dieses Szenario deckt ab:
+/// 1. Fehlschlag bei Verwendung einer falschen Mnemonic-Phrase.
+/// 2. Erfolg bei Verwendung der korrekten Mnemonic-Phrase.
+/// 3. Verifizierung, dass das alte Passwort ungültig und das neue Passwort gültig ist.
+#[test]
+fn test_app_service_password_recovery() {
+    // 1. Setup
+    let dir = tempdir().expect("Failed to create temp dir");
+    let mut service = AppService::new(dir.path()).expect("Failed to create service");
+    // Verwende eine statische, bekannte Mnemonic, um die Test-Utils als Fehlerquelle auszuschließen.
+    let mnemonic =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let initial_password = "password-123";
+    let new_password = "password-ABC";
+
+    // Erstelle ein Profil und sperre es sofort wieder.
+    service
+        .create_profile(&mnemonic, Some("recovery-test"), initial_password)
+        .expect("Profile creation failed");
+    service.logout();
+    assert!(
+        service.get_user_id().is_err(),
+        "Service should be locked initially"
+    );
+
+    // 2. Testfall: Fehlgeschlagene Wiederherstellung (falsche Mnemonic)
+    // Eine Mnemonic mit einer falschen Prüfsumme.
+    let wrong_mnemonic =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+    let recovery_result_fail =
+        service.recover_wallet_and_set_new_password(&wrong_mnemonic, new_password);
+    assert!(
+        recovery_result_fail.is_err(),
+        "Recovery with wrong mnemonic should fail"
+    );
+    assert!(
+        service.get_user_id().is_err(),
+        "Service should remain locked after failed recovery"
+    );
+
+    // 3. Testfall: Erfolgreiche Wiederherstellung
+    let recovery_result_ok = service.recover_wallet_and_set_new_password(&mnemonic, new_password);
+    assert!(
+        recovery_result_ok.is_ok(),
+        "Recovery with correct mnemonic should succeed"
+    );
+    assert!(
+        service.get_user_id().is_ok(),
+        "Service should be unlocked after successful recovery"
+    );
+
+    // Erneut sperren, um den Login zu testen.
+    service.logout();
+
+    // 4. Verifizierung
+    assert!(
+        service.login(initial_password).is_err(),
+        "Login with old password should fail after recovery"
+    );
+    assert!(
+        service.login(new_password).is_ok(),
+        "Login with new password should succeed after recovery"
+    );
 }
