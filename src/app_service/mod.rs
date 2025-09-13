@@ -308,24 +308,38 @@ impl AppService {
     /// Schlägt fehl, wenn das Wallet gesperrt ist, die Erstellung fehlschlägt oder der Speicherzugriff misslingt.
     pub fn create_new_voucher(
         &mut self,
-        standard_definition: &VoucherStandardDefinition,
+        standard_toml_content: &str,
+        lang_preference: &str,
         data: NewVoucherData,
         password: &str,
     ) -> Result<Voucher, String> {
         // Temporär den Zustand aus `self` nehmen, um Borrow-Checker-Regeln zu erfüllen.
         let current_state = std::mem::replace(&mut self.state, AppState::Locked);
-
+ 
         let (result, new_state) = match current_state {
             AppState::Unlocked { mut wallet, identity } => {
-                match wallet.create_new_voucher(&identity, standard_definition, data) {
-                    Ok(new_voucher) => {
-                        if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
-                            (Err(e.to_string()), AppState::Unlocked { wallet, identity })
-                        } else {
-                            (Ok(new_voucher), AppState::Unlocked { wallet, identity })
+                // 1. Standard hier in der Service-Schicht verifizieren.
+                match crate::services::standard_manager::verify_and_parse_standard(standard_toml_content) {
+                    Ok((verified_standard, standard_hash)) => {
+                        // 2. Bei Erfolg: Wallet-Methode mit den neuen Parametern aufrufen.
+                        match wallet.create_new_voucher(&identity, &verified_standard, &standard_hash, lang_preference, data) {
+                            Ok(new_voucher) => {
+                                if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
+                                    (Err(e.to_string()), AppState::Unlocked { wallet, identity })
+                                } else {
+                                    (Ok(new_voucher), AppState::Unlocked { wallet, identity })
+                                }
+                            }
+                            Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
                         }
-                    }
-                    Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
+                    },
+                    Err(e) => {
+                        // 3. Bei Fehler: Gib den Fehler und den unveränderten Zustand zurück.
+                        (
+                            Err(format!("Standard definition is invalid: {}", e)),
+                            AppState::Unlocked { wallet, identity }
+                        )
+                    },
                 }
             }
             AppState::Locked => (Err("Wallet is locked.".to_string()), AppState::Locked),

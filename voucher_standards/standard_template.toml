@@ -3,12 +3,13 @@
 # =================================================================================
 #
 # Diese Datei dient als umfassende Dokumentation und Kopiervorlage zur Erstellung
-# neuer Gutschein-Standards. Sie erklärt alle verfügbaren Felder und Regeln.
+# neuer, signierter Gutschein-Standards. Sie erklärt alle verfügbaren Felder.
 #
-# Ein Standard ist in drei Hauptblöcke unterteilt:
+# Ein Standard ist in vier Hauptblöcke unterteilt:
 # 1. [metadata]:    Beschreibt den Standard selbst.
 # 2. [template]:    Definiert Werte, die als Vorlage für neue Gutscheine dienen.
 # 3. [validation]:  Legt Regeln fest, anhand derer Gutscheine validiert werden.
+# 4. [signature]:   Enthält die kryptographische Signatur des Herausgebers.
 #
 
 # =================================================================================
@@ -22,12 +23,23 @@
 name = "Name des Standards (z.B. Regional-Taler)"
 
 # (String) Eine global eindeutige ID für diesen Standard.
-# Es wird empfohlen, hier eine UUID zu verwenden.
-uuid = "STANDARD-UUID-V1-XXXX-YYYY"
+# Es wird empfohlen, hier eine Version und ein Datum zu verwenden.
+uuid = "STANDARD-NAME-V1-YYYY-MM"
 
 # (String) Eine gängige Abkürzung für die Nennwert-Einheit des Gutscheins.
-# Diese wird bei der Erstellung in das `abbreviation`-Feld des Nennwerts kopiert.
 abbreviation = "RT"
+
+# (String, NEU) Der Name des offiziellen Herausgebers des Standards.
+issuer_name = "Name des Herausgebers (z.B. Community Council)"
+
+# (String, Optional, NEU) Eine URL zur Homepage des Standards oder der Community.
+homepage_url = "https://example.com/standard-info"
+
+# (String, Optional, NEU) Eine URL zur technischen Dokumentation des Standards.
+documentation_url = "https://example.com/standard-docs"
+
+# (Array von Strings, Optional, NEU) Suchbegriffe zur Kategorisierung.
+keywords = ["keyword1", "keyword2", "community-currency"]
 
 
 # =================================================================================
@@ -35,96 +47,57 @@ abbreviation = "RT"
 # =================================================================================
 #
 # Definiert Werte, die bei der Erstellung eines neuen Gutscheins als Vorlage dienen.
-# Der Block ist unterteilt in `fixed` (feste, unveränderliche Werte) und
-# `default` (überschreibbare Standardwerte).
-#
-
-# ---------------------------------------------------------------------------------
-# Sektion 2a: Feste Template-Werte
-# ---------------------------------------------------------------------------------
-#
-# Alle hier definierten Werte werden 1:1 in jeden neuen Gutschein kopiert und
-# können vom Ersteller des Gutscheins NICHT überschrieben werden.
 #
 [template.fixed]
-# (String) Eine menschenlesbare Beschreibung des Gutscheins.
-# Der Platzhalter {{amount}} wird bei der Erstellung automatisch durch den
-# Nennwert des Gutscheins ersetzt.
-description = "Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Einheiten."
+# (Array von Tabellen, NEU) Eine menschenlesbare, mehrsprachige Beschreibung.
+# Jede Tabelle muss einen `lang`-Code (ISO 639-1) und den `text` enthalten.
+# Der Platzhalter {{amount}} wird bei der Erstellung automatisch ersetzt.
+# Englisch ("en") sollte als internationaler Fallback immer vorhanden sein.
+[[template.fixed.description]]
+lang = "de"
+text = "Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Einheiten."
+
+[[template.fixed.description]]
+lang = "en"
+text = "A voucher for goods or services worth {{amount}} units."
 
 # (String, Optional) Ein kurzer Fußnotentext, der auf dem Gutschein angezeigt wird.
-# z.B. "Nur für Community-Mitglieder."
 footnote = "Optionaler Fußnotentext."
 
 # (String) Definiert den primären Zweck, für den der Gutschein eingelöst werden kann.
-# z.B. "goods_or_services", "specific_product", "community_work"
 primary_redemption_type = "goods_or_services"
 
-# (Boolean) Gibt an, ob die Nennwerte von Gutscheinen dieses Standards "fungibel"
-# sind, d.h. ob sie austauschbar sind und ihre Beträge sinnvoll addiert werden können.
-# `true`: Ja (z.B. "10 Minuten" + "20 Minuten" = "30 Minuten").
-# `false`: Nein (z.B. ein Gutschein für "1 Kuchen" und einer für "1 Stunde Hilfe"
-#          können nicht zu "2 Etwas" addiert werden, auch wenn sie den gleichen Standard nutzen).
+# (Boolean) Gibt an, ob die Nennwerte von Gutscheinen dieses Standards "fungibel" sind.
 is_fungible = true
 
-# (Boolean) Gibt an, ob der Gutschein teilbar ist (`true`) oder nur als
-# Ganzes eingelöst werden kann (`false`).
+# (Boolean) Gibt an, ob der Gutschein teilbar ist.
 is_divisible = true
 
-# (String, Optional) Regel zur Aufrundung des Gültigkeitsdatums.
-# Wenn angegeben, wird das berechnete `valid_until`-Datum auf das Ende des
-# jeweiligen Zeitraums aufgerundet.
-# Mögliche Werte (ISO 8601 Duration Format): "P1D" (Tagesende), "P1M" (Monatsende), "P1Y" (Jahresende).
-# Wenn das Feld fehlt, wird das exakte Datum ohne Rundung verwendet.
+# (String, Optional) Regel zur Aufrundung des Gültigkeitsdatums ("P1D", "P1M", "P1Y").
 round_up_validity_to = "P1M"
 
-
-# [template.fixed.nominal_value]
-# Definiert die festen Eigenschaften des Nennwerts.
 [template.fixed.nominal_value]
 # (String) Die Einheit des Nennwerts, die für diesen Standard zwingend ist.
-# z.B. "Minuten", "Unzen", "Regional-Taler"
 unit = "Regional-Taler"
 
-
-# [template.fixed.collateral]
-# Definiert die festen Eigenschaften der Besicherung.
 [template.fixed.collateral]
 # (String) Die Art der Besicherung.
-# z.B. "Physisches Edelmetall", "Community-Besicherung", "Fiat-Währung", "Keine"
 type = "Keine"
-
 # (String) Eine allgemeine Beschreibung der Besicherung.
 description = "Dieser Gutschein ist durch das Vertrauen der Gemeinschaft besichert."
-
-# (String) **Extrem wichtig:** Die Bedingungen, unter denen die Besicherung
-# eingefordert werden kann (z.B. eine Notfallklausel).
+# (String) Die Bedingungen, unter denen die Besicherung eingefordert werden kann.
 redeem_condition = "Nicht zutreffend."
 
-
-# [template.fixed.guarantor_info]
-# Definiert die festen Anforderungen an die Bürgen.
 [template.fixed.guarantor_info]
 # (Integer) Die Anzahl der benötigten Bürgen für diesen Gutschein.
-# Bei `0` ist kein Bürge erforderlich.
 needed_count = 2
-
 # (String) Eine menschenlesbare Beschreibung der Bürgenanforderungen.
 description = "Zwei Bürgen aus der Community sind erforderlich."
 
+# ---
 
-# ---------------------------------------------------------------------------------
-# Sektion 2b: Überschreibbare Standardwerte (Defaults)
-# ---------------------------------------------------------------------------------
-#
-# Alle hier definierten Werte dienen als Vorschläge. Wenn der Ersteller eines
-# Gutscheins keinen eigenen Wert für ein entsprechendes Feld angibt, wird dieser
-# Standardwert verwendet.
-#
 [template.default]
-# (String, Optional) Die Standard-Gültigkeitsdauer, wenn vom Ersteller keine
-# eigene Dauer angegeben wird.
-# Format: ISO 8601 Duration (z.B. "P5Y" für 5 Jahre, "P6M" für 6 Monate).
+# (String, Optional) Die Standard-Gültigkeitsdauer im ISO 8601-Format.
 default_validity_duration = "P5Y"
 
 
@@ -133,44 +106,46 @@ default_validity_duration = "P5Y"
 # =================================================================================
 #
 # Legt die Regeln fest, nach denen ein Gutschein dieses Standards validiert wird.
-# Diese Regeln werden zur Überprüfung herangezogen, aber nicht in den Gutschein kopiert.
 #
 [validation]
-# (String, Optional) Legt eine unveränderliche Mindestgültigkeitsdauer fest,
-# die ein Gutschein bei seiner Erstellung haben muss.
-# Verhindert, dass Gutscheine mit zu kurzer Laufzeit ausgestellt werden.
-# Format: ISO 8601 Duration (z.B. "P90D" für 90 Tage).
+# (String, Optional) Legt eine Mindestgültigkeitsdauer bei Erstellung fest.
 issuance_minimum_validity_duration = "P1Y"
 
-# (Integer) Legt die Anzahl der Nachkommastellen fest, die für alle
-# Betragsberechnungen (z.B. bei Splits) verwendet werden soll, um die Genauigkeit
-# sicherzustellen. `2` ist ein typischer Wert für Währungen.
+# (Integer) Legt die Anzahl der erlaubten Nachkommastellen für Beträge fest.
 amount_decimal_places = 2
 
-# (Array von Strings) Definiert die erlaubten Transaktionstypen für diesen Standard.
-# Mögliche Werte: "init", "split", "redeem", "transfer", etc.
+# (Array von Strings) Definiert die erlaubten Transaktionstypen.
 allowed_transaction_types = ["init", "split", "redeem"]
 
-# (Array von Strings) Liste aller Felder, die in einem Gutschein dieses Standards
-# zwingend vorhanden sein müssen. Die Pfade werden mit Punkt-Notation angegeben.
+# (Array von Strings) Liste aller Felder, die zwingend vorhanden sein müssen.
 required_voucher_fields = [
     "voucher_id",
     "creation_date",
-    "valid_until",
     "creator.signature",
-    "guarantor_signatures", # Wenn Bürgen erforderlich sind, muss dieses Feld vorhanden sein.
-    "creator.email",        # Beispiel: Erfordert, dass der Ersteller eine E-Mail angibt.
+    "guarantor_signatures",
 ]
 
-
-# [validation.guarantor_rules]
-# Definiert spezifische Validierungsregeln für die Bürgen.
 [validation.guarantor_rules]
 # (Boolean) Wenn `true`, werden die Geschlechter der Bürgen überprüft.
 gender_specific = true
-
-# (Array von Strings) Wenn `gender_specific = true`, definiert diese Liste,
-# welche Geschlechter in welcher Anzahl benötigt werden.
-# Die Codes basieren auf ISO 5218: "1" (männlich), "2" (weiblich).
-# Beispiel: ["1", "2"] erfordert einen männlichen und einen weiblichen Bürgen.
+# (Array von Strings) Liste der benötigten Geschlechter (ISO 5218: "1"=m, "2"=f).
 genders_needed = ["1", "2"]
+
+
+# =================================================================================
+# Block 4: Kryptographische Signatur (NEU & ZWINGEND ERFORDERLICH)
+# =================================================================================
+#
+# Dieser Block enthält die digitale Signatur des Herausgebers, die die
+# Authentizität und Integrität dieser gesamten Standard-Datei beweist.
+#
+[signature]
+# (String) Die `did:key` des Herausgebers. Sie enthält den öffentlichen
+# Schlüssel, der zur Verifizierung der Signatur verwendet wird.
+# Format: "did:key:z..."
+issuer_id = "did:key:z...PublicKeyDesHerausgebers..."
+
+# (String) Die finale Base58-kodierte Ed25519-Signatur.
+# Sie signiert den SHA3-256 Hash des kanonisierten Inhalts dieser Datei
+# (ohne den [signature]-Block selbst).
+signature = "Base58EncodedSignature..."

@@ -1,16 +1,31 @@
 //! # voucher_standard_definition.rs
 //!
 //! Definiert die Rust-Datenstrukturen für die Gutschein-Standards.
-//! Diese neue Struktur trennt klar zwischen Metadaten, Kopiervorlagen und Validierungsregeln.
+//! Diese neue Struktur trennt klar zwischen Metadaten, Kopiervorlagen und Validierungsregeln
+//! und fügt die Unterstützung für kryptographische Signaturen und Mehrsprachigkeit hinzu.
 
 use serde::{Serialize, Deserialize};
 
-/// Metadaten, die den Standard selbst beschreiben.
+/// Repräsentiert einen einzelnen, sprachabhängigen Text.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct LocalizedText {
+    pub lang: String,
+    pub text: String,
+}
+
+/// Metadaten, die den Standard selbst beschreiben, inklusive optionaler Felder.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct StandardMetadata {
-    pub name: String,
     pub uuid: String,
+    pub name: String,
     pub abbreviation: String,
+    pub issuer_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub documentation_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
 }
 
 /// Vorlage für den Nennwert (nur die Einheit wird vom Standard vorgegeben).
@@ -38,18 +53,17 @@ pub struct TemplateGuarantorInfo {
 /// Enthält alle Werte, die vom Standard zwingend und unveränderlich vorgegeben werden.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct TemplateFixed {
-    pub description: Option<String>,
-    /// Ein optionaler Fußnotentext, der vom Standard vorgegeben wird.
+    // Mehrsprachige Beschreibung wird jetzt als Liste von Tabellen im TOML abgebildet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub description: Vec<LocalizedText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub footnote: Option<String>,
     pub primary_redemption_type: String,
-    /// Gibt an, ob die Nennwerte von Gutscheinen dieses Standards untereinander austauschbar und addierbar sind.
     pub is_fungible: bool,
     pub is_divisible: bool,
     pub nominal_value: TemplateNominalValue,
     pub collateral: TemplateCollateral,
     pub guarantor_info: TemplateGuarantorInfo,
-    /// Optionales Feld, um das Gültigkeitsdatum aufzurunden (z.B. P1D, P1M, P1Y).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub round_up_validity_to: Option<String>,
 }
@@ -57,13 +71,11 @@ pub struct TemplateFixed {
 /// Enthält alle Werte, die als Vorschläge dienen und überschrieben werden können.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct TemplateDefault {
-    /// Standard-Gültigkeitsdauer (z.B. P5Y), wenn vom Ersteller nicht anders angegeben.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_validity_duration: Option<String>,
 }
 
-/// Eine Vorlage für Felder, die in einen neuen Gutschein kopiert werden,
-/// aufgeteilt in feste und überschreibbare Standardwerte.
+/// Eine Vorlage für Felder, die in einen neuen Gutschein kopiert werden.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct VoucherTemplate {
     pub fixed: TemplateFixed,
@@ -74,14 +86,14 @@ pub struct VoucherTemplate {
 /// Regeln, die zur Validierung eines Gutscheins herangezogen werden.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct ValidationRules {
-    /// Mindestgültigkeitsdauer, die ein Gutschein bei der Erstellung haben muss (z.B. P90D).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuance_minimum_validity_duration: Option<String>,
-    /// Definiert die Anzahl der Nachkommastellen für Betragsberechnungen, um Rundungsfehler zu vermeiden.
     #[serde(default)]
     pub amount_decimal_places: u8,
     pub guarantor_rules: ValidationGuarantorRules,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_voucher_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_transaction_types: Vec<String>,
 }
 
@@ -93,10 +105,22 @@ pub struct ValidationGuarantorRules {
     pub genders_needed: Vec<String>,
 }
 
-/// Das neue Haupt-Struct, das die gesamte Standard-Definition kapselt.
+/// Enthält die kryptographische Signatur, die die Authentizität des Standards beweist.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct SignatureBlock {
+    /// Die `did:key` des Herausgebers.
+    pub issuer_id: String,
+    /// Die Base58-kodierte Ed25519-Signatur.
+    pub signature: String,
+}
+
+/// Das Haupt-Struct, das die gesamte, nun signierte Standard-Definition kapselt.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct VoucherStandardDefinition {
     pub metadata: StandardMetadata,
     pub template: VoucherTemplate,
-    pub validation: ValidationRules
+    pub validation: ValidationRules,
+    // Die Signatur ist optional, da sie für die Kanonisierung temporär entfernt wird.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<SignatureBlock>,
 }

@@ -462,13 +462,18 @@ impl Wallet {
     pub fn create_new_voucher(
         &mut self,
         identity: &UserIdentity,
-        standard_definition: &VoucherStandardDefinition,
+        // Die Signatur wird erweitert, um die verifizierten Daten zu erhalten
+        verified_standard: &VoucherStandardDefinition,
+        standard_hash: &str,
+        lang_preference: &str,
         data: NewVoucherData,
     ) -> Result<Voucher, VoucherCoreError> {
         let new_voucher = voucher_manager::create_voucher(
             data,
-            standard_definition,
+            verified_standard,
+            standard_hash,
             &identity.signing_key,
+            lang_preference,
         )?;
 
         self.add_voucher_to_store(new_voucher.clone(), VoucherStatus::Active, &identity.user_id)?;

@@ -13,6 +13,8 @@ pub struct VoucherStandard {
     pub name: String,
     /// Die eindeutige Kennung (UUID) des Standards.
     pub uuid: String,
+    /// Der Hash der kanonisierten Standard-Definition, der diesen Gutschein an eine spezifische Version bindet.
+    pub standard_definition_hash: String,
 }
 
 /// Definiert den Nennwert, den ein Gutschein repräsentiert.

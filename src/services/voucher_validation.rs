@@ -2,6 +2,7 @@
 //!
 //! Dieses Modul enthält die Logik zur Validierung eines `Voucher`-Objekts
 //! gegen die Regeln eines `VoucherStandardDefinition`.
+use crate::error::StandardDefinitionError;
 
 use crate::error::VoucherCoreError;
 use crate::models::voucher::Voucher;
@@ -162,6 +163,7 @@ pub fn validate_voucher_against_standard(
     standard: &VoucherStandardDefinition,
 ) -> Result<(), VoucherCoreError> {
     // NEU: Aller-erste Prüfung: Gehört dieser Gutschein überhaupt zu diesem Standard?
+    // Prüfung 1: UUID-Abgleich
     if voucher.voucher_standard.uuid != standard.metadata.uuid {
         return Err(ValidationError::StandardUuidMismatch {
             expected: standard.metadata.uuid.clone(),
@@ -174,6 +176,19 @@ pub fn validate_voucher_against_standard(
     verify_required_fields(voucher, standard)?;
     verify_consistency_with_standard(voucher, standard)?;
     verify_validity_duration(voucher, standard)?;
+
+    // Nachdem die Konsistenz geprüft wurde, den kryptographischen Hash vergleichen,
+    // der die Unveränderlichkeit der gesamten Standard-Version sicherstellt.
+    let mut standard_to_hash = standard.clone();
+    standard_to_hash.signature = None; // Signatur wird nicht Teil des Hashes
+    let expected_hash = get_hash(to_canonical_json(&standard_to_hash)?);
+
+    if voucher.voucher_standard.standard_definition_hash != expected_hash {
+        return Err(VoucherCoreError::Standard(
+            StandardDefinitionError::StandardHashMismatch,
+        ));
+    }
+
     verify_creator_signature(voucher)?; // Die Signatur des Rumpfes zuerst prüfen.
     verify_guarantor_requirements(voucher, standard)?;
     verify_additional_signatures(voucher)?; // NEUE PRÜFUNG HINZUGEFÜGT

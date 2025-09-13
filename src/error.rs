@@ -16,6 +16,23 @@ use crate::{
 };
 use crate::models::profile::VoucherStatus;
 
+/// Definiert Fehler, die bei der Verarbeitung einer `VoucherStandardDefinition` auftreten können.
+#[derive(Error, Debug)]
+pub enum StandardDefinitionError {
+    /// Der `[signature]`-Block fehlt in der Definition.
+    #[error("The [signature] block is missing from the standard definition.")]
+    MissingSignatureBlock,
+    /// Die kryptographische Signatur der Standard-Definition ist ungültig.
+    #[error("The signature of the standard definition is invalid.")]
+    InvalidSignature,
+    /// Der Hash des Standards im Gutschein stimmt nicht mit dem Hash des geladenen Standards überein.
+    #[error("The standard definition hash in the voucher does not match the loaded standard.")]
+    StandardHashMismatch,
+    /// Fehler bei der Dekodierung der Signatur (z.B. Base58).
+    #[error("Failed to decode signature: {0}")]
+    SignatureDecode(String),
+}
+
 /// Der zentrale Fehlertyp für alle Operationen in der `voucher_core`-Bibliothek.
 ///
 /// Dieser Enum fasst Fehler aus allen Modulen (Manager, Validierung, Crypto, Serialisierung)
@@ -39,6 +56,10 @@ pub enum VoucherCoreError {
     /// Ein Fehler, der bei der Verarbeitung eines `SecureContainer` auftrat.
     #[error("Secure Container Error: {0}")]
     Container(#[from] ContainerManagerError),
+
+    /// Ein Fehler, der bei der Verarbeitung einer Gutschein-Standard-Definition auftrat.
+    #[error("Standard Definition Error: {0}")]
+    Standard(#[from] StandardDefinitionError),
 
     /// Ein Fehler, der während einer Archiv-Operation aufgetreten ist.
     #[error("Archive error: {0}")]

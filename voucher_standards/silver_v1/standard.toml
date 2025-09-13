@@ -1,0 +1,79 @@
+# =======================================================
+# Standard-Definition für den "Silber-Umlauf-Gutschein" (v1)
+# =======================================================
+
+# NEU: Erweiterte Metadaten zur besseren Identifikation und Auffindbarkeit.
+[metadata]
+uuid = "SILVER-PAYMENT-V1-2025-09"
+name = "Silber-Umlauf-Gutschein"
+abbreviation = "Oz"
+issuer_name = "Silber Standard Council"
+homepage_url = "https://example.com/silver-standard-info"
+documentation_url = "https://example.com/silver-standard-docs"
+keywords = ["asset-backed", "silver", "precious-metal", "payment"]
+
+# ---
+
+[template.fixed]
+footnote = "Besichert durch physisch hinterlegtes Silber."
+primary_redemption_type = "goods_or_services"
+is_fungible = true
+is_divisible = true
+# Kein 'round_up_validity_to', daher wird das exakte Datum verwendet.
+
+# 'description' muss als Array von Tabellen nach den einfachen Key-Value-Paaren kommen.
+[[template.fixed.description]]
+lang = "de"
+text = "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von {{amount}} Unzen Silber."
+
+[[template.fixed.description]]
+lang = "en"
+text = "This voucher serves as a means of payment for goods or services worth {{amount}} ounces of silver."
+
+# Vorgaben für den Nennwert.
+[template.fixed.nominal_value]
+unit = "Unzen"
+
+# Vorgaben für die Besicherung.
+[template.fixed.collateral]
+type = "Physisches Edelmetall"
+description = "Der Gutschein ist durch die entsprechende Menge an physischem Silber besichert."
+redeem_condition = "Nur in Notfällen einlösbar, wenn der Aussteller die versprochene Leistung nicht erbringen kann."
+
+# Vorgaben für die Bürgen.
+[template.fixed.guarantor_info]
+needed_count = 0
+description = "Keine Bürgen erforderlich."
+
+# ---
+
+[template.default]
+default_validity_duration = "P5Y"
+
+# ---
+
+# Validierungsregeln, die zur Überprüfung eines Gutscheins verwendet werden.
+[validation]
+issuance_minimum_validity_duration = "P3Y"
+amount_decimal_places = 4
+allowed_transaction_types = ["init", "split", "redeem"]
+required_voucher_fields = [
+  "voucher_id",
+  "creation_date",
+  "creator.signature",
+]
+
+# Spezifische Regeln für die Bürgen-Validierung.
+[validation.guarantor_rules]
+gender_specific = false
+genders_needed = []
+
+# ---
+
+# NEU: Dieser Block ist zwingend erforderlich und sichert die Authentizität des Standards.
+[signature]
+# Die 'did:key' des Herausgebers, die seinen öffentlichen Schlüssel enthält.
+issuer_id = "did:key:z...PublicKeyDesHerausgebers..."
+
+# Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
+signature = "Base58EncodedSignature..."

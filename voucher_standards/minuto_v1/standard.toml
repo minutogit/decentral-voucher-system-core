@@ -1,0 +1,76 @@
+# =======================================================
+# Standard-Definition für den "Minuto-Gutschein" (v1)
+# =======================================================
+
+# NEU: Erweiterte Metadaten zur besseren Identifikation und Auffindbarkeit.
+[metadata]
+uuid = "MINUTO-V1-2025-09"
+name = "Minuto-Gutschein"
+abbreviation = "Minuto"
+issuer_name = "Minuto Community Council"
+homepage_url = "https://minuto.org/standard-info"
+documentation_url = "https://github.com/minuto/standards/tree/main/minuto_v1"
+keywords = ["community-currency", "time-based", "mutual-credit", "b2b"]
+
+# ---
+
+[template.fixed]
+primary_redemption_type = "goods_or_services"
+footnote = "Gutschein-Nutzung nur für Mitspieler/innen."
+is_fungible = true
+is_divisible = true
+round_up_validity_to = "P1Y" # Gültigkeit auf Jahresende aufrunden.
+
+# 'description' muss als Array von Tabellen nach den einfachen Key-Value-Paaren kommen.
+[[template.fixed.description]]
+lang = "de"
+text = "Ein Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Minuten qualitativer Leistung."
+
+[[template.fixed.description]]
+lang = "en"
+text = "A voucher for goods or services worth {{amount}} minutes of quality performance."
+
+[template.fixed.nominal_value]
+unit = "Minuto"
+
+[template.fixed.collateral]
+type = ""
+description = ""
+redeem_condition = ""
+
+[template.fixed.guarantor_info]
+needed_count = 2
+description = "Ein männlicher und ein weiblicher Bürge sind erforderlich."
+
+# ---
+
+[template.default]
+default_validity_duration = "P5Y"
+
+# ---
+
+# Dieser Block bleibt unverändert.
+[validation]
+issuance_minimum_validity_duration = "P3Y"
+amount_decimal_places = 0
+allowed_transaction_types = ["init", "split", "redeem"]
+required_voucher_fields = [
+  "voucher_id",
+  "creation_date",
+  "creator.signature",
+  "guarantor_signatures",
+]
+
+[validation.guarantor_rules]
+gender_specific = true
+genders_needed = ["1", "2"]
+
+# ---
+
+# NEU: Dieser Block ist zwingend erforderlich und sichert die Authentizität des Standards.
+[signature]
+# Die 'did:key' des Herausgebers, die seinen öffentlichen Schlüssel enthält.
+issuer_id = "did:key:z...PublicKeyDesHerausgebers..."
+
+# Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
+signature = "Base58EncodedSignature..."
