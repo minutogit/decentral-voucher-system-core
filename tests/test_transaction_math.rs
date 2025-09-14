@@ -19,10 +19,14 @@
 //!   wenn das gesamte Guthaben überwiesen wird.
 
 use voucher_lib::{
-    create_transaction, create_voucher, get_spendable_balance, validate_voucher_against_standard,
-    Creator, NewVoucherData, NominalValue, VoucherCoreError,
+    // Structs from specific modules
+    models::voucher::{Creator, NominalValue},
+    services::voucher_manager::{create_transaction, create_voucher, VoucherManagerError},
+    services::voucher_validation::{get_spendable_balance, validate_voucher_against_standard},
+    // Structs/Enums from the crate root (or re-exported there)
+    NewVoucherData,
+    VoucherCoreError,
 };
-use voucher_lib::services::voucher_manager::VoucherManagerError;
 use rust_decimal_macros::dec;
 mod test_utils;
 use test_utils::{ACTORS, SILVER_STANDARD};
@@ -32,7 +36,7 @@ use test_utils::{ACTORS, SILVER_STANDARD};
 #[test]
 fn test_chained_transaction_math_and_scaling() {
     // --- 1. SETUP ---
-    let standard = &SILVER_STANDARD;
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     assert_eq!(
         standard.validation.amount_decimal_places, 4,
         "This test requires the silver standard with 4 decimal places."
@@ -49,7 +53,8 @@ fn test_chained_transaction_math_and_scaling() {
         nominal_value: NominalValue { amount: "100".to_string(), ..Default::default() },
         ..Default::default()
     };
-    let mut current_voucher = create_voucher(voucher_data, standard, &alice.signing_key).unwrap();
+
+    let mut current_voucher = create_voucher(voucher_data, standard, standard_hash, &alice.signing_key, "en").unwrap();
     validate_voucher_against_standard(&current_voucher, standard).unwrap();
     assert_eq!(
         get_spendable_balance(&current_voucher, &alice.user_id, standard).unwrap(),
@@ -72,7 +77,7 @@ fn test_chained_transaction_math_and_scaling() {
     )
         .unwrap();
 
-    validate_voucher_against_standard(&current_voucher, &standard).unwrap();
+    validate_voucher_against_standard(&current_voucher, standard).unwrap();
     assert_eq!(
         get_spendable_balance(&current_voucher, &alice.user_id, &standard).unwrap(),
         dec!(60)
@@ -226,7 +231,7 @@ fn test_chained_transaction_math_and_scaling() {
 #[test]
 fn test_transaction_fails_on_excess_precision() {
     // --- SETUP ---
-    let standard = &SILVER_STANDARD;
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     let alice = &ACTORS.alice;
     let bob = &ACTORS.bob;
 
@@ -236,7 +241,8 @@ fn test_transaction_fails_on_excess_precision() {
         nominal_value: NominalValue { amount: "100".to_string(), ..Default::default() },
         ..Default::default()
     };
-    let voucher = create_voucher(voucher_data, standard, &alice.signing_key).unwrap();
+
+    let voucher = create_voucher(voucher_data, standard, standard_hash, &alice.signing_key, "en").unwrap();
 
     // --- AKTION & PRÜFUNG ---
     // Alice versucht, "0.12345" (5 Nachkommastellen) zu senden, erlaubt sind aber nur 4.

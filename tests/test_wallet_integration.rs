@@ -61,8 +61,9 @@ fn test_transfer_full_amount() {
     // Setup
     let alice_identity = &ACTORS.alice;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", &MINUTO_STANDARD, true).unwrap();
+        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true).unwrap();
 
     let bob_identity = &ACTORS.bob;
     let mut bob_wallet = setup_in_memory_wallet(bob_identity);
@@ -71,7 +72,7 @@ fn test_transfer_full_amount() {
     let (bundle_bytes, sent_voucher) = alice_wallet
         .create_transfer(
             alice_identity,
-            &MINUTO_STANDARD,
+            minuto_standard,
             &voucher_id,
             &bob_identity.user_id,
             "100",
@@ -117,8 +118,9 @@ fn test_transfer_split_amount() {
     // Setup
     let alice_identity = &ACTORS.alice;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", &MINUTO_STANDARD, true).unwrap();
+        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true).unwrap();
 
     let bob_identity = &ACTORS.bob;
     let mut bob_wallet = setup_in_memory_wallet(bob_identity);
@@ -127,7 +129,7 @@ fn test_transfer_split_amount() {
     let (bundle_bytes, _) = alice_wallet
         .create_transfer(
             alice_identity,
-            &MINUTO_STANDARD,
+            minuto_standard,
             &voucher_id,
             &bob_identity.user_id,
             "30",
@@ -162,14 +164,15 @@ fn test_transfer_invalid_amount() {
     // Setup
     let alice_identity = &ACTORS.alice;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", &MINUTO_STANDARD, true).unwrap();
+        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true).unwrap();
     let bob_identity = &ACTORS.bob;
 
     // Versuch 1: Negativer Betrag
     let result_negative = alice_wallet.create_transfer(
         alice_identity,
-        &MINUTO_STANDARD,
+        minuto_standard,
         &voucher_id,
         &bob_identity.user_id,
         "-50",
@@ -184,7 +187,7 @@ fn test_transfer_invalid_amount() {
     // Versuch 2: Unzulässige Dezimalstellen für Minuto-Standard
     let result_decimal = alice_wallet.create_transfer(
         alice_identity,
-        &MINUTO_STANDARD,
+        minuto_standard,
         &voucher_id,
         &bob_identity.user_id,
         "50.5", // Minuto erlaubt keine Dezimalstellen
@@ -202,8 +205,9 @@ fn test_transfer_invalid_amount() {
 fn test_transfer_inactive_voucher() {
     let alice_identity = &ACTORS.alice;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", &MINUTO_STANDARD, true).unwrap();
+        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true).unwrap();
     let bob_identity = &ACTORS.bob;
 
     // Status manuell auf Quarantined setzen
@@ -216,7 +220,7 @@ fn test_transfer_inactive_voucher() {
 
     let result = alice_wallet.create_transfer(
         alice_identity,
-        &MINUTO_STANDARD,
+        minuto_standard,
         &voucher_id,
         &bob_identity.user_id,
         "50",
@@ -236,8 +240,9 @@ fn test_transfer_inactive_voucher() {
 fn test_proactive_double_spend_prevention() {
     let alice_identity = &ACTORS.alice;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", &MINUTO_STANDARD, true).unwrap();
+        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true).unwrap();
     let bob_identity = &ACTORS.bob;
     let charlie_identity = &ACTORS.charlie;
 
@@ -245,7 +250,7 @@ fn test_proactive_double_spend_prevention() {
     alice_wallet
         .create_transfer(
             alice_identity,
-            &MINUTO_STANDARD,
+            minuto_standard,
             &voucher_id,
             &bob_identity.user_id,
             "100",
@@ -259,7 +264,7 @@ fn test_proactive_double_spend_prevention() {
     // mit der alten `voucher_id` wiederholen, die nicht mehr existiert.
     let result = alice_wallet.create_transfer(
         alice_identity,
-        &MINUTO_STANDARD,
+        minuto_standard,
         &voucher_id, // Diese ID ist nicht mehr im aktiven Store
         &charlie_identity.user_id,
         "100",
@@ -304,7 +309,10 @@ fn test_create_new_voucher_and_get_user_id() {
     };
 
     // Aktion: Neuen Gutschein erstellen
-    let created_voucher = wallet.create_new_voucher(identity, &MINUTO_STANDARD, new_voucher_data).unwrap();
+    let (minuto_standard, minuto_standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+    let created_voucher = wallet
+        .create_new_voucher(identity, minuto_standard, minuto_standard_hash, "en", new_voucher_data)
+        .unwrap();
     assert_eq!(created_voucher.transactions.len(), 1, "A new voucher must have exactly one 'init' transaction.");
 
     // Assert: Gutschein ist im Wallet vorhanden und aktiv
@@ -337,7 +345,12 @@ fn test_get_total_balance_by_currency() {
             ..Default::default()
         };
 
-        let voucher = voucher_lib::services::voucher_manager::create_voucher(new_voucher_data, standard, &identity.signing_key).unwrap();
+        // HINWEIS: add_voucher verwendet create_voucher, das den Hash benötigt.
+        // Da der Hash aber bereits im Tupel vorhanden ist, wird die Neuberechnung
+        // in add_voucher_to_wallet beibehalten, aber hier übergeben wir nur die Definition.
+        let voucher = voucher_lib::services::voucher_manager::create_voucher(
+            new_voucher_data, standard, "dummy_hash", &identity.signing_key, "en",
+        ).unwrap();
         // Hier werden keine Bürgen hinzugefügt, da die Gültigkeit für die Saldoprüfung irrelevant ist.
 
         wallet
@@ -345,12 +358,15 @@ fn test_get_total_balance_by_currency() {
             .unwrap();
     };
 
+    let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+    let (silver_standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
     // 1. Setup: Wallet mit diversen Gutscheinen füllen
-    add_voucher("100", VoucherStatus::Active, &MINUTO_STANDARD); // 100 Minuto
-    add_voucher("50", VoucherStatus::Active, &MINUTO_STANDARD); // 50 Minuto
-    add_voucher("200", VoucherStatus::Quarantined, &MINUTO_STANDARD); // Ignored
-    add_voucher("1.25", VoucherStatus::Active, &SILVER_STANDARD); // 1.25 Unzen
-    add_voucher("0.75", VoucherStatus::Active, &SILVER_STANDARD); // 0.75 Unzen
+    add_voucher("100", VoucherStatus::Active, minuto_standard); // 100 Minuto
+    add_voucher("50", VoucherStatus::Active, minuto_standard); // 50 Minuto
+    add_voucher("200", VoucherStatus::Quarantined, minuto_standard); // Ignored
+    add_voucher("1.25", VoucherStatus::Active, silver_standard); // 1.25 Unzen
+    add_voucher("0.75", VoucherStatus::Active, silver_standard); // 0.75 Unzen
 
     // 2. Aktion: Saldo berechnen
     let balances = wallet.get_total_balance_by_currency();
@@ -375,8 +391,9 @@ fn test_get_total_balance_by_currency() {
 fn test_signature_roundtrip_for_minuto_standard() {
     let alice_identity = &ACTORS.alice;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", &MINUTO_STANDARD, false).unwrap();
+        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, false).unwrap();
     let bob_identity = &ACTORS.bob;
 
     let (initial_voucher, _) = alice_wallet.voucher_store.vouchers.get(&voucher_id).unwrap();
@@ -418,8 +435,9 @@ fn test_signature_roundtrip_for_minuto_standard() {
 fn test_signature_roundtrip_on_silver_standard() {
     let alice_identity = &ACTORS.alice;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let (silver_standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "10", &SILVER_STANDARD, false).unwrap();
+        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "10", silver_standard, false).unwrap();
     let bob_identity = &ACTORS.bob;
 
     // Der Gutschein ist initial gültig ohne Signaturen, da `needed_count = 0` ist.

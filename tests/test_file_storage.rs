@@ -38,7 +38,9 @@ fn create_test_voucher(identity: &UserIdentity) -> Voucher {
         nominal_value: NominalValue { amount: "100".to_string(), ..Default::default() },
         ..Default::default()
     };
-    voucher_manager::create_voucher(new_voucher_data, &MINUTO_STANDARD, &identity.signing_key)
+    // KORREKTUR: Passe den Aufruf an die neue 5-parametrige Signatur an.
+    let (standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+    voucher_manager::create_voucher(new_voucher_data, standard, standard_hash, &identity.signing_key, "en")
         .expect("Voucher creation failed")
 }
 
@@ -196,16 +198,17 @@ fn test_save_and_load_with_bundle_history() {
     let bob_identity = &ACTORS.bob;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
 
+    let (silver_standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     // Alice erstellt einen Gutschein und fügt ihn ihrem Wallet hinzu
     let local_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", &SILVER_STANDARD, false)
+        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", silver_standard, false)
             .unwrap();
 
     // 2. Aktion: Führe eine Transaktion durch, um Bundle-Metadaten zu erzeugen.
     let _ = alice_wallet
         .create_transfer(
             alice_identity,
-            &SILVER_STANDARD,
+            silver_standard,
             &local_id,
             &bob_identity.user_id,
             "100", // Sende den vollen Betrag

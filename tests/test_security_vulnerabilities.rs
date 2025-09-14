@@ -239,14 +239,18 @@ fn test_attack_tamper_core_data_and_guarantors() {
     let mut hacker_wallet = setup_test_wallet(&ACTORS.hacker);
     let mut victim_wallet = setup_test_wallet(&ACTORS.victim);
     let voucher_data = new_test_voucher_data(ACTORS.issuer.user_id.clone());
-    let mut valid_voucher = voucher_manager::create_voucher(voucher_data, &SILVER_STANDARD, &ACTORS.issuer.signing_key).unwrap(); 
+
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
+
+    let mut valid_voucher = voucher_manager::create_voucher(voucher_data, standard, standard_hash, &ACTORS.issuer.signing_key, "en").unwrap();
     let guarantor_sig = create_guarantor_signature(&valid_voucher, &ACTORS.guarantor1, None, "0");
     valid_voucher.guarantor_signatures.push(guarantor_sig);
     let local_id = Wallet::calculate_local_instance_id(&valid_voucher, &ACTORS.issuer.user_id).unwrap();
     issuer_wallet.voucher_store.vouchers.insert(local_id.clone(), (valid_voucher, Default::default()));
 
     // Issuer sendet den Gutschein an den Hacker, der ihn nun für Angriffe besitzt.
-    let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, &SILVER_STANDARD, &local_id, &ACTORS.hacker.user_id, "100", None, None).unwrap();
+    let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, standard, &local_id, &ACTORS.hacker.user_id, "100", None, None).unwrap();
     hacker_wallet.process_encrypted_transaction_bundle(&ACTORS.hacker, &container_to_hacker, None).unwrap();
     let (_, (voucher_in_hacker_wallet, _)) = hacker_wallet.voucher_store.vouchers.iter().next().unwrap();
 
@@ -272,7 +276,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
     let hacked_container = create_hacked_bundle_and_container(&ACTORS.hacker, &ACTORS.victim.user_id, inflated_voucher);
     victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
-    let result = voucher_validation::validate_voucher_against_standard(received_voucher, &SILVER_STANDARD);
+    let result = voucher_validation::validate_voucher_against_standard(received_voucher, standard);
     assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::InvalidCreatorSignature { .. }))),
             "Validation must fail due to manipulated nominal value.");
     victim_wallet.voucher_store.vouchers.clear(); // Reset for next test
@@ -296,7 +300,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
     let hacked_container = create_hacked_bundle_and_container(&ACTORS.hacker, &ACTORS.victim.user_id, tampered_guarantor_voucher);
     victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
-    let result = voucher_validation::validate_voucher_against_standard(received_voucher, &SILVER_STANDARD);
+    let result = voucher_validation::validate_voucher_against_standard(received_voucher, standard);
     assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::InvalidSignatureId(_)))),
             "Validation must fail due to manipulated guarantor metadata (InvalidSignatureId).");
     victim_wallet.voucher_store.vouchers.clear();
@@ -312,10 +316,13 @@ fn test_attack_tamper_transaction_history() {
     let mut alice_wallet = setup_test_wallet(&ACTORS.alice);
     let mut bob_wallet_hacker = setup_test_wallet(&ACTORS.bob);
     let data = new_test_voucher_data(ACTORS.alice.user_id.clone());
-    let voucher_a = voucher_manager::create_voucher(data, &SILVER_STANDARD, &ACTORS.alice.signing_key).unwrap();
+
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
+    let voucher_a = voucher_manager::create_voucher(data, standard, standard_hash, &ACTORS.alice.signing_key, "en").unwrap();
     let local_id_a = Wallet::calculate_local_instance_id(&voucher_a, &ACTORS.alice.user_id).unwrap();
     alice_wallet.voucher_store.vouchers.insert(local_id_a.clone(), (voucher_a, Default::default()));
-    let (container_to_bob, _) = alice_wallet.create_transfer(&ACTORS.alice, &SILVER_STANDARD, &local_id_a, &ACTORS.bob.user_id, "100", None, None).unwrap();
+    let (container_to_bob, _) = alice_wallet.create_transfer(&ACTORS.alice, standard, &local_id_a, &ACTORS.bob.user_id, "100", None, None).unwrap();
     bob_wallet_hacker.process_encrypted_transaction_bundle(&ACTORS.bob, &container_to_bob, None).unwrap();
     let (_, (voucher_in_bob_wallet, _)) = bob_wallet_hacker.voucher_store.vouchers.iter().next().unwrap();
 
@@ -328,7 +335,7 @@ fn test_attack_tamper_transaction_history() {
     // DANK DES SICHERHEITSPATCHES in `voucher_manager` schlägt dieser Aufruf nun fehl,
     // da `create_transaction` den Gutschein vorab validiert.
     let transfer_attempt_result = voucher_manager::create_transaction(
-        &voucher_with_tampered_history, &SILVER_STANDARD, &ACTORS.bob.user_id, &ACTORS.bob.signing_key, &ACTORS.victim.user_id, "100"
+        &voucher_with_tampered_history, standard, &ACTORS.bob.user_id, &ACTORS.bob.signing_key, &ACTORS.victim.user_id, "100"
     );
     assert!(transfer_attempt_result.is_err(), "Transaction creation must fail if history is tampered.");
 }
@@ -343,10 +350,13 @@ fn test_attack_create_inconsistent_transaction() {
     let mut hacker_wallet = setup_test_wallet(&ACTORS.hacker);
     let mut victim_wallet = setup_test_wallet(&ACTORS.victim);
     let data = new_test_voucher_data(ACTORS.issuer.user_id.clone());
-    let initial_voucher = voucher_manager::create_voucher(data, &SILVER_STANDARD, &ACTORS.issuer.signing_key).unwrap();
+
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
+    let initial_voucher = voucher_manager::create_voucher(data, standard, standard_hash, &ACTORS.issuer.signing_key, "en").unwrap();
     let local_id_issuer = Wallet::calculate_local_instance_id(&initial_voucher, &ACTORS.issuer.user_id).unwrap();
     issuer_wallet.voucher_store.vouchers.insert(local_id_issuer.clone(), (initial_voucher, Default::default()));
-    let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, &SILVER_STANDARD, &local_id_issuer, &ACTORS.hacker.user_id, "100", None, None).unwrap();
+    let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, standard, &local_id_issuer, &ACTORS.hacker.user_id, "100", None, None).unwrap();
     hacker_wallet.process_encrypted_transaction_bundle(&ACTORS.hacker, &container_to_hacker, None).unwrap();
     let (_, (voucher_in_hacker_wallet, _)) = hacker_wallet.voucher_store.vouchers.iter().next().unwrap();
 
@@ -366,7 +376,7 @@ fn test_attack_create_inconsistent_transaction() {
     let hacked_container = create_hacked_bundle_and_container(&ACTORS.hacker, &ACTORS.victim.user_id, overspend_voucher);
     victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
-    let result = voucher_validation::validate_voucher_against_standard(received_voucher, &SILVER_STANDARD);
+    let result = voucher_validation::validate_voucher_against_standard(received_voucher, standard);
     assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::FullTransferAmountMismatch { .. }))),
             "Validation must fail with FullTransferAmountMismatch on overspending attempt.");
     victim_wallet.voucher_store.vouchers.clear();
@@ -453,7 +463,10 @@ fn test_wallet_state_management_on_split() {
         ..Default::default()
     };
     let voucher_data = create_test_voucher_data_with_amount(creator_data, "100.0000");
-    let initial_voucher = create_voucher(voucher_data, &SILVER_STANDARD, &a_identity.signing_key).unwrap();
+
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
+    let initial_voucher = create_voucher(voucher_data, standard, standard_hash, &a_identity.signing_key, "en").unwrap();
 
     wallet_a.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &a_identity.user_id).unwrap();
     let original_local_id = wallet_a.voucher_store.vouchers.keys().next().unwrap().clone();
@@ -461,7 +474,7 @@ fn test_wallet_state_management_on_split() {
     // 3. Aktion: Wallet A sendet 40 an Wallet B
     let (bundle_to_b, _) = wallet_a.create_transfer(
         &a_identity,
-        &SILVER_STANDARD,
+        standard,
         &original_local_id,
         &b_identity.user_id,
         "40",
@@ -483,7 +496,7 @@ fn test_wallet_state_management_on_split() {
         .expect("Wallet A must have one voucher instance left.");
     assert_eq!(*remainder_status, VoucherStatus::Active);
 
-    let remainder_balance = get_spendable_balance(remainder_voucher, &a_identity.user_id, &SILVER_STANDARD).unwrap();
+    let remainder_balance = get_spendable_balance(remainder_voucher, &a_identity.user_id, standard).unwrap();
     assert_eq!(remainder_balance, dec!(60));
 
     // 5. Verifizierung (Wallet B)
@@ -491,7 +504,7 @@ fn test_wallet_state_management_on_split() {
     let (received_voucher, received_status) = wallet_b.voucher_store.vouchers.values().next().unwrap();
     assert_eq!(*received_status, VoucherStatus::Active);
 
-    let received_balance = get_spendable_balance(received_voucher, &b_identity.user_id, &SILVER_STANDARD).unwrap();
+    let received_balance = get_spendable_balance(received_voucher, &b_identity.user_id, standard).unwrap();
     assert_eq!(received_balance, dec!(40));
 }
 
@@ -509,11 +522,14 @@ fn test_collaborative_fraud_detection_with_fingerprints() {
     // 2. Akt 1 (Double Spend)
     let eve_creator = Creator { id: eve_identity.user_id.clone(), ..setup_creator().1 };
     let voucher_data = create_test_voucher_data_with_amount(eve_creator, "100");
-    let initial_voucher = create_voucher(voucher_data, &SILVER_STANDARD, &eve_identity.signing_key).unwrap();
+
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
+    let initial_voucher = create_voucher(voucher_data, standard, standard_hash, &eve_identity.signing_key, "en").unwrap();
 
     // Eve erstellt zwei widersprüchliche Zukünfte
-    let voucher_for_alice = create_transaction(&initial_voucher, &SILVER_STANDARD, &eve_identity.user_id, &eve_identity.signing_key, &a_identity.user_id, "100").unwrap();
-    let voucher_for_bob = create_transaction(&initial_voucher, &SILVER_STANDARD, &eve_identity.user_id, &eve_identity.signing_key, &b_identity.user_id, "100").unwrap();
+    let voucher_for_alice = create_transaction(&initial_voucher, standard, &eve_identity.user_id, &eve_identity.signing_key, &a_identity.user_id, "100").unwrap();
+    let voucher_for_bob = create_transaction(&initial_voucher, standard, &eve_identity.user_id, &eve_identity.signing_key, &b_identity.user_id, "100").unwrap();
 
     // Eve verpackt und sendet die Gutscheine
     let bundle_to_alice = eve_wallet.create_and_encrypt_transaction_bundle(&eve_identity, vec![voucher_for_alice], &a_identity.user_id, None).unwrap();
@@ -547,7 +563,10 @@ fn test_serialization_roundtrip_with_special_chars() {
     creator.first_name = "Jörg-ẞtråße".to_string(); // Sonderzeichen
 
     let voucher_data = create_test_voucher_data_with_amount(creator, "123");
-    let mut original_voucher = create_voucher(voucher_data, &SILVER_STANDARD, &signing_key).unwrap();
+
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
+    let mut original_voucher = create_voucher(voucher_data, standard, standard_hash, &signing_key, "en").unwrap();
 
     // Mache den Gutschein komplexer
     let g1_identity = &ACTORS.guarantor1;
@@ -564,7 +583,7 @@ fn test_serialization_roundtrip_with_special_chars() {
 
     original_voucher = create_transaction(
         &original_voucher,
-        &SILVER_STANDARD,
+        standard,
         &original_voucher.creator.id,
         &signing_key,
         "some_recipient_id",
@@ -586,7 +605,10 @@ fn test_attack_fuzzing_random_mutations() {
     // Erstelle einen "Master"-Gutschein, der alle für die Angriffe relevanten Features enthält.
     let mut data = new_test_voucher_data(ACTORS.issuer.user_id.clone());
     data.nominal_value.amount = "1000".to_string();
-    let mut master_voucher = voucher_manager::create_voucher(data, &SILVER_STANDARD, &ACTORS.issuer.signing_key).unwrap();
+
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
+    let mut master_voucher = voucher_manager::create_voucher(data, standard, standard_hash, &ACTORS.issuer.signing_key, "en").unwrap();
 
     // Füge Bürgen hinzu.
     master_voucher.guarantor_signatures.push(create_guarantor_signature(&master_voucher, &ACTORS.guarantor1, None, "0"));
@@ -609,8 +631,8 @@ fn test_attack_fuzzing_random_mutations() {
     master_voucher.additional_signatures.push(additional_sig);
 
     // Erstelle eine Transaktionskette, die auch einen Split enthält.
-    master_voucher = create_transaction(&master_voucher, &SILVER_STANDARD, &ACTORS.issuer.user_id, &ACTORS.issuer.signing_key, &ACTORS.alice.user_id, "1000").unwrap();
-    master_voucher = create_transaction(&master_voucher, &SILVER_STANDARD, &ACTORS.alice.user_id, &ACTORS.alice.signing_key, &ACTORS.bob.user_id, "500").unwrap(); // Split
+    master_voucher = create_transaction(&master_voucher, standard, &ACTORS.issuer.user_id, &ACTORS.issuer.signing_key, &ACTORS.alice.user_id, "1000").unwrap();
+    master_voucher = create_transaction(&master_voucher, standard, &ACTORS.alice.user_id, &ACTORS.alice.signing_key, &ACTORS.bob.user_id, "500").unwrap(); // Split
 
     let mut rng = thread_rng();
     println!("--- Starte intelligenten Fuzzing-Test mit 2000 Iterationen ---");
@@ -663,7 +685,7 @@ fn test_attack_fuzzing_random_mutations() {
             }
         }
 
-        let validation_result = voucher_validation::validate_voucher_against_standard(&mutated_voucher, &SILVER_STANDARD);
+        let validation_result = voucher_validation::validate_voucher_against_standard(&mutated_voucher, standard);
         assert!(validation_result.is_err(),
                 "FUZZING-FEHLER bei Iteration {}: Eine Mutation hat die Validierung umgangen!\nStrategie: {:?}\nÄnderung: {}\nMutierter Gutschein:\n{}",
                 i, strategy, change_description, serde_json::to_string_pretty(&mutated_voucher).unwrap()

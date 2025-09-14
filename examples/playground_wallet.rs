@@ -11,9 +11,8 @@
 use voucher_lib::models::profile::{UserIdentity, VoucherStatus};
 use voucher_lib::models::voucher::{Address, Collateral, Creator, NominalValue};
 use voucher_lib::services::crypto_utils;
-use voucher_lib::services::voucher_manager::{self, to_json, NewVoucherData};
+use voucher_lib::{to_json, NewVoucherData, verify_and_parse_standard};
 use voucher_lib::wallet::Wallet;
-use voucher_lib::VoucherStandardDefinition;
 
 /// Hilfsfunktion, um eine deterministische UserIdentity für Tests zu erstellen.
 fn create_test_identity(seed: &str, prefix: &str) -> UserIdentity {
@@ -40,8 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Lade den für den Gutschein gültigen Standard
     let standard_toml = std::fs::read_to_string("voucher_standards/silver_standard.toml")?;
-    let standard: VoucherStandardDefinition = voucher_manager::load_standard_definition(&standard_toml)?;
-    println!("✅ Standard '{}' geladen.", standard.metadata.name);
+    let (standard, standard_hash) = verify_and_parse_standard(&standard_toml)?;
+    println!("✅ Standard '{}' verifiziert und geladen.", standard.metadata.name);
 
     // Erstelle eine neue, leere Wallet für Alice
     let mut alice_wallet = Wallet {
@@ -61,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         collateral: Collateral::default(),
         creator: Creator { id: alice_identity.user_id.clone(), first_name: "Alice".into(), last_name: "Silversmith".into(), address: Address::default(), gender: "2".into(), signature: "".into(), ..Default::default() },
     };
-    let initial_voucher = voucher_manager::create_voucher(voucher_data, &standard, &alice_identity.signing_key)?;
+    let initial_voucher = voucher_lib::create_voucher(voucher_data, &standard, &standard_hash, &alice_identity.signing_key, "en")?;
     alice_wallet.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &alice_identity.user_id)?;
     println!("✅ Initialen Gutschein erstellt und zu Alices Wallet hinzugefügt.");
 

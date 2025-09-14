@@ -4,16 +4,15 @@
 use lazy_static::lazy_static;
 use bip39::Language;
 use voucher_lib::models::{
-    conflict::{FingerprintStore, ProofStore},
-    profile::{BundleMetadataStore, UserProfile, VoucherStore},
+    conflict::{FingerprintStore, ProofStore}, profile::{BundleMetadataStore, UserProfile, VoucherStore},
 };
 use voucher_lib::{UserIdentity};
 use voucher_lib::models::signature::DetachedSignature;
 use voucher_lib::models::voucher::{Address, GuarantorSignature, Voucher};
-use voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition;
+use voucher_lib::models::voucher_standard_definition::{SignatureBlock, VoucherStandardDefinition};
 use voucher_lib::services::crypto_utils::{
     self,
-    create_user_id, generate_ed25519_keypair_for_tests,
+    create_user_id, generate_ed25519_keypair_for_tests, sign_ed25519,
 };
 use voucher_lib::services::secure_container_manager;
 use voucher_lib::services::signature_manager;
@@ -26,6 +25,9 @@ use voucher_lib::{
     },
     VoucherCoreError,
 };
+use voucher_lib::services::crypto_utils::get_hash;
+use voucher_lib::services::utils::to_canonical_json;
+use toml;
 
 // --- Zentralisierte Akteure und Standards ---
 
@@ -73,13 +75,51 @@ lazy_static! {
         victim: identity_from_seed("victim", "vi"),
     };
 
-    pub static ref MINUTO_STANDARD: VoucherStandardDefinition = {
-        let toml_str = include_str!("../voucher_standards/minuto_standard.toml");
-        voucher_manager::load_standard_definition(toml_str).expect("Failed to load Minuto standard for tests")
+    /// Ein deterministischer Herausgeber, der zum Signieren der Test-Standards verwendet wird.
+    pub static ref TEST_ISSUER: UserIdentity = identity_from_seed("test-issuer-seed-123", "issuer");
+
+    /// Lädt den Minuto-Standard und signiert ihn zur Laufzeit für die Tests.
+    /// Das Ergebnis ist immer ein valider Standard mit einer korrekten Signatur.
+    pub static ref MINUTO_STANDARD: (VoucherStandardDefinition, String) = {
+        let issuer = &TEST_ISSUER;
+        let toml_str = include_str!("../voucher_standards/minuto_v1/standard.toml");
+
+        // 1. Parse die TOML in eine Struct, ignoriere die (ungültige) Signatur in der Datei.
+        let mut standard: VoucherStandardDefinition = toml::from_str(toml_str)
+            .expect("Failed to parse Minuto TOML template for tests");
+
+        // 2. Entferne die Signatur, erstelle den kanonischen Hash für die Signatur.
+        standard.signature = None;
+        let canonical_json_for_signing = to_canonical_json(&standard)
+            .expect("Failed to create canonical JSON for Minuto standard");
+        let hash_to_sign = get_hash(canonical_json_for_signing.as_bytes());
+
+        // 3. Erstelle die gültige Signatur mit dem Test-Issuer.
+        let signature = sign_ed25519(&issuer.signing_key, hash_to_sign.as_bytes());
+        let signature_block = SignatureBlock {
+            issuer_id: issuer.user_id.clone(),
+            signature: bs58::encode(signature.to_bytes()).into_string(),
+        };
+        standard.signature = Some(signature_block);
+
+        // 4. Der Konsistenz-Hash, der in Gutscheinen verwendet wird, ist der Hash, der signiert wurde.
+        (standard, hash_to_sign)
     };
-    pub static ref SILVER_STANDARD: VoucherStandardDefinition = {
-        let toml_str = include_str!("../voucher_standards/silver_standard.toml");
-        voucher_manager::load_standard_definition(toml_str).expect("Failed to load Silver standard for tests")
+
+    /// Lädt den Silber-Standard und signiert ihn zur Laufzeit für die Tests.
+    pub static ref SILVER_STANDARD: (VoucherStandardDefinition, String) = {
+        let issuer = &TEST_ISSUER;
+        let toml_str = include_str!("../voucher_standards/silver_v1/standard.toml");
+
+        let mut standard: VoucherStandardDefinition = toml::from_str(toml_str)
+            .expect("Failed to parse Silver TOML template for tests");
+
+        standard.signature = None;
+        let canonical_json = to_canonical_json(&standard).unwrap();
+        let hash = get_hash(canonical_json.as_bytes());
+        let signature = sign_ed25519(&issuer.signing_key, hash.as_bytes());
+        standard.signature = Some(SignatureBlock { issuer_id: issuer.user_id.clone(), signature: bs58::encode(signature.to_bytes()).into_string() });
+        (standard, hash)
     };
 }
 
@@ -91,12 +131,36 @@ pub fn generate_valid_mnemonic() -> String {
         .expect("Test mnemonic generation should not fail")
 }
 
-/// Lädt eine Standard-Definition aus dem `voucher_standards`-Verzeichnis.
+/// Liest eine Standard-TOML-Datei, ersetzt die Platzhalter-Signatur durch eine
+/// gültige, zur Laufzeit generierte Signatur und gibt den neuen Inhalt als String zurück.
+/// Dies stellt sicher, dass Tests, die rohe TOML-Strings benötigen, eine valide
+/// und verifizierbare Definition erhalten.
 #[allow(dead_code)]
-pub fn load_standard_definition(filename: &str) -> Result<VoucherStandardDefinition, anyhow::Error> {
-    let content = std::fs::read_to_string(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("voucher_standards").join(filename))?;
-    let standard: VoucherStandardDefinition = toml::from_str(&content)?;
-    Ok(standard)
+pub fn generate_signed_standard_toml(template_path: &str) -> String {
+    let issuer = &TEST_ISSUER;
+    let toml_str = std::fs::read_to_string(template_path)
+        .unwrap_or_else(|_| panic!("Failed to read TOML template: {}", template_path));
+
+    // 1. Parsen, dabei wird die ungültige Signatur im Template ignoriert/überschrieben.
+    let mut standard: VoucherStandardDefinition = toml::from_str(&toml_str)
+        .expect("Failed to parse TOML template for signing");
+
+    // 2. Platzhalter entfernen und Hash für die Signatur erstellen.
+    standard.signature = None;
+    let canonical_json_for_signing = to_canonical_json(&standard)
+        .expect("Failed to create canonical JSON for standard");
+    let hash_to_sign = get_hash(canonical_json_for_signing.as_bytes());
+
+    // 3. Gültige Signatur erstellen und einfügen.
+    let signature = sign_ed25519(&issuer.signing_key, hash_to_sign.as_bytes());
+    let signature_block = SignatureBlock {
+        issuer_id: issuer.user_id.clone(),
+        signature: bs58::encode(signature.to_bytes()).into_string(),
+    };
+    standard.signature = Some(signature_block);
+
+    // 4. Die aktualisierte Struktur zurück in einen TOML-String serialisieren.
+    toml::to_string(&standard).expect("Failed to serialize standard back to TOML string")
 }
 
 // --- Öffentliche Hilfsfunktionen für Integrationstests ---
@@ -178,10 +242,17 @@ pub fn add_voucher_to_wallet(
         ..Default::default()
     };
 
+    // Hash für den Aufruf von create_voucher neu berechnen.
+    let mut standard_to_hash = standard.clone();
+    standard_to_hash.signature = None;
+    let standard_hash = get_hash(to_canonical_json(&standard_to_hash)?);
+
     let mut voucher = voucher_manager::create_voucher(
         new_voucher_data,
         standard,
+        &standard_hash,
         &identity.signing_key,
+        "en", // Default-Sprache für Tests
     )?;
 
     if with_valid_guarantors {

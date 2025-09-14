@@ -11,10 +11,9 @@
 // Ausführen mit: cargo run --example playground_voucher_lifecycle
 
 use voucher_lib::{
-    create_transaction, create_voucher, crypto_utils, get_spendable_balance, load_standard_definition,
-    to_canonical_json, to_json, validate_voucher_against_standard,
+    create_transaction, create_voucher, crypto_utils, get_spendable_balance,
+    to_canonical_json, to_json, validate_voucher_against_standard, verify_and_parse_standard,
     Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue, VoucherCoreError,
-    VoucherStandardDefinition,
 };
 // Importiere die spezifischen Fehlertypen direkt aus ihren Modulen für die `match`-Anweisungen.
 use voucher_lib::services::{
@@ -27,8 +26,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- SETUP ---
     // Standard laden und Schlüsselpaare für alle Teilnehmer erzeugen
     // Lade den Standard aus der TOML-Datei
-    let standard_toml = std::fs::read_to_string("voucher_standards/minuto_standard.toml")?;
-    let standard: VoucherStandardDefinition = load_standard_definition(&standard_toml)?;
+    let standard_toml = std::fs::read_to_string("../voucher_standards/standard.toml")?;
+    let (standard, standard_hash) = verify_and_parse_standard(&standard_toml)?;
     println!(
         "\n✅ Standard '{}' erfolgreich geladen.",
         standard.metadata.name
@@ -68,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         collateral: Collateral { type_: "".into(), unit: "".into(), amount: "".into(), abbreviation: "".into(), description: "".into(), redeem_condition: "".into() },
         creator: base_creator_data.clone(),
     };
-    if let Err(e) = create_voucher(invalid_duration_data, &standard, &creator_priv) {
+    if let Err(e) = create_voucher(invalid_duration_data, &standard, &standard_hash, &creator_priv, "de") {
          match e {
             VoucherCoreError::Manager(VoucherManagerError::InvalidValidityDuration(reason)) => {
                 println!("✅ Erfolg! Erstellung wie erwartet fehlgeschlagen.");
@@ -97,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         creator: base_creator_data,
     };
-    let mut voucher = create_voucher(voucher_data, &standard, &creator_priv)?;
+    let mut voucher = create_voucher(voucher_data, &standard, &standard_hash, &creator_priv, "de")?;
     println!("✅ Gutschein erfolgreich erstellt.");
     println!("   -> Die Beschreibung wurde aus der Vorlage generiert: \"{}\"", voucher.description);
 

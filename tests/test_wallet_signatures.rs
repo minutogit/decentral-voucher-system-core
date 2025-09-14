@@ -47,10 +47,14 @@ fn setup_voucher_for_alice(
         collateral: Default::default(),
         creator: creator_data,
     }; 
+
+    let (standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+
     let voucher = voucher_manager::create_voucher(
         voucher_data,
-        &MINUTO_STANDARD,
-        &alice_identity.signing_key,
+        standard,
+        standard_hash,
+        &alice_identity.signing_key, "en"
     )
     .unwrap();
     let local_id =
@@ -76,10 +80,11 @@ fn test_full_signature_workflow_via_wallet() {
         setup_voucher_for_alice(&mut alice_wallet, alice_identity);
     let voucher_id = voucher.voucher_id;
 
+    let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     // Erste Validierung: Muss fehlschlagen, da Bürgen fehlen.
     let (voucher_in_store, _) = alice_wallet.voucher_store.vouchers.get(&local_id).unwrap();
     assert!(
-        voucher_validation::validate_voucher_against_standard(voucher_in_store, &MINUTO_STANDARD)
+        voucher_validation::validate_voucher_against_standard(voucher_in_store, minuto_standard)
             .is_err()
     );
 
@@ -131,7 +136,7 @@ fn test_full_signature_workflow_via_wallet() {
     assert_eq!(voucher_with_sig.guarantor_signatures.len(), 1);
     assert_eq!(voucher_with_sig.guarantor_signatures[0].guarantor_id, bob_identity.user_id);
     assert!(
-        matches!(voucher_validation::validate_voucher_against_standard(voucher_with_sig, &MINUTO_STANDARD).unwrap_err(),
+        matches!(voucher_validation::validate_voucher_against_standard(voucher_with_sig, minuto_standard).unwrap_err(),
         VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::GuarantorRequirementsNotMet(_)))
     );
 
@@ -229,10 +234,15 @@ fn test_workflow_fails_with_mismatched_voucher_id() {
         },
         ..Default::default()
     };
+
+    let (minuto_standard, minuto_standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+
     let voucher_b = voucher_manager::create_voucher(
         voucher_data_b,
-        &MINUTO_STANDARD,
+        minuto_standard,
+        minuto_standard_hash,
         &alice_identity.signing_key,
+        "en"
     ).unwrap();
 
     // 2. Bob erhält (korrekt) Gutschein A zur Signierung, entscheidet sich aber, die ID von B in seine Signatur zu schreiben.

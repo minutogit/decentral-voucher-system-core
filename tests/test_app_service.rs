@@ -1,6 +1,7 @@
 //! # tests/test_app_service.rs
 //!
 //! Integrationstest für die `AppService`-Fassade.
+//! Integrationstest für die `AppService`-Fassade.
 //! Dieser Test simuliert einen vollständigen End-to-End-Benutzer-Workflow
 //! und einen Signatur-Roundtrip, inspiriert von `test_wallet_integration.rs`.
 
@@ -14,16 +15,18 @@ use voucher_lib::services::voucher_manager::NewVoucherData;
 mod test_utils;
 use test_utils::{
     create_guarantor_signature_data, debug_open_container, generate_valid_mnemonic,
-    load_standard_definition,
+    generate_signed_standard_toml, SILVER_STANDARD,
 };
 
 /// Testet den vollständigen Lebenszyklus von Profilerstellung, Login,
 /// Voucher-Erstellung und Transfer zwischen zwei Benutzern.
 #[test]
 fn test_app_service_full_lifecycle() {
-    // --- 1. Setup ---
-    let standard =
-        load_standard_definition("silver_standard.toml").expect("Failed to load standard");
+    // --- 1. Setup ---    
+    // Lade den Standard und signiere ihn zur Laufzeit, um eine valide TOML-Datei zu erhalten.
+    let silver_standard_toml =
+        generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
+    let standard = &SILVER_STANDARD.0;
     let dir_alice = tempdir().expect("Failed to create temp dir for Alice");
     let dir_bob = tempdir().expect("Failed to create temp dir for Bob");
 
@@ -77,8 +80,9 @@ fn test_app_service_full_lifecycle() {
         },
         ..Default::default()
     };
+
     service_alice
-        .create_new_voucher(&standard, voucher_data, password)
+        .create_new_voucher(&silver_standard_toml, "en", voucher_data, password)
         .expect("Voucher creation failed");
 
     let balance_alice = service_alice.get_total_balance_by_currency().unwrap();
@@ -146,8 +150,9 @@ fn test_app_service_mnemonic_helpers() {
 /// Testet den Signatur-Workflow über die AppService-Fassade.
 #[test]
 fn test_app_service_signature_roundtrip() {
-    let standard =
-        load_standard_definition("minuto_standard.toml").expect("Failed to load standard");
+    // Lade den Standard und signiere ihn zur Laufzeit, um eine valide TOML-Datei für den Service zu erhalten.
+    let minuto_standard_toml =
+        generate_signed_standard_toml("voucher_standards/minuto_v1/standard.toml");
     let dir_creator = tempdir().unwrap();
     let dir_guarantor = tempdir().unwrap();
     let password = "sig-password";
@@ -170,7 +175,8 @@ fn test_app_service_signature_roundtrip() {
 
     let voucher = service_creator
         .create_new_voucher(
-            &standard,
+            &minuto_standard_toml,
+            "en",
             NewVoucherData {
                 nominal_value: NominalValue {
                     amount: "50".to_string(),

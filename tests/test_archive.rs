@@ -3,48 +3,24 @@
 //! Testet die Funktionalität des `VoucherArchive`-Traits und der `FileVoucherArchive`-Implementierung.
 
 use voucher_lib::{
-    archive::file_archive::FileVoucherArchive,
-    UserIdentity,
-    models::{
-        profile::{UserProfile},
-        voucher::{Address, Creator, NominalValue},
-        voucher_standard_definition::VoucherStandardDefinition,
-    },
-    services::{
-        crypto_utils,
-        voucher_manager::{self, NewVoucherData},
-    },
-    wallet::Wallet,
+    archive::file_archive::FileVoucherArchive, models::profile::UserProfile,
+    models::voucher::{Creator, NominalValue}, services::voucher_manager, wallet::Wallet,
 };
 use std::fs;
 use tempfile::tempdir;
 
-// --- Hilfsfunktionen (könnten in ein gemeinsames Test-Modul ausgelagert werden) ---
-
-fn setup_identity(seed: &str) -> UserIdentity {
-    let (public_key, signing_key) =
-        crypto_utils::generate_ed25519_keypair_for_tests(Some(seed));
-    let user_id = crypto_utils::create_user_id(&public_key, Some("ar")).unwrap();
-    UserIdentity {
-        signing_key,
-        public_key,
-        user_id,
-    }
-}
-
-fn load_test_standard() -> VoucherStandardDefinition {
-    let toml_str = fs::read_to_string("voucher_standards/silver_standard.toml").unwrap();
-    voucher_manager::load_standard_definition(&toml_str).expect("Failed to load standard")
-}
+// Binde das zentrale Test-Utils-Modul ein.
+mod test_utils;
+use test_utils::{ACTORS, SILVER_STANDARD};
 
 // --- Haupttest ---
 
 #[test]
 fn test_voucher_archiving_on_full_spend() {
     // 1. SETUP
-    // Erstelle Alice (Senderin) und Bob (Empfänger).
-    let alice_identity = setup_identity("alice_archive_test");
-    let bob_identity = setup_identity("bob_archive_test");
+    // Verwende die vordefinierten Test-Akteure aus `test_utils`.
+    let alice_identity = &ACTORS.alice;
+    let bob_identity = &ACTORS.bob;
 
     let mut alice_wallet = Wallet {
         profile: UserProfile { user_id: alice_identity.user_id.clone() },
@@ -57,25 +33,15 @@ fn test_voucher_archiving_on_full_spend() {
     // Erstelle Alices Archiv im temporären Verzeichnis.
     let temp_dir = tempdir().unwrap();
     let archive = FileVoucherArchive::new(temp_dir.path());
-    let standard = load_test_standard();
+    // Verwende den vordefinierten, zur Laufzeit signierten Standard.
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
 
     // Alice erstellt einen Gutschein und fügt ihn ihrem Wallet hinzu.
     let voucher = {
         let creator_data = Creator {
             id: alice_identity.user_id.clone(),
-            first_name: "Alice".to_string(),
-            last_name: "Test".to_string(),
-            signature: "".to_string(),
-            address: Address::default(),
-            organization: None,
-            community: None,
-            phone: None,
-            email: None,
-            url: None,
-            gender: "9".to_string(),
-            service_offer: None,
-            needs: None,
-            coordinates: "0,0".to_string(),
+            // Fülle nur die nötigsten Felder für diesen Test.
+            ..Default::default()
         };
         let nominal_value = NominalValue {
             amount: "100.0000".to_string(), // KORREKTUR: Vier Dezimalstellen für den Silber-Standard
@@ -83,14 +49,13 @@ fn test_voucher_archiving_on_full_spend() {
             abbreviation: "".to_string(),
             description: "".to_string(),
         };
-        let voucher_data = NewVoucherData {
-            validity_duration: Some("P3Y".to_string()),
-            non_redeemable_test_voucher: false,
+        let voucher_data = voucher_manager::NewVoucherData {
             nominal_value,
             creator: creator_data,
-            collateral: Default::default(),
+            ..Default::default()
         };
-        voucher_manager::create_voucher(voucher_data, &standard, &alice_identity.signing_key)
+
+        voucher_manager::create_voucher(voucher_data, standard, standard_hash, &alice_identity.signing_key, "en")
             .unwrap()
     };
 

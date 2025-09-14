@@ -14,10 +14,9 @@ use voucher_lib::archive::file_archive::FileVoucherArchive;
 use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat};
 use std::path::Path;
 use test_utils::{setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
-use voucher_lib::models::conflict::TransactionFingerprint; 
-use voucher_lib::{UserIdentity, VoucherStatus};
+use voucher_lib::{services::crypto_utils, UserIdentity, VoucherStatus};
+use voucher_lib::models::conflict::TransactionFingerprint;
 use voucher_lib::models::voucher::{Address, Collateral, Creator, NominalValue, Voucher};
-use voucher_lib::services::crypto_utils::{get_hash};
 use voucher_lib::services::voucher_manager::{self, NewVoucherData};
 use voucher_lib::wallet::Wallet;
 
@@ -91,9 +90,11 @@ fn test_fingerprint_generation() {
 
     // Erstelle einen Gutschein mit 2 Transaktionen (init + transfer)
     let voucher_data = new_test_voucher_data(identity.user_id.clone());
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
     // create_voucher erwartet den &SigningKey, nicht die ganze Identity.
-    let mut voucher = voucher_manager::create_voucher(voucher_data, &SILVER_STANDARD, &identity.signing_key).unwrap();
-    voucher = voucher_manager::create_transaction(&voucher, &SILVER_STANDARD, &identity.user_id, &identity.signing_key, "recipient_id", "50").unwrap();
+    let mut voucher = voucher_manager::create_voucher(voucher_data, standard, standard_hash, &identity.signing_key, "en").unwrap();
+    voucher = voucher_manager::create_transaction(&voucher, standard, &identity.user_id, &identity.signing_key, "recipient_id", "50").unwrap();
     wallet.add_voucher_to_store(voucher.clone(), VoucherStatus::Active, &identity.user_id).unwrap();
 
     // Aktion
@@ -103,7 +104,7 @@ fn test_fingerprint_generation() {
     assert_eq!(wallet.fingerprint_store.own_fingerprints.values().map(|v| v.len()).sum::<usize>(), 2, "Es sollten Fingerprints für 2 Transaktionen existieren.");
 
     let tx1 = &voucher.transactions[0];
-    let expected_hash1 = get_hash(format!("{}{}", tx1.prev_hash, tx1.sender_id));
+    let expected_hash1 = crypto_utils::get_hash(format!("{}{}", tx1.prev_hash, tx1.sender_id));
     assert!(wallet.fingerprint_store.own_fingerprints.contains_key(&expected_hash1), "Fingerprint für die init-Transaktion fehlt.");
 
     // Berechne den erwarteten, auf das Monatsende gerundeten `valid_until`-Wert.
@@ -207,8 +208,10 @@ fn test_proactive_double_spend_prevention_in_wallet() {
     let recipient2_identity = &ACTORS.recipient2;
 
     // Sender erhält einen initialen Gutschein.
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
     let voucher_data = new_test_voucher_data(sender_identity.user_id.clone());
-    let initial_voucher = voucher_manager::create_voucher(voucher_data, &SILVER_STANDARD, &sender_identity.signing_key).unwrap();
+    let initial_voucher = voucher_manager::create_voucher(voucher_data, standard, standard_hash, &sender_identity.signing_key, "en").unwrap();
     // Wir klonen den Gutschein hier, damit die 'initial_voucher'-Variable für den späteren Test gültig bleibt.
     sender_wallet.add_voucher_to_store(initial_voucher.clone(), VoucherStatus::Active, &sender_identity.user_id).unwrap();
     let initial_local_id = sender_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
@@ -218,7 +221,7 @@ fn test_proactive_double_spend_prevention_in_wallet() {
     // Dies sollte erfolgreich sein und den Fingerprint der Transaktion im Wallet des Senders speichern.
     let transfer1_result = sender_wallet.create_transfer(
         sender_identity,
-        &SILVER_STANDARD,
+        standard,
         &initial_local_id,
         &recipient1_identity.user_id,
         "100",
@@ -239,7 +242,7 @@ fn test_proactive_double_spend_prevention_in_wallet() {
     // Dies MUSS fehlschlagen, weil `create_transfer` den existierenden Fingerprint aus der ersten Transaktion erkennt.
     let transfer2_result = sender_wallet.create_transfer(
         sender_identity,
-        &SILVER_STANDARD,
+        standard,
         &initial_local_id, // Wichtig: Dieselbe lokale ID wird wiederverwendet
         &recipient2_identity.user_id,
         "100",
@@ -269,8 +272,10 @@ fn test_local_double_spend_detection_lifecycle() {
     let mut alice_wallet = setup_test_wallet(alice_identity, "alice", storage_path);
     let mut bob_wallet = setup_test_wallet(bob_identity, "bob", storage_path);
 
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
     let voucher_data = new_test_voucher_data(alice_identity.user_id.clone());
-    let initial_voucher = voucher_manager::create_voucher(voucher_data, &SILVER_STANDARD, &alice_identity.signing_key).unwrap();
+    let initial_voucher = voucher_manager::create_voucher(voucher_data, standard, standard_hash, &alice_identity.signing_key, "en").unwrap();
     alice_wallet.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &alice_identity.user_id).unwrap();
 
     // Alice verwendet die neue, korrekte Methode, um den Gutschein an Bob zu senden.
@@ -278,7 +283,7 @@ fn test_local_double_spend_detection_lifecycle() {
     let alice_initial_local_id = alice_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
     let (bundle_to_bob, _) = alice_wallet.create_transfer(
         alice_identity,
-        &SILVER_STANDARD,
+        standard,
         &alice_initial_local_id,
         &bob_identity.user_id,
         "100",
@@ -305,9 +310,9 @@ fn test_local_double_spend_detection_lifecycle() {
     // und erstellt manuell zwei widersprüchliche Transaktionen aus demselben Zustand.
     // Wichtig: Wir fügen eine kleine Verzögerung ein, um sicherzustellen, dass die Zeitstempel
     // der betrügerischen Transaktionen deterministisch unterscheidbar sind.
-    let voucher_for_charlie = voucher_manager::create_transaction(&voucher_from_bob, &SILVER_STANDARD, &bob_identity.user_id, &bob_identity.signing_key, &charlie_identity.user_id, "100").unwrap();
+    let voucher_for_charlie = voucher_manager::create_transaction(&voucher_from_bob, standard, &bob_identity.user_id, &bob_identity.signing_key, &charlie_identity.user_id, "100").unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));
-    let voucher_for_david = voucher_manager::create_transaction(&voucher_from_bob, &SILVER_STANDARD, &bob_identity.user_id, &bob_identity.signing_key, &david_identity.user_id, "100").unwrap();
+    let voucher_for_david = voucher_manager::create_transaction(&voucher_from_bob, standard, &bob_identity.user_id, &bob_identity.signing_key, &david_identity.user_id, "100").unwrap();
 
     // Wir merken uns die IDs der beiden widersprüchlichen Transaktionen.
     let winning_tx_id = voucher_for_charlie.transactions.last().unwrap().t_id.clone();
@@ -333,7 +338,7 @@ fn test_local_double_spend_detection_lifecycle() {
     let charlie_local_id = charlie_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
     let (bundle_to_alice_1, _) = charlie_wallet.create_transfer(
         charlie_identity,
-        &SILVER_STANDARD,
+        standard,
         &charlie_local_id,
         &alice_identity.user_id,
         "100",
@@ -361,7 +366,7 @@ fn test_local_double_spend_detection_lifecycle() {
     let david_local_id = david_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
     let (bundle_to_alice_2, _) = david_wallet.create_transfer(
         david_identity,
-        &SILVER_STANDARD,
+        standard,
         &david_local_id,
         &alice_identity.user_id,
         "100",
@@ -404,7 +409,7 @@ fn test_local_double_spend_detection_lifecycle() {
     // Der Versuch, den unter Quarantäne stehenden Gutschein (die 'Verlierer'-Instanz) auszugeben, muss fehlschlagen.
     let transfer_attempt = alice_wallet.create_transfer(
         alice_identity,
-        &SILVER_STANDARD,
+        standard,
         &loser_local_id.unwrap(),
         &bob_identity.user_id,
         "100", None, // notes

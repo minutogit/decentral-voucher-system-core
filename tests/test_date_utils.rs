@@ -5,11 +5,14 @@
 // als `pub` oder `pub(crate)` deklariert werden, um von außerhalb sichtbar zu sein.
 
 use voucher_lib::{
-    self, create_voucher, crypto_utils, to_canonical_json, validate_voucher_against_standard,
+    services::{
+        crypto_utils,
+        voucher_manager::{self, create_voucher},
+        voucher_validation::{validate_voucher_against_standard, ValidationError},
+    },
+    services::utils::to_canonical_json, // Behalte diesen Import, da er hier verwendet wird.
     NewVoucherData, VoucherCoreError,
 };
-use voucher_lib::services::voucher_manager::{self};
-use voucher_lib::services::voucher_validation::ValidationError;
 use chrono::{DateTime, Utc};
 mod test_utils;
 use test_utils::{ACTORS, SILVER_STANDARD};
@@ -108,7 +111,7 @@ fn test_round_up_date_logic() {
 #[test]
 fn test_chronological_validation_with_timezones() {
     // 1. Setup
-    let standard = &SILVER_STANDARD;
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     let test_user = &ACTORS.test_user;
 
     let creator_data = voucher_lib::Creator {
@@ -124,8 +127,9 @@ fn test_chronological_validation_with_timezones() {
         creator: creator_data,
         ..Default::default()
     };
+
     // KORREKTUR: Übergebe den korrekten `signing_key` vom Typ &SigningKey.
-    let mut voucher = create_voucher(voucher_data, standard, &test_user.signing_key).unwrap();
+    let mut voucher = create_voucher(voucher_data, standard, standard_hash, &test_user.signing_key, "en").unwrap();
 
     // 2. Manipuliere den Zeitstempel der `init`-Transaktion so, dass er VOR dem Erstellungsdatum des Gutscheins liegt.
     // Die Validierung sollte dies als Fehler erkennen.

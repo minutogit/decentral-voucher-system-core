@@ -17,6 +17,7 @@ fn create_base_voucher(creator_id: &str, amount: &str) -> Voucher {
         voucher_standard: VoucherStandard {
             name: "Test Standard".to_string(),
             uuid: "uuid-test".to_string(),
+            standard_definition_hash: "dummy-hash-for-test".to_string(),
         },
         voucher_id: "voucher-123".to_string(),
         voucher_nonce: "test-nonce".to_string(),
