@@ -103,6 +103,8 @@ pub enum ValidationError {
     InvalidSignature(String),
     /// Der Betrag hat mehr Nachkommastellen als vom Standard erlaubt.
     TooManyDecimalPlaces { allowed: u32, found: u32 },
+    /// Der Typ einer Transaktion ist laut Standard nicht erlaubt.
+    TransactionTypeNotAllowed { t_type: String, allowed: Vec<String> },
 }
 
 impl fmt::Display for ValidationError {
@@ -144,6 +146,7 @@ impl fmt::Display for ValidationError {
             Self::InvalidBundleSignature => write!(f, "The transaction bundle signature is invalid"),
             Self::InvalidSignature(signer_id) => write!(f, "Invalid digital signature for signer: {}", signer_id),
             Self::TooManyDecimalPlaces { allowed, found } => write!(f, "Invalid amount precision. Allowed up to {} decimal places, but found {}", allowed, found),
+            Self::TransactionTypeNotAllowed { t_type, allowed } => write!(f, "Transaction type '{}' is not allowed by the standard. Allowed types are: {:?}", t_type, allowed),
         }
     }
 }
@@ -532,6 +535,24 @@ fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) 
         prev_timestamp = current_timestamp;
 
         // 3. Geschäftslogik validieren (Guthaben, Splits etc.).
+
+        // NEUE PRÜFUNG: Ist der Transaktionstyp überhaupt erlaubt?
+        // Ein voller Transfer hat einen leeren `t_type` String. Wir müssen das für die Prüfung normalisieren.
+        // Wenn `allowed_transaction_types` leer ist, wird nichts geprüft (Standardverhalten).
+        if !standard.validation.allowed_transaction_types.is_empty() {
+            let type_to_check = if transaction.t_type.is_empty() {
+                "transfer".to_string() // Normalisierter Name für einen vollen Transfer
+            } else {
+                transaction.t_type.clone()
+            };
+
+            if !standard.validation.allowed_transaction_types.contains(&type_to_check) {
+                return Err(ValidationError::TransactionTypeNotAllowed {
+                    t_type: type_to_check,
+                    allowed: standard.validation.allowed_transaction_types.clone(),
+                }.into());
+            }
+        }
         let sender_id = &transaction.sender_id;
         let sender_balance = *balances.get(sender_id).unwrap_or(&Decimal::ZERO);
 

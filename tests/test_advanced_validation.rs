@@ -701,7 +701,7 @@ fn test_tx_fails_on_send_to_self_after_init() {
         t_time: voucher_lib::services::utils::get_current_timestamp(),
         sender_id: recipient.user_id.clone(),
         recipient_id: recipient.user_id.clone(), // Sendet an sich selbst
-        amount: "10.0000".to_string(),
+        amount: "40.0000".to_string(), // KORREKTUR: Der Betrag muss dem Guthaben des Senders entsprechen für einen validen vollen Transfer.
         sender_remaining_amount: None,
         sender_signature: "".to_string(),
     };

@@ -56,7 +56,7 @@ default_validity_duration = "P5Y"
 [validation]
 issuance_minimum_validity_duration = "P3Y"
 amount_decimal_places = 4
-allowed_transaction_types = ["init", "split", "redeem"]
+allowed_transaction_types = ["init", "split", "transfer", "redeem"]
 required_voucher_fields = [
   "voucher_id",
   "creation_date",

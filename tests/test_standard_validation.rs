@@ -363,7 +363,6 @@ mod advanced_validation_tests {
     }
 
     #[test]
-    #[ignore] // HINWEIS: Dieser Test wird fehlschlagen, bis die Validierungslogik für `allowed_transaction_types` in `voucher_validation.rs` implementiert ist.
     fn test_transaction_fails_if_type_not_allowed() {
         // Szenario: Standard erlaubt nur "init", aber wir versuchen einen Transfer.
         let (restricted_standard, _hash) = create_custom_standard(&MINUTO_STANDARD.0, |s| {
@@ -386,6 +385,12 @@ mod advanced_validation_tests {
 
         // Erwartung: Die Validierung sollte den ungültigen Transaktionstyp erkennen.
         assert!(result.is_err());
-        // Hier wird ein spezifischer Validierungsfehler erwartet.
+        match result.unwrap_err() {
+            VoucherCoreError::Validation(e) => {
+                // Wir erwarten den neuen, spezifischen Fehler.
+                assert!(e.to_string().contains("Transaction type 'transfer' is not allowed"));
+            }
+            e => panic!("Expected a transaction type validation error, but got {:?}", e),
+        }
     }
 }

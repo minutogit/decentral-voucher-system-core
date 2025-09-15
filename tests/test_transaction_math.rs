@@ -178,7 +178,7 @@ fn test_chained_transaction_math_and_scaling() {
         dec!(40.0066) // Guthaben ist nur der Betrag der letzten Transaktion
     );
     let tx5 = current_voucher.transactions.last().unwrap();
-    assert_eq!(tx5.t_type, ""); // Kein "split" mehr
+    assert_eq!(tx5.t_type, "transfer"); // Korrigiert: Ein voller Transfer hat jetzt den Typ "transfer".
     assert!(tx5.sender_remaining_amount.is_none());
     assert_eq!(tx5.amount, "40.0066");
 

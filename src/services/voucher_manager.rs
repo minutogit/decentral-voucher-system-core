@@ -302,7 +302,7 @@ pub fn create_transaction(
         let remaining = spendable_balance - amount_to_send;
         ("split".to_string(), Some(decimal_utils::format_for_storage(&remaining, decimal_places)))
     } else {
-        ("".to_string(), None)
+        ("transfer".to_string(), None)
     };
 
     let prev_hash = get_hash(to_canonical_json(voucher.transactions.last().unwrap())?);
@@ -334,6 +334,11 @@ pub fn create_transaction(
 
     let mut new_voucher = voucher.clone();
     new_voucher.transactions.push(new_transaction);
+
+    // SICHERHEITSPATCH: Validiere den *neuen* Gutschein-Zustand, BEVOR er zurückgegeben wird.
+    // Dies stellt sicher, dass keine Transaktion erstellt werden kann, die gegen die Regeln des Standards verstößt.
+    crate::services::voucher_validation::validate_voucher_against_standard(&new_voucher, standard)?;
+
 
     Ok(new_voucher)
 }
