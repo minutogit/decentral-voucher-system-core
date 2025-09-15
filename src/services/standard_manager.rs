@@ -45,13 +45,24 @@ pub fn verify_and_parse_standard(
     // 4. Berechne den Hash des kanonischen JSONs. Dies ist der Konsistenz-Hash.
     let consistency_hash = get_hash(canonical_json.as_bytes());
 
-    // 5. Dekodiere die Signatur und extrahiere den Public Key des Herausgebers.
-    let signature_bytes = bs58::decode(&signature_block.signature)
-        .into_vec()
-        .map_err(|e| StandardDefinitionError::SignatureDecode(e.to_string()))?;
-    let signature = Signature::from_slice(&signature_bytes)
-        .map_err(|e| StandardDefinitionError::SignatureDecode(e.to_string()))?;
-
+    // 5. Dekodiere die Signatur, validiere ihr Format und extrahiere den Public Key.
+    // Wir verwenden explizite `match`-Blöcke, um die Fehlerbehandlung absolut robust zu machen.
+    let signature_bytes = match bs58::decode(&signature_block.signature).into_vec() {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return Err(VoucherCoreError::Standard(
+                StandardDefinitionError::SignatureDecode(e.to_string()),
+            ));
+        }
+    };
+    let signature = match Signature::from_slice(&signature_bytes) {
+        Ok(sig) => sig,
+        Err(e) => {
+            return Err(VoucherCoreError::Standard(
+                StandardDefinitionError::SignatureDecode(e.to_string()),
+            ));
+        }
+    };
     let public_key = get_pubkey_from_user_id(&signature_block.issuer_id)?;
 
     // 6. Verifiziere die Signatur gegen den Konsistenz-Hash.

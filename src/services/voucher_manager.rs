@@ -27,6 +27,8 @@ pub enum VoucherManagerError {
         allowed: u32,
         found: u32,
     },
+    /// Ein Template-Wert aus dem Standard ist ungültig (z.B. leer).
+    InvalidTemplateValue(String),
     /// Die angegebene Gültigkeitsdauer erfüllt nicht die Mindestanforderungen des Standards.
     InvalidValidityDuration(String),
     /// Ein allgemeiner Fehler mit einer Beschreibung.
@@ -44,6 +46,9 @@ impl fmt::Display for VoucherManagerError {
             }
             VoucherManagerError::AmountPrecisionExceeded { allowed, found } => {
                 write!(f, "Amount precision exceeds standard limit. Allowed: {}, Found: {}", allowed, found)
+            }
+            VoucherManagerError::InvalidTemplateValue(s) => {
+                write!(f, "Invalid template value from standard: {}", s)
             }
             VoucherManagerError::InvalidValidityDuration(s) => write!(f, "Invalid validity duration: {}", s),
             VoucherManagerError::Generic(s) => write!(f, "Voucher Manager Error: {}", s),
@@ -94,6 +99,19 @@ pub fn create_voucher(
     creator_signing_key: &SigningKey,
     lang_preference: &str,
 ) -> Result<Voucher, VoucherCoreError> {
+    // SICHERHEITSPATCH: Validiere kritische Template-Werte aus dem Standard,
+    // um sicherzustellen, dass keine ungültigen Gutscheine erstellt werden.
+    if verified_standard.template.fixed.nominal_value.unit.is_empty() {
+        return Err(VoucherManagerError::InvalidTemplateValue(
+            "template.fixed.nominal_value.unit cannot be empty".to_string(),
+        ).into());
+    }
+    if verified_standard.template.fixed.primary_redemption_type.is_empty() {
+        return Err(VoucherManagerError::InvalidTemplateValue(
+            "template.fixed.primary_redemption_type cannot be empty".to_string(),
+        ).into());
+    }
+
     let creation_date_str = get_current_timestamp();
     let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
     let nonce = bs58::encode(nonce_bytes).into_string();
@@ -134,10 +152,19 @@ pub fn create_voucher(
     final_nominal_value.unit = verified_standard.template.fixed.nominal_value.unit.clone();
     final_nominal_value.abbreviation = verified_standard.metadata.abbreviation.clone();
 
-    let mut final_collateral = data.collateral;
-    final_collateral.type_ = verified_standard.template.fixed.collateral.type_.clone();
-    final_collateral.description = verified_standard.template.fixed.collateral.description.clone();
-    final_collateral.redeem_condition = verified_standard.template.fixed.collateral.redeem_condition.clone();
+    // KORRIGIERT: Collateral wird nur befüllt, wenn `type_` im Standard nicht leer ist.
+    // Ansonsten wird sichergestellt, dass es leer ist, um das Injizieren von nicht-standard-konformen
+    // Sicherheiten zu verhindern.
+    let final_collateral = if !verified_standard.template.fixed.collateral.type_.is_empty() {
+        Collateral {
+            type_: verified_standard.template.fixed.collateral.type_.clone(),
+            description: verified_standard.template.fixed.collateral.description.clone(),
+            redeem_condition: verified_standard.template.fixed.collateral.redeem_condition.clone(),
+            ..data.collateral // Übernimmt `amount`, etc. aus den Eingabedaten
+        }
+    } else {
+        Collateral::default() // Stellt sicher, dass keine Sicherheit eingetragen wird.
+    };
 
     // NEU: Logik zur Auswahl des mehrsprachigen Beschreibungstextes
     let description_template = standard_manager::get_localized_text(
