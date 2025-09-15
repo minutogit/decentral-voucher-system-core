@@ -67,8 +67,16 @@ footnote = "Optionaler Fußnotentext."
 # (String) Definiert den primären Zweck, für den der Gutschein eingelöst werden kann.
 primary_redemption_type = "goods_or_services"
 
-# (Boolean) Gibt an, ob die Nennwerte von Gutscheinen dieses Standards "fungibel" sind.
-is_fungible = true
+# (Boolean) Gibt an, ob die Nennwerte von Gutscheinen dieses Standards addierbar sind ("summable").
+#
+# true:  Werte sind wie Währung und repräsentieren eine Menge einer einheitlichen
+#        Einheit (z.B. "Minuten", "Unzen"). Sie können sinnvoll addiert
+#        werden (10 Unzen + 20 Unzen = 30 Unzen).
+#
+# false: Werte sind wie einzigartige Tickets und repräsentieren einen
+#        spezifischen, nicht austauschbaren Anspruch (z.B. "1 Haarschnitt",
+#        "1 Konzertkarte für Platz A1"). Das Addieren der Werte ergibt keinen Sinn.
+is_summable = true
 
 # (Boolean) Gibt an, ob der Gutschein teilbar ist.
 is_divisible = true
