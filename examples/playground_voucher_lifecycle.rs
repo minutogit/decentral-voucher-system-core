@@ -16,9 +16,8 @@ use voucher_lib::{
     Address, Collateral, Creator, GuarantorSignature, NewVoucherData, NominalValue, VoucherCoreError,
 };
 // Importiere die spezifischen Fehlertypen direkt aus ihren Modulen für die `match`-Anweisungen.
-use voucher_lib::services::{
-    voucher_manager::VoucherManagerError, voucher_validation::ValidationError,
-};
+use voucher_lib::error::ValidationError;
+use voucher_lib::services::voucher_manager::VoucherManagerError;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- VOUCHER LIFECYCLE PLAYGROUND ---");
@@ -116,9 +115,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- SCHRITT 2: Unvollständigen Gutschein validieren (erwarteter Fehler) ---
     println!("\n--- SCHRITT 2: Validiere unvollständigen Gutschein (erwarteter Fehler) ---");
     match validate_voucher_against_standard(&voucher, &standard) {
-        Err(VoucherCoreError::Validation(ValidationError::GuarantorRequirementsNotMet(reason))) => {
+        Err(VoucherCoreError::Validation(ValidationError::CountOutOfBounds {
+            field, min, max, found,
+        })) if field == "guarantor_signatures" => {
             println!("✅ Erfolg! Validierung wie erwartet fehlgeschlagen.");
-            println!("   Grund: {}", reason);
+            println!("   Grund: Feld '{}' hat {} Einträge, aber es sind min {} und max {} gefordert.",
+                     field, found, min, max);
         }
         Ok(_) => eprintln!("❌ Fehler: Validierung war unerwartet erfolgreich."),
         Err(e) => eprintln!("❌ Fehler: Unerwarteter Validierungsfehler: {:}", e),

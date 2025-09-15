@@ -14,7 +14,7 @@ use voucher_lib::services::voucher_manager;
 use voucher_lib::error::VoucherCoreError;
 use voucher_lib::{AuthMethod, FileStorage, Storage, StorageError, Wallet};
 mod test_utils;
-use test_utils::{add_voucher_to_wallet, setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD};
+use test_utils::{add_voucher_to_wallet, setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
 
 // --- Hilfsfunktionen ---
 fn create_test_voucher(identity: &UserIdentity) -> Voucher {
@@ -39,7 +39,7 @@ fn create_test_voucher(identity: &UserIdentity) -> Voucher {
         ..Default::default()
     };
     // KORREKTUR: Passe den Aufruf an die neue 5-parametrige Signatur an.
-    let (standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     voucher_manager::create_voucher(new_voucher_data, standard, standard_hash, &identity.signing_key, "en")
         .expect("Voucher creation failed")
 }

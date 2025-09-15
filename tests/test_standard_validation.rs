@@ -153,7 +153,9 @@ mod voucher_integration_tests {
             nominal_value: voucher_lib::models::voucher::NominalValue { amount: "888".to_string(), ..Default::default() },
             ..Default::default()
         };
-        let voucher_de = voucher_manager::create_voucher(new_voucher_data_de, &MINUTO_STANDARD.0, &MINUTO_STANDARD.1, &ACTORS.alice.signing_key, "de").unwrap();
+        let voucher_de = test_utils::create_voucher_for_manipulation(
+            new_voucher_data_de, &MINUTO_STANDARD.0, &MINUTO_STANDARD.1, &ACTORS.alice.signing_key, "de"
+        );
 
         // Fall B: Erstelle denselben Gutschein mit einer nicht vorhandenen Präferenz (sollte auf Englisch zurückfallen).
         let new_voucher_data_fr = NewVoucherData {
@@ -161,7 +163,9 @@ mod voucher_integration_tests {
             nominal_value: voucher_lib::models::voucher::NominalValue { amount: "888".to_string(), ..Default::default() },
             ..Default::default()
         };
-        let voucher_fr = voucher_manager::create_voucher(new_voucher_data_fr, &MINUTO_STANDARD.0, &MINUTO_STANDARD.1, &ACTORS.alice.signing_key, "fr").unwrap();
+        let voucher_fr = test_utils::create_voucher_for_manipulation(
+            new_voucher_data_fr, &MINUTO_STANDARD.0, &MINUTO_STANDARD.1, &ACTORS.alice.signing_key, "fr"
+        );
 
         assert!(voucher_de.description.contains("Minuten qualitativer Leistung"));
         assert!(voucher_fr.description.contains("minutes of quality performance"));
@@ -234,7 +238,7 @@ mod advanced_validation_tests {
     #[test]
     fn test_transaction_fails_if_type_not_allowed() {
         let (restricted_standard, _hash) = create_custom_standard(&MINUTO_STANDARD.0, |s| {
-            s.validation.allowed_transaction_types = vec!["init".to_string()];
+            s.validation.as_mut().unwrap().behavior_rules.as_mut().unwrap().allowed_t_types = Some(vec!["init".to_string()]);
         });
 
         let identity = &ACTORS.alice;

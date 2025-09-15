@@ -105,7 +105,7 @@ pub struct MinMax {
 }
 
 /// Bündelt alle Regeln zur Zählung von Elementen (z.B. Signaturen, Transaktionen).
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct CountRules {
     pub guarantor_signatures: Option<MinMax>,
     pub additional_signatures: Option<MinMax>,
@@ -122,7 +122,7 @@ pub struct RequiredSignatureRule {
 }
 
 /// Bündelt alle Regeln, die den Inhalt von Feldern im Gutschein betreffen.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct ContentRules {
     /// Key ist der JSON-Pfad, z.B. "nominal_value.unit"
     pub fixed_fields: Option<HashMap<String, serde_json::Value>>,
@@ -131,15 +131,17 @@ pub struct ContentRules {
 }
 
 /// Bündelt alle Regeln, die das Verhalten und die Aktionen des Gutscheins steuern.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct BehaviorRules {
     pub allowed_t_types: Option<Vec<String>>,
     pub max_creation_validity_duration: Option<String>,
+    pub issuance_minimum_validity_duration: Option<String>,
+    pub amount_decimal_places: Option<u8>,
 }
 
 /// Die neue Hauptstruktur für alle Validierungsregeln.
 /// Alle Felder sind optional, um eine flexible Definition zu ermöglichen.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct Validation {
     pub counts: Option<CountRules>,
     pub required_signatures: Option<Vec<RequiredSignatureRule>>,

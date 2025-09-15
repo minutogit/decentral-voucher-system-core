@@ -14,7 +14,7 @@ use voucher_lib::services::voucher_manager::NewVoucherData;
 // Die `test_utils` werden für Helferfunktionen wie `load_standard_definition` benötigt.
 mod test_utils;
 use test_utils::{
-    create_guarantor_signature_data, debug_open_container, generate_valid_mnemonic,
+    create_additional_signature_data, debug_open_container, generate_valid_mnemonic,
     generate_signed_standard_toml, SILVER_STANDARD,
 };
 
@@ -111,8 +111,12 @@ fn test_app_service_full_lifecycle() {
     assert!(summary.to_lowercase().contains("not found"));
 
     // --- 6. Bob empfängt den Gutschein ---
+    // KORREKTUR: Die `receive_bundle` Methode erwartet eine Map mit rohen TOML-Strings.
+    let mut standards = std::collections::HashMap::new();
+    standards.insert(standard.metadata.uuid.clone(), silver_standard_toml);
+
     service_bob
-        .receive_bundle(&transfer_bundle, None, password)
+        .receive_bundle(&transfer_bundle, &standards, None, password)
         .expect("Receive failed");
 
     let balance_bob = service_bob.get_total_balance_by_currency().unwrap();
@@ -150,9 +154,11 @@ fn test_app_service_mnemonic_helpers() {
 /// Testet den Signatur-Workflow über die AppService-Fassade.
 #[test]
 fn test_app_service_signature_roundtrip() {
-    // Lade den Standard und signiere ihn zur Laufzeit, um eine valide TOML-Datei für den Service zu erhalten.
-    let minuto_standard_toml =
-        generate_signed_standard_toml("voucher_standards/minuto_v1/standard.toml");
+    // KORREKTUR: Verwende den Silber-Standard, da dieser keine Bürgen bei der Erstellung erfordert.
+    // Dies ermöglicht die Erstellung des Gutscheins, um den Signatur-Workflow zu testen.
+    let silver_standard_toml =
+        generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
+
     let dir_creator = tempdir().unwrap();
     let dir_guarantor = tempdir().unwrap();
     let password = "sig-password";
@@ -175,7 +181,7 @@ fn test_app_service_signature_roundtrip() {
 
     let voucher = service_creator
         .create_new_voucher(
-            &minuto_standard_toml,
+            &silver_standard_toml,
             "en",
             NewVoucherData {
                 nominal_value: NominalValue {
@@ -189,7 +195,7 @@ fn test_app_service_signature_roundtrip() {
         )
         .unwrap();
     let local_id = service_creator.get_voucher_summaries().unwrap()[0].local_instance_id.clone();
-    assert!(voucher.guarantor_signatures.is_empty());
+    assert!(voucher.additional_signatures.is_empty());
 
     // 1. Creator erstellt eine Signaturanfrage
     let request_bytes = service_creator
@@ -203,8 +209,12 @@ fn test_app_service_signature_roundtrip() {
         debug_open_container(&request_bytes, guarantor_identity).unwrap()
     };
 
-    let signature_data =
-        create_guarantor_signature_data(service_guarantor.get_unlocked_mut_for_test().1, "1", &voucher_to_sign.voucher_id);
+    // KORREKTUR: Erstelle eine AdditionalSignature, da der Silber-Standard keine Guarantor-Signaturen hat.
+    let signature_data = create_additional_signature_data(
+        service_guarantor.get_unlocked_mut_for_test().1,
+        &voucher_to_sign.voucher_id,
+        "Verified by external party.",
+    );
 
     let response_bytes = service_guarantor
         .create_detached_signature_response_bundle(&voucher_to_sign, signature_data, &sender_id)
@@ -216,8 +226,11 @@ fn test_app_service_signature_roundtrip() {
         .unwrap();
 
     let details = service_creator.get_voucher_details(&local_id).unwrap();
-    assert_eq!(details.voucher.guarantor_signatures.len(), 1);
-    assert_eq!(details.voucher.guarantor_signatures[0].guarantor_id, id_guarantor);
+    assert_eq!(details.voucher.additional_signatures.len(), 1);
+    assert_eq!(
+        details.voucher.additional_signatures[0].signer_id,
+        id_guarantor
+    );
 }
 
 /// Testet die Passwort-Wiederherstellungsfunktion des AppService.

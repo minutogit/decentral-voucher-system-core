@@ -33,10 +33,10 @@ use voucher_lib::{
     from_json, validate_voucher_against_standard, Creator, NewVoucherData, Voucher,
     VoucherCoreError, NominalValue,
 };
+use voucher_lib::error::ValidationError;
 use voucher_lib::error::StandardDefinitionError;
 use voucher_lib::services::standard_manager;
-use voucher_lib::services::voucher_manager::create_voucher;
-use voucher_lib::services::voucher_validation::ValidationError;
+use voucher_lib::services::utils::to_canonical_json;
 
 /// **Szenario 1: Testet die Deserialisierung und Validierung eines Gutscheins mit unbekannten Feldern.**
 ///
@@ -59,7 +59,7 @@ fn test_voucher_deserialization_and_validation_succeeds_with_unknown_fields() {
     };
     let (minuto_standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
 
-    let mut valid_voucher = create_voucher(voucher_data, minuto_standard, standard_hash, &identity.signing_key, "en").unwrap();
+    let mut valid_voucher = test_utils::create_voucher_for_manipulation(voucher_data, minuto_standard, standard_hash, &identity.signing_key, "en");
 
     // Füge die für den Minuto-Standard erforderlichen Bürgen hinzu, damit der Gutschein valide ist.
     // Wir verwenden eine vereinfachte Methode, um die Signaturen zu erstellen, da die Signatur-
@@ -115,7 +115,7 @@ fn test_validation_fails_for_unknown_transaction_type() {
     // 1. Erstelle einen gültigen Gutschein als Basis.
     let identity = &ACTORS.issuer;
     let (minuto_standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
-    let mut voucher = create_voucher(
+    let mut voucher = test_utils::create_voucher_for_manipulation(
         NewVoucherData {
             creator: Creator { id: identity.user_id.clone(), ..Default::default() },
             validity_duration: Some("P3Y".to_string()),
@@ -125,8 +125,8 @@ fn test_validation_fails_for_unknown_transaction_type() {
             },
             ..Default::default()
         },
-        minuto_standard, standard_hash, &identity.signing_key, "en"
-    ).unwrap();
+        minuto_standard, standard_hash, &identity.signing_key, "en",
+    );
 
     // FÜGE GÜLTIGE BÜRGEN HINZU, damit die Validierung nicht vorzeitig an
     // den Bürgen-Anforderungen scheitert.
@@ -154,7 +154,7 @@ fn test_validation_fails_for_unknown_transaction_type() {
     temp_tx.t_id = "".to_string();
     temp_tx.sender_signature = "".to_string(); // Die Signatur ist für die t_id-Berechnung irrelevant.
     let new_tid = voucher_lib::services::crypto_utils::get_hash(
-        voucher_lib::services::utils::to_canonical_json(&temp_tx).unwrap(),
+        to_canonical_json(&temp_tx).unwrap(),
     );
     // Aktualisiere die t_id im JSON-Objekt.
     init_transaction.insert("t_id".to_string(), json!(new_tid));
@@ -166,7 +166,7 @@ fn test_validation_fails_for_unknown_transaction_type() {
         "t_id": new_tid
     });
     let signature_payload_hash = voucher_lib::services::crypto_utils::get_hash(
-        voucher_lib::services::utils::to_canonical_json(&signature_payload).unwrap(),
+        to_canonical_json(&signature_payload).unwrap(),
     );
     let new_signature = voucher_lib::services::crypto_utils::sign_ed25519(
         &identity.signing_key,
@@ -193,12 +193,6 @@ fn test_validation_fails_for_unknown_transaction_type() {
 /// Simuliert eine `standard.toml`, die mit einer neueren Version erstellt wurde und
 /// zusätzliche, der aktuellen Version unbekannte, Validierungsregeln enthält.
 #[test]
-#[should_panic(
-    expected = "Parsing should have failed due to the invalid signature in the template file, but it succeeded."
-)]
-// HINWEIS: Dieser Test wird absichtlich fehlschlagen, bis der Bug in
-// `standard_manager::verify_and_parse_standard` behoben ist. Die Funktion
-// verifiziert Signaturen aktuell nicht korrekt.
 fn test_standard_parsing_succeeds_with_unknown_fields() {
     // HINWEIS: Für diesen Test muss eine neue Fixture-Datei manuell angelegt werden:
     // `voucher_standards/minuto_v2_new_rules/standard.toml`

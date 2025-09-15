@@ -8,8 +8,9 @@ use voucher_lib::{
     services::{
         crypto_utils,
         voucher_manager::{self, create_voucher},
-        voucher_validation::{validate_voucher_against_standard, ValidationError},
+        voucher_validation::{validate_voucher_against_standard},
     },
+    error::ValidationError,
     services::utils::to_canonical_json, // Behalte diesen Import, da er hier verwendet wird.
     NewVoucherData, VoucherCoreError,
 };
@@ -154,8 +155,8 @@ fn test_chronological_validation_with_timezones() {
     let err = result.expect_err("Validation should have failed but returned Ok");
     assert!(
         matches!(
-            err,
-            VoucherCoreError::Validation(ValidationError::InvalidTimeOrder(_))
+            err, // Der Compiler schlägt die korrekte Syntax für ein struct variant vor.
+            VoucherCoreError::Validation(ValidationError::InvalidTimeOrder { .. })
         ),
         "Expected InvalidTimeOrder, but got a different error: {:?}",
         err

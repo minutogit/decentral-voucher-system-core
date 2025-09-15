@@ -43,7 +43,12 @@ needed_count = 2
 unit = "Minuto"
 
 [validation]
-allowed_transaction_types = [
+[validation.counts]
+# Erzwingt exakt zwei Bürgen-Signaturen, wie in `needed_count` beschrieben.
+guarantor_signatures = { min = 2, max = 2 }
+
+[validation.behavior_rules]
+allowed_t_types = [
     "init",
     "split",
     "transfer",
@@ -51,19 +56,6 @@ allowed_transaction_types = [
 ]
 amount_decimal_places = 0
 issuance_minimum_validity_duration = "P3Y"
-required_voucher_fields = [
-    "voucher_id",
-    "creation_date",
-    "creator.signature",
-    "guarantor_signatures",
-]
-
-[validation.guarantor_rules]
-gender_specific = true
-genders_needed = [
-    "1",
-    "2",
-]
 
 [signature]
 # Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.

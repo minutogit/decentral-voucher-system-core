@@ -4,20 +4,19 @@
 //! gegen die Regeln eines `VoucherStandardDefinition`.
 
 use crate::error::{StandardDefinitionError, ValidationError, VoucherCoreError};
-use crate::models::voucher::{GuarantorSignature, Transaction, Voucher};
+use crate::models::voucher::{Transaction, Voucher};
 use crate::models::voucher_standard_definition::{
     BehaviorRules, ContentRules, CountRules, RequiredSignatureRule, VoucherStandardDefinition,
 };
-use crate::services::crypto_utils::{
-    get_hash, get_pubkey_from_user_id, verify_ed25519, GetPubkeyError,
-};
+use crate::services::crypto_utils::{get_hash, get_pubkey_from_user_id, verify_ed25519};
 use crate::services::utils::to_canonical_json;
+use crate::services::voucher_manager::add_iso8601_duration;
 
-use chrono::{DateTime, Utc};
 use ed25519_dalek::Signature;
 use regex::Regex;
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::str::FromStr;
 
 /// Hauptfunktion zur Validierung eines Gutscheins gegen seinen Standard.
@@ -28,6 +27,14 @@ pub fn validate_voucher_against_standard(
 ) -> Result<(), VoucherCoreError> {
     // Grundlegende Prüfungen, die immer gelten müssen.
     verify_standard_identity(voucher, standard)?;
+
+    // Logische Prüfung der Datenkonsistenz
+    if voucher.valid_until < voucher.creation_date {
+        return Err(ValidationError::InvalidDateLogic {
+            creation: voucher.creation_date.clone(),
+            valid_until: voucher.valid_until.clone(),
+        }.into());
+    }
     verify_creator_signature(voucher)?;
 
     // Führe die datengesteuerten Validierungsregeln aus, falls sie im Standard definiert sind.
@@ -83,7 +90,7 @@ fn verify_standard_identity(
 }
 
 /// Prüft die quantitativen Regeln aus dem Standard (z.B. Anzahl der Signaturen).
-fn validate_counts(voucher: &Voucher, rules: &CountRules) -> Result<(), ValidationError> {
+pub fn validate_counts(voucher: &Voucher, rules: &CountRules) -> Result<(), ValidationError> {
     if let Some(rule) = &rules.guarantor_signatures {
         let count = voucher.guarantor_signatures.len();
         if count < rule.min as usize || count > rule.max as usize {
@@ -121,7 +128,7 @@ fn validate_counts(voucher: &Voucher, rules: &CountRules) -> Result<(), Validati
 }
 
 /// Prüft, ob alle im Standard geforderten Signaturen vorhanden und kryptographisch gültig sind.
-fn validate_required_signatures(
+pub fn validate_required_signatures(
     voucher: &Voucher,
     rules: &[RequiredSignatureRule],
 ) -> Result<(), ValidationError> {
@@ -146,7 +153,7 @@ fn validate_required_signatures(
             let description_matches = rule
                 .required_signature_description
                 .as_ref()
-                .map_or(true, |req_desc| req_desc == description);
+                .map_or(true, |req_desc| req_desc == *description);
 
             id_matches && description_matches && *is_valid
         });
@@ -161,14 +168,14 @@ fn validate_required_signatures(
 }
 
 /// Prüft die Inhaltsregeln (feste Werte, erlaubte Werte, Regex-Muster).
-fn validate_content_rules(
+pub fn validate_content_rules(
     voucher_json: &Value,
     rules: &ContentRules,
 ) -> Result<(), ValidationError> {
     if let Some(fixed_fields) = &rules.fixed_fields {
         for (path, expected_value) in fixed_fields {
             let found_value =
-                get_value_by_path(voucher_json, path).ok_or_else(|| ValidationError::PathNotFound(path.clone()))?;
+                get_value_by_path(voucher_json, path).ok_or_else(|| ValidationError::PathNotFound { path: path.clone() })?;
             if found_value != expected_value {
                 return Err(ValidationError::FieldValueMismatch {
                     field: path.clone(),
@@ -182,7 +189,7 @@ fn validate_content_rules(
     if let Some(allowed_values) = &rules.allowed_values {
         for (path, allowed_list) in allowed_values {
             let found_value =
-                get_value_by_path(voucher_json, path).ok_or_else(|| ValidationError::PathNotFound(path.clone()))?;
+                get_value_by_path(voucher_json, path).ok_or_else(|| ValidationError::PathNotFound { path: path.clone() })?;
             if !allowed_list.contains(found_value) {
                 return Err(ValidationError::FieldValueNotAllowed {
                     field: path.clone(),
@@ -196,7 +203,7 @@ fn validate_content_rules(
     if let Some(regex_patterns) = &rules.regex_patterns {
         for (path, pattern) in regex_patterns {
             let found_value =
-                get_value_by_path(voucher_json, path).ok_or_else(|| ValidationError::PathNotFound(path.clone()))?;
+                get_value_by_path(voucher_json, path).ok_or_else(|| ValidationError::PathNotFound { path: path.clone() })?;
             let found_str = found_value.as_str().unwrap_or_default();
             let re = Regex::new(pattern).map_err(|e| ValidationError::FieldRegexMismatch {
                 field: path.clone(), pattern: pattern.clone(), found: e.to_string()
@@ -215,7 +222,7 @@ fn validate_content_rules(
 }
 
 /// Prüft Verhaltensregeln (erlaubte Transaktionstypen, Gültigkeitsdauer).
-fn validate_behavior_rules(voucher: &Voucher, rules: &BehaviorRules) -> Result<(), ValidationError> {
+pub fn validate_behavior_rules(voucher: &Voucher, rules: &BehaviorRules) -> Result<(), ValidationError> {
     if let Some(allowed_types) = &rules.allowed_t_types {
         for tx in &voucher.transactions {
             if !allowed_types.contains(&tx.t_type) {
@@ -227,8 +234,36 @@ fn validate_behavior_rules(voucher: &Voucher, rules: &BehaviorRules) -> Result<(
         }
     }
 
-    if let Some(max_duration_str) = &rules.max_creation_validity_duration {
-        // Implementierung der Dauerprüfung hier...
+    // Check that the rule stored in the voucher matches the one in the standard
+    if let Some(min_validity_rule) = &rules.issuance_minimum_validity_duration {
+        if &voucher.standard_minimum_issuance_validity != min_validity_rule {
+            return Err(ValidationError::MismatchedMinimumValidity {
+                expected: min_validity_rule.clone(),
+                found: voucher.standard_minimum_issuance_validity.clone(),
+            }.into());
+        }
+    }
+
+    // Check that the voucher's actual duration meets the minimum requirement
+    if let Some(min_duration_str) = &rules.issuance_minimum_validity_duration {
+        if !min_duration_str.is_empty() {
+            let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date)
+                .map_err(|_| ValidationError::InvalidDateLogic { creation: voucher.creation_date.clone(), valid_until: voucher.valid_until.clone() })?
+                .with_timezone(&chrono::Utc);
+            let valid_until_dt = chrono::DateTime::parse_from_rfc3339(&voucher.valid_until)
+                .map_err(|_| ValidationError::InvalidDateLogic { creation: voucher.creation_date.clone(), valid_until: voucher.valid_until.clone() })?
+                .with_timezone(&chrono::Utc);
+
+            let required_end_dt = add_iso8601_duration(creation_dt, min_duration_str).map_err(|e| {
+                ValidationError::InvalidTransaction(format!(
+                    "Failed to calculate required validity duration: {}",
+                    e
+                ))
+            })?;
+            if valid_until_dt < required_end_dt {
+                return Err(ValidationError::ValidityDurationTooShort.into());
+            }
+        }
     }
 
     Ok(())
@@ -296,7 +331,26 @@ fn verify_creator_signature(voucher: &Voucher) -> Result<(), VoucherCoreError> {
 
 /// Verifiziert die kryptographische Gültigkeit aller Bürgen-Signaturen. (Angepasst)
 fn verify_guarantor_signatures(voucher: &Voucher) -> Result<(), VoucherCoreError> {
+    let mut seen_guarantors = HashSet::new();
+
     for guarantor_signature in &voucher.guarantor_signatures {
+        // NEU: Prüfung auf doppelte Bürgen
+        if !seen_guarantors.insert(&guarantor_signature.guarantor_id) {
+            return Err(ValidationError::DuplicateGuarantor {
+                guarantor_id: guarantor_signature.guarantor_id.clone(),
+            }.into());
+        }
+
+        // NEU: Prüfung auf chronologische Korrektheit der Signatur
+        if guarantor_signature.signature_time < voucher.creation_date {
+            return Err(ValidationError::InvalidTimeOrder {
+                entity: "GuarantorSignature".to_string(),
+                id: guarantor_signature.signature_id.clone(),
+                time1: voucher.creation_date.clone(),
+                time2: guarantor_signature.signature_time.clone(),
+            }.into());
+        }
+
         if guarantor_signature.voucher_id != voucher.voucher_id {
             return Err(ValidationError::MismatchedVoucherIdInSignature {
                 expected: voucher.voucher_id.clone(),
@@ -311,11 +365,11 @@ fn verify_guarantor_signatures(voucher: &Voucher) -> Result<(), VoucherCoreError
             return Err(ValidationError::InvalidSignatureId(guarantor_signature.signature_id.clone()).into());
         }
         let public_key = get_pubkey_from_user_id(&guarantor_signature.guarantor_id)
-            .map_err(|_| ValidationError::InvalidSignature(guarantor_signature.guarantor_id.clone()))?;
+            .map_err(|_| ValidationError::InvalidSignature { signer_id: guarantor_signature.guarantor_id.clone() })?;
         let signature_bytes = bs58::decode(&guarantor_signature.signature).into_vec().map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
         let signature = Signature::from_slice(&signature_bytes).map_err(|e| ValidationError::SignatureDecodeError(e.to_string()))?;
         if !verify_ed25519(&public_key, guarantor_signature.signature_id.as_bytes(), &signature) {
-            return Err(ValidationError::InvalidSignature(guarantor_signature.guarantor_id.clone()).into());
+            return Err(ValidationError::InvalidSignature { signer_id: guarantor_signature.guarantor_id.clone() }.into());
         }
     }
     Ok(())
@@ -325,7 +379,7 @@ fn verify_guarantor_signatures(voucher: &Voucher) -> Result<(), VoucherCoreError
 fn verify_additional_signatures(voucher: &Voucher) -> Result<(), VoucherCoreError> {
     for signature_obj in &voucher.additional_signatures {
         if !is_additional_signature_valid(signature_obj, &voucher.voucher_id) {
-            return Err(ValidationError::InvalidSignature(signature_obj.signer_id.clone()).into());
+            return Err(ValidationError::InvalidSignature { signer_id: signature_obj.signer_id.clone() }.into());
         }
     }
     Ok(())
@@ -333,29 +387,106 @@ fn verify_additional_signatures(voucher: &Voucher) -> Result<(), VoucherCoreErro
 
 
 /// Verifiziert die Integrität, Signaturen und Geschäftslogik der Transaktionsliste. (Weitgehend unverändert)
-fn verify_transactions(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), VoucherCoreError> {
-    if voucher.transactions.is_empty() { return Ok(()); }
+fn verify_transactions(voucher: &Voucher, _standard: &VoucherStandardDefinition) -> Result<(), VoucherCoreError> {
+    if voucher.transactions.is_empty() {
+        // This is caught by the data-driven `validate_counts` rule, which should require min=1.
+        return Ok(());
+    }
 
-    // Prüfe die erste Transaktion ('init')
+    // --- Phase 1: Verify the 'init' transaction basics ---
     let init_tx = &voucher.transactions[0];
-    if init_tx.t_type != "init" {
-        return Err(ValidationError::InvalidTransaction("First transaction must be of type 'init'.".to_string()).into());
-    }
-    let expected_prev_hash_init = get_hash(format!("{}{}", &voucher.voucher_id, &voucher.voucher_nonce));
-    if init_tx.prev_hash != expected_prev_hash_init {
-        return Err(ValidationError::InvalidTransaction("Initial transaction has invalid prev_hash.".to_string()).into());
-    }
-    let nominal_amount = Decimal::from_str(&voucher.nominal_value.amount)?;
-    let init_amount = Decimal::from_str(&init_tx.amount)?;
-    if init_amount.normalize() != nominal_amount.normalize() {
-        return Err(ValidationError::InitAmountMismatch {
-            expected: nominal_amount.to_string(),
-            found: init_amount.to_string(),
-        }.into());
-    }
+    verify_transaction_basics(init_tx, voucher, true)?;
     verify_transaction_integrity_and_signature(init_tx)?;
 
-    // ... weitere Transaktionsprüfungen ...
+    // --- Phase 2: Verify all subsequent transactions in the chain ---
+    let mut last_tx_hash = get_hash(to_canonical_json(init_tx)?);
+    let mut last_tx_time = init_tx.t_time.clone();
+
+    for (i, tx) in voucher.transactions.iter().enumerate().skip(1) {
+        let prev_tx = &voucher.transactions[i - 1];
+
+        // Basic and cryptographic checks
+        verify_transaction_basics(tx, voucher, false)?;
+        verify_transaction_integrity_and_signature(tx)?;
+
+        // Chain integrity checks
+        if tx.prev_hash != last_tx_hash {
+            return Err(ValidationError::InvalidTransaction("Transaction chain broken: prev_hash does not match hash of previous transaction.".to_string()).into());
+        }
+        // Prüfe chronologische Reihenfolge
+        if tx.t_time < last_tx_time {
+            return Err(ValidationError::InvalidTimeOrder {
+                entity: "Transaction".to_string(),
+                id: tx.t_id.clone(),
+                time1: last_tx_time,
+                time2: tx.t_time.clone(),
+            }.into());
+        }
+
+        // --- Financial Consistency Check (Look-behind-by-one) ---
+        let sender_balance_before_tx = {
+            if prev_tx.recipient_id == tx.sender_id {
+                Decimal::from_str(&prev_tx.amount)?
+            } else if prev_tx.sender_id == tx.sender_id {
+                Decimal::from_str(prev_tx.sender_remaining_amount.as_deref().unwrap_or("0"))?
+            } else {
+                Decimal::ZERO
+            }
+        };
+
+        let amount_to_send = Decimal::from_str(&tx.amount)?;
+        if sender_balance_before_tx < amount_to_send {
+            return Err(ValidationError::InsufficientFundsInChain {
+                user_id: tx.sender_id.clone(),
+                needed: amount_to_send.to_string(),
+                available: sender_balance_before_tx.to_string(),
+            }.into());
+        }
+
+        if tx.t_type == "transfer" && sender_balance_before_tx != amount_to_send {
+            return Err(ValidationError::FullTransferAmountMismatch {
+                expected: sender_balance_before_tx.to_string(),
+                found: amount_to_send.to_string(),
+            }.into());
+        }
+
+        // Update state for the next iteration
+        last_tx_hash = get_hash(to_canonical_json(tx)?);
+        last_tx_time = tx.t_time.clone();
+    }
+
+    Ok(())
+}
+/// Hilfsfunktion, die grundlegende, zustandslose Prüfungen für eine einzelne Transaktion durchführt.
+fn verify_transaction_basics(tx: &Transaction, voucher: &Voucher, is_init: bool) -> Result<(), VoucherCoreError> {
+    if is_init {
+        if tx.t_type != "init" { return Err(ValidationError::InvalidTransaction("First transaction must be of type 'init'.".to_string()).into()); }
+        let expected_prev_hash = get_hash(format!("{}{}", &voucher.voucher_id, &voucher.voucher_nonce));
+        if tx.prev_hash != expected_prev_hash { return Err(ValidationError::InvalidTransaction("Initial transaction has invalid prev_hash.".to_string()).into()); }
+        if tx.sender_id != voucher.creator.id || tx.recipient_id != voucher.creator.id {
+            return Err(ValidationError::InitPartyMismatch { expected: voucher.creator.id.clone(), found: tx.sender_id.clone() }.into());
+        }
+        let nominal_amount = Decimal::from_str(&voucher.nominal_value.amount)?;
+        let init_amount = Decimal::from_str(&tx.amount)?;
+        if init_amount.normalize() != nominal_amount.normalize() {
+            return Err(ValidationError::InitAmountMismatch { expected: nominal_amount.to_string(), found: init_amount.to_string() }.into());
+        }
+        if tx.t_time < voucher.creation_date {
+            return Err(ValidationError::InvalidTimeOrder {
+                entity: "Initial Transaction".to_string(),
+                id: tx.t_id.clone(),
+                time1: voucher.creation_date.clone(),
+                time2: tx.t_time.clone(),
+            }.into());
+        }
+    } else {
+        if tx.t_type == "init" { return Err(ValidationError::InvalidTransaction("Found subsequent transaction with invalid type 'init'.".to_string()).into()); }
+        if tx.sender_id == tx.recipient_id { return Err(ValidationError::InvalidTransaction("Sender and recipient cannot be the same in a non-init transaction.".to_string()).into()); }
+    }
+
+    if Decimal::from_str(&tx.amount)? <= Decimal::ZERO {
+        return Err(ValidationError::NegativeOrZeroAmount { amount: tx.amount.clone() }.into());
+    }
 
     Ok(())
 }
@@ -367,7 +498,9 @@ fn verify_transaction_integrity_and_signature(transaction: &Transaction) -> Resu
     tx_for_tid_calc.sender_signature = "".to_string();
     let calculated_tid = get_hash(to_canonical_json(&tx_for_tid_calc)?);
     if transaction.t_id != calculated_tid {
-        return Err(ValidationError::InvalidTransaction("Transaction ID does not match its content hash.".to_string()).into());
+        return Err(ValidationError::MismatchedTransactionId {
+            t_id: transaction.t_id.clone(),
+        }.into());
     }
 
     let signature_payload = json!({

@@ -32,7 +32,7 @@ thiserror = "1.0"
 rust_decimal_macros = "1.35"
 anyhow = "1.0.99"
 clap = { version = "4.5", features = ["derive"] }
-regex = { version = "1.10.4", features = ["serde"] }
+regex = "1.10.4"
 
 [lib]
 name = "voucher_lib"
@@ -45,7 +45,7 @@ path = "src/bin/voucher-cli.rs"
 [dev-dependencies]
 rand = "0.8"
 voucher_lib = { version = "0.1.0", path = "." }
-regex = "1"
+regex = "1.10.4"
 tempfile = "3.10.1"
 lazy_static = "1.4.0"
 

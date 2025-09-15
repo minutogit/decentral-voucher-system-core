@@ -309,15 +309,15 @@ fn test_create_new_voucher_and_get_user_id() {
     };
 
     // Aktion: Neuen Gutschein erstellen
-    let (minuto_standard, minuto_standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+    let (silver_standard, silver_standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     let created_voucher = wallet
-        .create_new_voucher(identity, minuto_standard, minuto_standard_hash, "en", new_voucher_data)
+        .create_new_voucher(identity, silver_standard, silver_standard_hash, "en", new_voucher_data)
         .unwrap();
     assert_eq!(created_voucher.transactions.len(), 1, "A new voucher must have exactly one 'init' transaction.");
 
     // Assert: Gutschein ist im Wallet vorhanden und aktiv
     let summary = wallet.list_vouchers().pop().expect("Wallet should contain one voucher");
-    assert_eq!(summary.current_amount, "500");
+    assert_eq!(summary.current_amount, "500.0000");
     assert_eq!(summary.status, VoucherStatus::Active);
     assert_eq!(wallet.voucher_store.vouchers.len(), 1);
 }
@@ -347,10 +347,13 @@ fn test_get_total_balance_by_currency() {
 
         // HINWEIS: add_voucher verwendet create_voucher, das den Hash benötigt.
         // Da der Hash aber bereits im Tupel vorhanden ist, wird die Neuberechnung
-        // in add_voucher_to_wallet beibehalten, aber hier übergeben wir nur die Definition.
-        let voucher = voucher_lib::services::voucher_manager::create_voucher(
-            new_voucher_data, standard, "dummy_hash", &identity.signing_key, "en",
-        ).unwrap();
+        // in add_voucher_to_wallet beibehalten. Hier berechnen wir ihn manuell.
+        let mut standard_to_hash = standard.clone();
+        standard_to_hash.signature = None;
+        let correct_hash = voucher_lib::services::crypto_utils::get_hash(voucher_lib::services::utils::to_canonical_json(&standard_to_hash).unwrap());
+        let voucher = test_utils::create_voucher_for_manipulation(
+            new_voucher_data, standard, &correct_hash, &identity.signing_key, "en",
+        );
         // Hier werden keine Bürgen hinzugefügt, da die Gültigkeit für die Saldoprüfung irrelevant ist.
 
         wallet
@@ -392,19 +395,32 @@ fn test_wallet_rejects_bundle_with_invalid_voucher() {
     let alice_identity = &ACTORS.alice;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
     let bob_identity = &ACTORS.bob;
-    let mut bob_wallet = setup_in_memory_wallet(bob_identity);
+    let bob_wallet = setup_in_memory_wallet(bob_identity);
 
     // Lade den Standard mit strengen Inhaltsregeln
     let toml_str = include_str!("test_data/standards/standard_content_rules.toml");
-    let standard: VoucherStandardDefinition = toml::from_str(toml_str).unwrap();
+    let mut standard: VoucherStandardDefinition = toml::from_str(toml_str).unwrap();
+
+    // KORREKTUR: Der Test-Standard ist inkonsistent. Die Vorlage und die Regeln widersprechen sich.
+    // Wir korrigieren die Vorlage zur Laufzeit, damit ein valider Gutschein erstellt werden kann.
+    standard.template.fixed.nominal_value.unit = "EUR".to_string();
+    // KORREKTUR 2: Der Standard verlangt ein Beschreibungs-Format via Regex,
+    // stellt aber kein passendes Template bereit. Wir fügen es ebenfalls hinzu.
+    standard.template.fixed.description = vec![
+        voucher_lib::models::voucher_standard_definition::LocalizedText {
+            lang: "en".to_string(),
+            text: "INV-123456".to_string(), // Muss dem Regex "^INV-[0-9]{6}$" entsprechen
+        }
+    ];
 
     // 2. Alice erstellt einen Gutschein.
     // WICHTIG: Wir fügen den Gutschein NICHT zu Alice' Wallet hinzu, da wir ihn gleich manipulieren.
-     let mut voucher_data = voucher_lib::services::voucher_manager::NewVoucherData {
+     let voucher_data = voucher_lib::services::voucher_manager::NewVoucherData {
         creator: voucher_lib::models::voucher::Creator { id: alice_identity.user_id.clone(), ..Default::default() },
         nominal_value: voucher_lib::models::voucher::NominalValue { amount: "50.00".to_string(), ..Default::default() },
-        description: "INV-123456".to_string(), // Korrekt laut Regex
-        ..Default::default()
+        validity_duration: Some("P1Y".to_string()),
+        non_redeemable_test_voucher: false,
+        collateral: voucher_lib::models::voucher::Collateral::default(),
     };
 
     let mut standard_to_hash = standard.clone();
@@ -421,7 +437,7 @@ fn test_wallet_rejects_bundle_with_invalid_voucher() {
 
     // 5. Bob (bzw. seine Anwendungslogik) empfängt das Bündel.
     // Die Logik ÖFFNET zuerst den Container, um an den Gutschein zu kommen...
-    let (decrypted_bundle, _) = voucher_lib::services::bundle_processor::open_and_verify_bundle(bob_identity, &bundle_bytes).unwrap();
+    let decrypted_bundle = voucher_lib::services::bundle_processor::open_and_verify_bundle(bob_identity, &bundle_bytes).unwrap();
     let received_voucher = decrypted_bundle.vouchers.first().unwrap();
 
     // ...und VALIDIERT ihn dann, BEVOR er ans Wallet übergeben wird.

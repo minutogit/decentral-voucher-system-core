@@ -2,12 +2,15 @@
 //!
 //! Unit-Tests für die datengesteuerte Validierungs-Engine.
 
-use voucher_core::error::ValidationError;
-use voucher_core::models::voucher::{GuarantorSignature, NominalValue, Transaction, Voucher};
-use voucher_core::models::voucher_standard_definition::{
-    StandardMetadata, VoucherStandardDefinition,
+use voucher_lib::error::ValidationError;
+use voucher_lib::models::voucher::{
+    AdditionalSignature, GuarantorSignature, NominalValue, Transaction, Voucher,
 };
-use voucher_core::services::voucher_validation;
+use voucher_lib::models::voucher_standard_definition::{
+    VoucherStandardDefinition,
+};
+
+use voucher_lib::services::voucher_validation;
 use std::fs;
 
 // --- Test-Hilfsfunktionen ---
@@ -38,33 +41,32 @@ fn create_base_voucher() -> Voucher {
 mod counts_validation {
     use super::*;
 
+    // Diese Tests prüfen die `validate_counts`-Logik.
+
     #[test]
     fn test_counts_ok() {
         let standard = load_test_standard("standard_strict_counts.toml");
         let mut voucher = create_base_voucher();
         voucher.guarantor_signatures.push(GuarantorSignature::default()); // 1 ist erlaubt
 
-        let result =
-            voucher_validation::validate_voucher_against_standard(&voucher, &standard);
-        // Hinweis: Wir erwarten hier einen Fehler bei der kryptographischen Prüfung,
-        // aber keinen `CountOutOfBounds`-Fehler.
-        assert!(!matches!(
-            result.err().unwrap(),
-            ValidationError::CountOutOfBounds { .. }
-        ));
+        let count_rules = standard.validation.as_ref().unwrap().counts.as_ref().unwrap();
+        let result = voucher_validation::validate_counts(&voucher, count_rules);
+
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_fails_if_guarantor_count_below_min() {
         let standard = load_test_standard("standard_strict_counts.toml");
-        let voucher = create_base_voucher(); // Hat 0 Bürgen, min ist 1
+        let voucher = create_base_voucher(); // Hat 0 Bürgen, Standard erfordert min 1
 
-        let result =
-            voucher_validation::validate_voucher_against_standard(&voucher, &standard);
+        let count_rules = standard.validation.as_ref().unwrap().counts.as_ref().unwrap();
+        let result = voucher_validation::validate_counts(&voucher, count_rules);
+
         assert!(matches!(
-            result.err().unwrap().downcast_ref::<ValidationError>().unwrap(),
+            result.err().unwrap(),
             ValidationError::CountOutOfBounds { field, min, max, found }
-            if field == "guarantor_signatures" && *min == 1 && *max == 1 && *found == 0
+            if field == "guarantor_signatures" && min == 1 && max == 1 && found == 0
         ));
     }
 
@@ -75,14 +77,15 @@ mod counts_validation {
         voucher.guarantor_signatures.push(GuarantorSignature::default());
         voucher
             .additional_signatures
-            .push(Default::default()); // Hat 1, max ist 0
+            .push(AdditionalSignature::default()); // Hat 1, max ist 0
 
-        let result =
-            voucher_validation::validate_voucher_against_standard(&voucher, &standard);
+        let count_rules = standard.validation.as_ref().unwrap().counts.as_ref().unwrap();
+        let result = voucher_validation::validate_counts(&voucher, count_rules);
+
         assert!(matches!(
-            result.err().unwrap().downcast_ref::<ValidationError>().unwrap(),
+            result.err().unwrap(),
             ValidationError::CountOutOfBounds { field, min, max, found }
-            if field == "additional_signatures" && *min == 0 && *max == 0 && *found == 1
+            if field == "additional_signatures" && min == 0 && max == 0 && found == 1
         ));
     }
 }
@@ -91,6 +94,8 @@ mod counts_validation {
 mod content_rules_validation {
     use super::*;
     use serde_json::json;
+
+    // Diese Tests prüfen die `validate_content_rules`-Logik.
 
     #[test]
     fn test_content_rules_ok() {
@@ -102,32 +107,27 @@ mod content_rules_validation {
         voucher.nominal_value.amount = "50.00".to_string();
         voucher.description = "INV-999888".to_string();
 
-        // Dummy-Standard-Metadaten für die Hauptvalidierungsfunktion
-        voucher.voucher_standard.uuid = "TEST-CONTENT-RULES-V1".to_string();
+        let voucher_json = serde_json::to_value(&voucher).unwrap();
+        let content_rules = standard.validation.as_ref().unwrap().content_rules.as_ref().unwrap();
+        let result = voucher_validation::validate_content_rules(&voucher_json, content_rules);
 
-        let result =
-            voucher_validation::validate_voucher_against_standard(&voucher, &standard);
-        assert!(!matches!(
-            result.err().unwrap(),
-            ValidationError::FieldValueMismatch { .. }
-                | ValidationError::FieldValueNotAllowed { .. }
-                | ValidationError::FieldRegexMismatch { .. }
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_fails_on_wrong_fixed_field() {
         let standard = load_test_standard("standard_content_rules.toml");
         let mut voucher = create_base_voucher();
-        voucher.nominal_value.unit = "USD".to_string(); // Falsch, muss EUR sein
-        voucher.voucher_standard.uuid = "TEST-CONTENT-RULES-V1".to_string();
+        voucher.nominal_value.unit = "USD".to_string(); // Falsch, Standard erfordert EUR
 
-        let result =
-            voucher_validation::validate_voucher_against_standard(&voucher, &standard);
+        let voucher_json = serde_json::to_value(&voucher).unwrap();
+        let content_rules = standard.validation.as_ref().unwrap().content_rules.as_ref().unwrap();
+        let result = voucher_validation::validate_content_rules(&voucher_json, content_rules);
+
         assert!(matches!(
-            result.err().unwrap().downcast_ref::<ValidationError>().unwrap(),
+            result.err().unwrap(),
             ValidationError::FieldValueMismatch { field, expected, found }
-            if field == "nominal_value.unit" && *expected == json!("EUR") && *found == json!("USD")
+            if field == "nominal_value.unit" && expected == json!("EUR") && found == json!("USD")
         ));
     }
 
@@ -135,15 +135,16 @@ mod content_rules_validation {
     fn test_fails_on_disallowed_value() {
         let standard = load_test_standard("standard_content_rules.toml");
         let mut voucher = create_base_voucher();
-        voucher.nominal_value.amount = "75.00".to_string(); // Nicht in ["50.00", "100.00"]
-        voucher.voucher_standard.uuid = "TEST-CONTENT-RULES-V1".to_string();
+        voucher.nominal_value.amount = "75.00".to_string(); // Nicht in der erlaubten Liste
 
-        let result =
-            voucher_validation::validate_voucher_against_standard(&voucher, &standard);
+        let voucher_json = serde_json::to_value(&voucher).unwrap();
+        let content_rules = standard.validation.as_ref().unwrap().content_rules.as_ref().unwrap();
+        let result = voucher_validation::validate_content_rules(&voucher_json, content_rules);
+
         assert!(matches!(
-            result.err().unwrap().downcast_ref::<ValidationError>().unwrap(),
+            result.err().unwrap(),
             ValidationError::FieldValueNotAllowed { field, found, .. }
-            if field == "nominal_value.amount" && *found == json!("75.00")
+            if field == "nominal_value.amount" && found == json!("75.00")
         ));
     }
 
@@ -151,14 +152,15 @@ mod content_rules_validation {
     fn test_fails_on_regex_mismatch() {
         let standard = load_test_standard("standard_content_rules.toml");
         let mut voucher = create_base_voucher();
-        voucher.description = "INVALID-123".to_string(); // Passt nicht zu '^INV-[0-9]{6}$'
-        voucher.voucher_standard.uuid = "TEST-CONTENT-RULES-V1".to_string();
+        voucher.description = "INVALID-123".to_string(); // Passt nicht zum Regex-Muster
 
-        let result =
-            voucher_validation::validate_voucher_against_standard(&voucher, &standard);
+        let voucher_json = serde_json::to_value(&voucher).unwrap();
+        let content_rules = standard.validation.as_ref().unwrap().content_rules.as_ref().unwrap();
+        let result = voucher_validation::validate_content_rules(&voucher_json, content_rules);
+
         assert!(matches!(
-            result.err().unwrap().downcast_ref::<ValidationError>().unwrap(),
-            ValidationError::FieldRegexMismatch { field, found, .. }
+            result.err().unwrap(),
+            ValidationError::FieldRegexMismatch { field, pattern: _, found }
             if field == "description" && found == "INVALID-123"
         ));
     }

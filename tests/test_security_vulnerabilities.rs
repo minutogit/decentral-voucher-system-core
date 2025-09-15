@@ -14,7 +14,9 @@ use voucher_lib::services::crypto_utils::{create_user_id, get_hash, sign_ed25519
 use voucher_lib::services::secure_container_manager::create_secure_container;
 use voucher_lib::services::utils::{get_current_timestamp, to_canonical_json};
 use voucher_lib::services::voucher_manager::{self, NewVoucherData, create_voucher, create_transaction};
-use voucher_lib::services::voucher_validation::{self, get_spendable_balance};
+use voucher_lib::error::ValidationError;
+use voucher_lib::services::voucher_validation::{self};
+use voucher_lib::services::voucher_manager::get_spendable_balance;
 use voucher_lib::VoucherCoreError;
 use serde_json::Value;
 use test_utils::{setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
@@ -267,6 +269,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
         sender_id: ACTORS.hacker.user_id.clone(),
         recipient_id: ACTORS.victim.user_id.clone(),
         amount: "100".to_string(), // Hacker gibt seinen ursprünglichen Betrag aus
+        t_type: "transfer".to_string(),
         ..Default::default()
     };
     // Diese Transaktion selbst ist valide und wird vom Hacker signiert. Der Betrug liegt im manipulierten Creator-Block.
@@ -277,7 +280,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
     victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
     let result = voucher_validation::validate_voucher_against_standard(received_voucher, standard);
-    assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::InvalidCreatorSignature { .. }))),
+    assert!(matches!(result, Err(VoucherCoreError::Validation(ValidationError::InvalidCreatorSignature { .. }))),
             "Validation must fail due to manipulated nominal value.");
     victim_wallet.voucher_store.vouchers.clear(); // Reset for next test
 
@@ -292,6 +295,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
         sender_id: ACTORS.hacker.user_id.clone(),
         recipient_id: ACTORS.victim.user_id.clone(),
         amount: "100".to_string(),
+        t_type: "transfer".to_string(),
         ..Default::default()
     };
     final_tx_2 = create_hacked_tx(&ACTORS.hacker, final_tx_2);
@@ -301,7 +305,7 @@ fn test_attack_tamper_core_data_and_guarantors() {
     victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
     let result = voucher_validation::validate_voucher_against_standard(received_voucher, standard);
-    assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::InvalidSignatureId(_)))),
+    assert!(matches!(result, Err(VoucherCoreError::Validation(ValidationError::InvalidSignatureId(_)))),
             "Validation must fail due to manipulated guarantor metadata (InvalidSignatureId).");
     victim_wallet.voucher_store.vouchers.clear();
 }
@@ -369,6 +373,7 @@ fn test_attack_create_inconsistent_transaction() {
         sender_id: ACTORS.hacker.user_id.clone(),
         recipient_id: ACTORS.victim.user_id.clone(),
         amount: "200".to_string(),
+        t_type: "transfer".to_string(),
         ..Default::default()
     };
     let overspend_tx = create_hacked_tx(&ACTORS.hacker, overspend_tx_unsigned);
@@ -377,8 +382,11 @@ fn test_attack_create_inconsistent_transaction() {
     victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
     let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
     let result = voucher_validation::validate_voucher_against_standard(received_voucher, standard);
-    assert!(matches!(result, Err(VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::FullTransferAmountMismatch { .. }))),
-            "Validation must fail with FullTransferAmountMismatch on overspending attempt.");
+
+    // KORREKTUR: Der primäre Fehler bei einer Überziehung ist "unzureichendes Guthaben".
+    // Der Test muss auf den korrekten Fehler prüfen.
+    assert!(matches!(result, Err(VoucherCoreError::Validation(ValidationError::InsufficientFundsInChain { .. }))),
+            "Validation must fail with InsufficientFundsInChain on overspending attempt.");
     victim_wallet.voucher_store.vouchers.clear();
 }
 

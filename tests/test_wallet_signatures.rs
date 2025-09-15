@@ -7,7 +7,7 @@ mod test_utils;
 
 use voucher_lib::{
     self,
-    UserIdentity, VoucherCoreError,
+    UserIdentity, VoucherCoreError, error::ValidationError,
     models::{
         profile::{VoucherStatus},
         secure_container::PayloadType,
@@ -16,7 +16,6 @@ use voucher_lib::{
     },
     services::{
         secure_container_manager::{self, ContainerManagerError},
-        voucher_manager::{self},
         voucher_validation,
     },
     Wallet,
@@ -50,13 +49,12 @@ fn setup_voucher_for_alice(
 
     let (standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
 
-    let voucher = voucher_manager::create_voucher(
+    let voucher = test_utils::create_voucher_for_manipulation(
         voucher_data,
         standard,
         standard_hash,
         &alice_identity.signing_key, "en"
-    )
-    .unwrap();
+    );
     let local_id =
         Wallet::calculate_local_instance_id(&voucher, &alice_identity.user_id).unwrap();
     alice_wallet
@@ -137,7 +135,7 @@ fn test_full_signature_workflow_via_wallet() {
     assert_eq!(voucher_with_sig.guarantor_signatures[0].guarantor_id, bob_identity.user_id);
     assert!(
         matches!(voucher_validation::validate_voucher_against_standard(voucher_with_sig, minuto_standard).unwrap_err(),
-        VoucherCoreError::Validation(voucher_lib::services::voucher_validation::ValidationError::GuarantorRequirementsNotMet(_)))
+        VoucherCoreError::Validation(ValidationError::CountOutOfBounds { field, .. }) if field == "guarantor_signatures")
     );
 
     println!("SUCCESS: Realistic signature workflow test completed.");
@@ -237,14 +235,13 @@ fn test_workflow_fails_with_mismatched_voucher_id() {
 
     let (minuto_standard, minuto_standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
 
-    let voucher_b = voucher_manager::create_voucher(
+    let voucher_b = test_utils::create_voucher_for_manipulation(
         voucher_data_b,
         minuto_standard,
         minuto_standard_hash,
         &alice_identity.signing_key,
         "en"
-    ).unwrap();
-
+    );
     // 2. Bob erhält (korrekt) Gutschein A zur Signierung, entscheidet sich aber, die ID von B in seine Signatur zu schreiben.
     let guarantor_metadata = GuarantorSignature {
         voucher_id: voucher_b.voucher_id.clone(), // Falsche ID!

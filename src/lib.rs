@@ -44,8 +44,6 @@ pub use services::standard_manager::{
     verify_and_parse_standard
 };
 pub use services::voucher_manager::{
-    create_transaction, create_voucher, from_json, to_json, NewVoucherData
+    create_transaction, create_voucher, from_json, get_spendable_balance, to_json, NewVoucherData,
 };
-pub use services::voucher_validation::{
-    get_spendable_balance, validate_voucher_against_standard
-};
+pub use services::voucher_validation::{validate_voucher_against_standard};

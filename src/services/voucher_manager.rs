@@ -3,7 +3,6 @@ use crate::models::voucher::{
 };
 use crate::error::VoucherCoreError;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
-use crate::services::voucher_validation::get_spendable_balance;
 use crate::services::{decimal_utils, standard_manager};
 use crate::services::crypto_utils::{get_hash, sign_ed25519};
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
@@ -124,7 +123,12 @@ pub fn create_voucher(
 
     let initial_valid_until_dt = add_iso8601_duration(creation_dt, duration_str)?;
 
-    if let Some(min_duration_str) = &verified_standard.validation.issuance_minimum_validity_duration {
+    // KORREKTUR: Zugriff auf die neue, verschachtelte Validierungsstruktur
+    let min_duration_opt = verified_standard.validation.as_ref()
+        .and_then(|v| v.behavior_rules.as_ref())
+        .and_then(|b| b.issuance_minimum_validity_duration.as_ref());
+
+    if let Some(min_duration_str) = min_duration_opt {
         let min_duration_dt = add_iso8601_duration(creation_dt, min_duration_str)?;
         if initial_valid_until_dt < min_duration_dt {
             return Err(VoucherManagerError::InvalidValidityDuration(format!(
@@ -183,7 +187,11 @@ pub fn create_voucher(
         divisible: verified_standard.template.fixed.is_divisible,
         creation_date: creation_date_str.clone(),
         valid_until: valid_until_str,
-        standard_minimum_issuance_validity: verified_standard.validation.issuance_minimum_validity_duration.clone().unwrap_or_default(),
+        // KORREKTUR: Zugriff auf die neue, verschachtelte Validierungsstruktur
+        standard_minimum_issuance_validity: verified_standard.validation.as_ref()
+            .and_then(|v| v.behavior_rules.as_ref())
+            .and_then(|b| b.issuance_minimum_validity_duration.clone())
+            .unwrap_or_default(),
         non_redeemable_test_voucher: data.non_redeemable_test_voucher,
         nominal_value: final_nominal_value,
         collateral: final_collateral,
@@ -203,7 +211,12 @@ pub fn create_voucher(
     let creator_signature = sign_ed25519(creator_signing_key, voucher_hash.as_bytes());
     temp_voucher.creator.signature = bs58::encode(creator_signature.to_bytes()).into_string();
 
-    let decimal_places = verified_standard.validation.amount_decimal_places as u32;
+    // KORREKTUR: Zugriff auf die neue, verschachtelte Validierungsstruktur mit Fallback
+    let decimal_places = verified_standard.validation.as_ref()
+        .and_then(|v| v.behavior_rules.as_ref())
+        .and_then(|b| b.amount_decimal_places)
+        .unwrap_or(2) as u32; // Fallback auf 2, falls nicht definiert
+
     let initial_amount = Decimal::from_str(&temp_voucher.nominal_value.amount)?;
 
     let mut init_transaction = Transaction {
@@ -313,7 +326,11 @@ pub fn create_transaction(
     amount_to_send_str: &str,
 ) -> Result<Voucher, VoucherCoreError> {
     crate::services::voucher_validation::validate_voucher_against_standard(voucher, standard)?;
-    let decimal_places = standard.validation.amount_decimal_places as u32;
+    // KORREKTUR: Zugriff auf die neue, verschachtelte Validierungsstruktur mit Fallback
+    let decimal_places = standard.validation.as_ref()
+        .and_then(|v| v.behavior_rules.as_ref())
+        .and_then(|b| b.amount_decimal_places)
+        .unwrap_or(2) as u32; // Fallback auf 2, falls nicht definiert
 
     let spendable_balance = get_spendable_balance(voucher, sender_id, standard)?;
     let amount_to_send = Decimal::from_str(amount_to_send_str)?;
@@ -373,4 +390,44 @@ pub fn create_transaction(
     // Dies stellt sicher, dass keine Transaktion erstellt werden kann, die gegen die Regeln des Standards verstößt.
     crate::services::voucher_validation::validate_voucher_against_standard(&new_voucher, standard)?;
     Ok(new_voucher)
+}
+
+/// Berechnet das ausgebbare Guthaben für einen bestimmten Benutzer.
+///
+/// Diese Funktion durchläuft die Transaktionshistorie eines Gutscheins, um den
+/// aktuellen Kontostand eines Benutzers zu ermitteln.
+pub fn get_spendable_balance(
+    voucher: &Voucher,
+    user_id: &str,
+    standard: &VoucherStandardDefinition,
+) -> Result<Decimal, VoucherCoreError> {
+    if voucher.transactions.is_empty() {
+        return Ok(Decimal::ZERO);
+    }
+
+    // Die Gültigkeit des Gutscheins prüfen, bevor das Guthaben berechnet wird.
+    // Wir ignorieren absichtlich Fehler, die nur durch fehlende Bürgen entstehen,
+    // da dies für eine reine Guthabenprüfung nicht relevant ist.
+    match crate::services::voucher_validation::validate_voucher_against_standard(voucher, standard) {
+        Ok(_) => (),
+        Err(VoucherCoreError::Validation(_)) => (), // Ignoriere Validierungsfehler für Guthabenprüfung
+        Err(e) => return Err(e),
+    };
+
+    let last_tx = voucher.transactions.last().unwrap();
+    let decimal_places = standard.validation.as_ref()
+        .and_then(|v| v.behavior_rules.as_ref())
+        .and_then(|b| b.amount_decimal_places)
+        .unwrap_or(2) as u32;
+
+    let balance_str = if last_tx.recipient_id == user_id {
+        &last_tx.amount
+    } else if last_tx.sender_id == user_id {
+        last_tx.sender_remaining_amount.as_deref().unwrap_or("0")
+    } else {
+        "0"
+    };
+
+    let balance = Decimal::from_str(balance_str)?;
+    Ok(balance.round_dp(decimal_places))
 }

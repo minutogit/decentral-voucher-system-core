@@ -21,11 +21,10 @@
 use voucher_lib::{
     // Structs from specific modules
     models::voucher::{Creator, NominalValue},
-    services::voucher_manager::{create_transaction, create_voucher, VoucherManagerError},
-    services::voucher_validation::{get_spendable_balance, validate_voucher_against_standard},
+    services::voucher_manager::{create_transaction, create_voucher, VoucherManagerError, get_spendable_balance},
+    services::voucher_validation::{validate_voucher_against_standard},
     // Structs/Enums from the crate root (or re-exported there)
-    NewVoucherData,
-    VoucherCoreError,
+    NewVoucherData, VoucherCoreError,
 };
 use rust_decimal_macros::dec;
 mod test_utils;
@@ -38,7 +37,7 @@ fn test_chained_transaction_math_and_scaling() {
     // --- 1. SETUP ---
     let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     assert_eq!(
-        standard.validation.amount_decimal_places, 4,
+        standard.validation.as_ref().unwrap().behavior_rules.as_ref().unwrap().amount_decimal_places.unwrap(), 4,
         "This test requires the silver standard with 4 decimal places."
     );
 

@@ -12,7 +12,7 @@ use crate::models::secure_container::{PayloadType, SecureContainer};
 use crate::services::crypto_utils::{get_hash, get_pubkey_from_user_id, sign_ed25519, verify_ed25519};
 use crate::services::secure_container_manager::{create_secure_container, open_secure_container};
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
-use crate::services::voucher_validation::ValidationError;
+use crate::error::ValidationError;
 use crate::models::voucher::Voucher;
 
 /// Erstellt ein `TransactionBundle`, verpackt es in einen `SecureContainer` und serialisiert diesen.

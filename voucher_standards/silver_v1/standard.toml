@@ -42,23 +42,13 @@ needed_count = 0
 unit = "Unzen"
 
 [validation]
-allowed_transaction_types = [
+[validation.behavior_rules]
+allowed_t_types = [
     "init",
     "split",
     "transfer",
-    "redeem",
 ]
 amount_decimal_places = 4
-issuance_minimum_validity_duration = "P3Y"
-required_voucher_fields = [
-    "voucher_id",
-    "creation_date",
-    "creator.signature",
-]
-
-[validation.guarantor_rules]
-gender_specific = false
-genders_needed = []
 
 [signature]
 # Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.

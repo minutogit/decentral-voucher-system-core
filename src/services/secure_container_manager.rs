@@ -10,7 +10,7 @@ use crate::services::crypto_utils::{
     self, ed25519_pub_to_x25519, ed25519_sk_to_x25519_sk, get_hash, get_pubkey_from_user_id,
 };
 use crate::services::utils::to_canonical_json;
-use crate::services::voucher_validation::ValidationError;
+use crate::error::ValidationError;
 use ed25519_dalek::Signature;
 use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore};

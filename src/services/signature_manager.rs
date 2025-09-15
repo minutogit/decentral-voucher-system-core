@@ -2,6 +2,7 @@
 //!
 //! Enthält die zustandslose Geschäftslogik für die Erstellung und kryptographische
 //! Validierung von losgelösten Signaturen (`DetachedSignature`).
+use crate::error::ValidationError;
 
 use crate::error::VoucherCoreError;
 use crate::models::profile::UserIdentity;
@@ -121,11 +122,7 @@ pub fn validate_detached_signature(
     let calculated_sig_id = get_hash(canonical_json);
 
     if calculated_sig_id != expected_sig_id {
-        return Err(VoucherCoreError::Validation(
-            crate::services::voucher_validation::ValidationError::InvalidSignatureId(
-                expected_sig_id,
-            ),
-        ));
+        return Err(VoucherCoreError::Validation(ValidationError::InvalidSignatureId(expected_sig_id)));
     }
 
     let public_key = get_pubkey_from_user_id(&signer_id)?;
@@ -134,7 +131,7 @@ pub fn validate_detached_signature(
     // Konvertiere den Vec<u8> in ein [u8; 64] Array, wie es von `from_bytes` erwartet wird.
     let signature_array: [u8; 64] = signature_bytes.try_into().map_err(|_| {
         VoucherCoreError::Validation(
-            crate::services::voucher_validation::ValidationError::SignatureDecodeError(
+            ValidationError::SignatureDecodeError(
                 "Invalid signature length: must be 64 bytes".to_string(),
             ),
         )
@@ -142,9 +139,7 @@ pub fn validate_detached_signature(
     let signature = ed25519_dalek::Signature::from_bytes(&signature_array);
 
     if !verify_ed25519(&public_key, expected_sig_id.as_bytes(), &signature) {
-        return Err(VoucherCoreError::Validation(
-            crate::services::voucher_validation::ValidationError::InvalidSignature(signer_id)
-        ));
+        return Err(VoucherCoreError::Validation(ValidationError::InvalidSignature { signer_id }));
     }
 
     Ok(())

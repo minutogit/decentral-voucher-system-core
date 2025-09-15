@@ -36,7 +36,7 @@ pub enum StandardDefinitionError {
 /// Diese Fehler sind spezifisch für die Überprüfung eines Gutscheins gegen seinen Standard.
 #[derive(Error, Debug)]
 pub enum ValidationError {
-    // --- Phase 2: Neue, datengesteuerte Validierungsfehler ---
+    // --- Datengesteuerte Validierungsfehler ---
 
     /// Eine quantitative Regel wurde verletzt (z.B. zu viele oder zu wenige Signaturen).
     #[error("Count for '{field}' is out of bounds. Expected min: {min}, max: {max}, but found: {found}.")]
@@ -82,6 +82,10 @@ pub enum ValidationError {
         allowed: Vec<String>,
     },
 
+    /// Es wurde versucht, einen nicht teilbaren Gutschein zu teilen.
+    #[error("The voucher is not divisible and a split transaction was attempted.")]
+    VoucherNotDivisible,
+
     /// Die Gültigkeitsdauer des Gutscheins überschreitet die im Standard definierte Maximaldauer.
     #[error("Voucher validity duration exceeds the maximum allowed. Max allowed: '{max_allowed}', Found: '{found}'.")]
     ValidityDurationExceeded {
@@ -91,9 +95,9 @@ pub enum ValidationError {
 
     /// Ein JSON-Pfad konnte im Gutschein-Objekt nicht gefunden werden.
     #[error("Content rule failed: Path '{path}' could not be resolved in the voucher.")]
-    PathNotFound(String),
+    PathNotFound { path: String },
 
-    // --- Bestehende Fehler (angepasst & beibehalten) ---
+    // --- Logische & kryptographische Validierungsfehler ---
 
     /// Die UUID des Standards im Gutschein stimmt nicht mit der UUID der Validierungsdefinition überein.
     #[error("Voucher standard UUID mismatch. Expected: {expected}, Found: {found}")]
@@ -120,7 +124,7 @@ pub enum ValidationError {
 
     /// Eine Signatur ist kryptographisch ungültig.
     #[error("Invalid signature for signer {signer_id}")]
-    InvalidSignature(String),
+    InvalidSignature { signer_id: String },
 
     /// Die Transaktionskette ist ungültig (z.B. falscher prev_hash oder Signatur).
     #[error("Invalid transaction: {0}")]
@@ -129,6 +133,10 @@ pub enum ValidationError {
     /// Die Signatur einer Transaktion ist ungültig.
     #[error("Invalid signature for transaction '{t_id}' from sender '{sender_id}'")]
     InvalidTransactionSignature { t_id: String, sender_id: String },
+
+    /// Die Signatur eines TransactionBundle ist ungültig.
+    #[error("The signature of the transaction bundle is invalid.")]
+    InvalidBundleSignature,
 
     /// Fehler bei der Dekodierung einer Signatur (z.B. Base58).
     #[error("Failed to decode signature: {0}")]
@@ -141,6 +149,55 @@ pub enum ValidationError {
     /// Der Betrag der `init`-Transaktion stimmt nicht mit dem Nennwert des Gutscheins überein.
     #[error("Initial transaction amount must match nominal value. Expected: {expected}, Found: {found}")]
     InitAmountMismatch { expected: String, found: String },
+
+    // --- Neue Validierungsfehler aus 'test_advanced_validation' ---
+
+    /// Das Gültigkeitsdatum liegt vor dem Erstellungsdatum.
+    #[error("Invalid date logic: valid_until ('{valid_until}') cannot be before creation_date ('{creation}').")]
+    InvalidDateLogic { creation: String, valid_until: String },
+
+    /// Ein Bürge hat versucht, mehrfach für denselben Gutschein zu bürgen.
+    #[error("Duplicate guarantor found: {guarantor_id}. Each guarantor can only sign once.")]
+    DuplicateGuarantor { guarantor_id: String },
+
+    /// Ein Zeitstempel in der Kette ist nicht chronologisch korrekt.
+    #[error("Invalid time order for {entity} '{id}': timestamp '{time2}' is not after previous timestamp '{time1}'.")]
+    InvalidTimeOrder { entity: String, id: String, time1: String, time2: String },
+
+    /// Sender oder Empfänger der 'init'-Transaktion ist nicht der Ersteller des Gutscheins.
+    #[error("Initial transaction party mismatch: expected '{expected}', found '{found}'.")]
+    InitPartyMismatch { expected: String, found: String },
+
+    /// Die t_id einer Transaktion stimmt nicht mit dem Hash ihres Inhalts überein.
+    #[error("Transaction ID mismatch for transaction '{t_id}'. The content may have been tampered with.")]
+    MismatchedTransactionId { t_id: String },
+
+    /// Die Teilbarkeitseigenschaft des Gutscheins stimmt nicht mit der des Standards überein.
+    #[error("Divisibility mismatch: voucher is '{from_voucher}' but standard requires '{from_standard}'.")]
+    IncorrectDivisibility { from_voucher: bool, from_standard: bool },
+
+    /// Ein Betrag in einer Transaktion ist negativ oder null.
+    #[error("Transaction amount must be positive, but found '{amount}'.")]
+    NegativeOrZeroAmount { amount: String },
+
+    /// Bei einem vollen Transfer stimmt der Transaktionsbetrag nicht mit dem Guthaben des Senders überein.
+    #[error("Full transfer amount mismatch: Sender's balance is '{expected}', but transaction amount is '{found}'.")]
+    FullTransferAmountMismatch { expected: String, found: String },
+
+    /// Während der Überprüfung der Transaktionskette wurden unzureichende Mittel festgestellt.
+    #[error("Insufficient funds found in transaction chain for user '{user_id}'. Needed: {needed}, Available: {available}")]
+    InsufficientFundsInChain { user_id: String, needed: String, available: String },
+
+    /// Die Gültigkeitsdauer des Gutscheins ist kürzer als vom Standard gefordert.
+    #[error("The voucher's effective validity duration is shorter than the minimum required by the standard.")]
+    ValidityDurationTooShort,
+
+    /// Die im Gutschein gespeicherte Mindestgültigkeitsregel stimmt nicht mit der des Standards überein.
+    #[error("The minimum validity duration rule stored in the voucher does not match the standard. Expected: {expected}, Found: {found}")]
+    MismatchedMinimumValidity {
+        expected: String,
+        found: String,
+    },
 }
 
 
