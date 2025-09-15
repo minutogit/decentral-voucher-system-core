@@ -68,6 +68,7 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
   "voucher_standard": {
     "name": "STRING", // Der Name des Standards, zu dem dieser Gutschein gehört (z.B. "Minuto-Gutschein", "Silber-Umlauf-Gutschein").
     "uuid": "STRING"  // Die eindeutige Kennung (UUID) des Standards, zu dem dieser Gutschein gehört.
+    "standard_definition_hash": "STRING" // Der SHA3-256 Hash des kanonisierten Standard-TOML-Inhalts (ohne Signatur), um die Unveränderlichkeit zu gewährleisten.
   },
   "voucher_id": "STRING", // Die eindeutige ID dieses spezifischen Gutscheins.
   "voucher_nonce": "STRING", // Ein zufälliges Nonce, um den ersten `prev_hash` unvorhersehbar zu machen.
@@ -143,7 +144,7 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
     { // Jede Transaktion ist ein in sich geschlossenes, signiertes Objekt.
       "t_id": "STRING",                 // Eindeutige ID der Transaktion, erzeugt durch Hashing der Transaktionsdaten (ohne t_id und Signatur).
       "prev_hash": "STRING",            // Der Hash der vorherigen Transaktion (oder der voucher_id bei der "init"-Transaktion), der die Kette kryptographisch sichert.
-      "t_type": "STRING",               // Art der Transaktion: "init" für Initialisierung, "split" für Teilung. Bei einem vollen Transfer wird das Feld weggelassen.
+      "t_type": "STRING",               // Art der Transaktion: "init" für Initialisierung, "split" für Teilung, "transfer" für einen vollen Transfer.
       "t_time": "YYYY-MM-DDTHH:MM:SS.SSSSSSZ", // Zeitpunkt der Transaktion.
       "sender_id": "STRING",            // ID des Senders der Transaktion.
       "recipient_id": "STRING",         // ID des Empfängers der Transaktion.
@@ -244,12 +245,15 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   └── playground_wallet.rs
 ├── output.txt
 ├── README.md
+├── sign_standards.sh
 ├── src
 │   ├── app_service
 │   │   └── mod.rs
 │   ├── archive
 │   │   ├── file_archive.rs
 │   │   └── mod.rs
+│   ├── bin
+│   │   └── voucher-cli.rs
 │   ├── error.rs
 │   ├── examples
 │   ├── lib.rs
@@ -271,6 +275,7 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   │   ├── mod.rs
 │   │   ├── secure_container_manager.rs
 │   │   ├── signature_manager.rs
+│   │   ├── standard_manager.rs
 │   │   ├── utils.rs
 │   │   ├── voucher_manager.rs
 │   │   └── voucher_validation.rs
@@ -301,8 +306,10 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   └── test_wallet_signatures.rs
 ├── todo.md
 └── voucher_standards
-    ├── minuto_standard.toml
-    ├── silver_standard.toml
+    ├── minuto_v1
+    │   └── standard.toml
+    ├── silver_v1
+    │   └── standard.toml
     └── standard_template.toml
 ```
 
@@ -329,6 +336,7 @@ Definiert den `AppService`, eine übergeordnete Fassade, die die `Wallet`-Logik 
 - `pub fn receive_bundle(...) -> Result<ProcessBundleResult, String>`
   - Verarbeitet ein empfangenes Bundle und speichert den neuen Wallet-Zustand.
 - Stellt diverse Query-Methoden bereit, die Lesezugriffe auf das Wallet ermöglichen (z.B. `get_voucher_summaries`, `get_total_balance_by_currency`).
+- Stellt Funktionen zur Generierung und Validierung von BIP-39 Mnemonic-Phrasen bereit (`generate_mnemonic`, `validate_mnemonic`).
 
 ### `src/wallet` Modul
 
@@ -367,6 +375,7 @@ Definiert die Abstraktion für die persistente Speicherung und stellt eine Stand
   - Implementiert den `Storage`-Trait.
   - Verwaltet die Ver- und Entschlüsselung der Wallet-Daten in mehreren separaten Dateien (`profile.enc`, `vouchers.enc`, `bundles.meta.enc`, `fingerprints.enc`, `proofs.enc`).
   - Implementiert die "Zwei-Schloss"-Mechanik mit Key-Wrapping für den Passwort-Zugriff und die Mnemonic-Wiederherstellung.
+  - Bietet eine Funktion (`reset_password`) zum Zurücksetzen des Passworts, wenn der Benutzer sein Passwort vergessen hat.
 
 ### `src/archive` Modul (`mod.rs`, `file_archive.rs`)
 
@@ -385,20 +394,41 @@ Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierun
 - `pub fn get_hash(input: impl AsRef<[u8]>) -> String`
   - Berechnet einen SHA3-256-Hash der Eingabe und gibt ihn als Base58-kodierten String zurück.
 - `pub fn derive_ed25519_keypair(mnemonic_phrase: &str, passphrase: Option<&str>) -> Result<(EdPublicKey, SigningKey), VoucherCoreError>`
-  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase über einen **gehärteten, mehrstufigen Prozess** (BIP-39 Seed -\> PBKDF2 Stretch -\> HKDF Expand) ab, um die Sicherheit zu erhöhen.
+  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase über einen **gehärteten, mehrstufigen Prozess** (BIP-39 Seed -> PBKDF2 Stretch -> HKDF Expand) ab, um die Sicherheit zu erhöhen.
 - `pub fn create_user_id(public_key: &EdPublicKey, user_prefix: Option<&str>) -> Result<String, UserIdError>`
   - Generiert eine User ID konform zum **`did:key`-Standard**. Das Format ist `[prefix]@[did:key:z...Ed25519-PublicKey...]` oder nur `did:key:z...`.
 - `pub fn get_pubkey_from_user_id(user_id: &str) -> Result<EdPublicKey, GetPubkeyError>`
   - Extrahiert den Ed25519 Public Key aus einer `did:key`-basierten User ID-Zeichenkette.
+- Bietet Funktionen zur Generierung und Validierung von BIP-39 Mnemonic-Phrasen (`generate_mnemonic`, `validate_mnemonic_phrase`).
+
+### `services::standard_manager` Modul
+
+Dieses Modul enthält die Logik zur Verarbeitung und Verifizierung von Gutschein-Standard-Definitionen (TOML-Dateien).
+
+- `pub fn verify_and_parse_standard(toml_str: &str) -> Result<(VoucherStandardDefinition, String), VoucherCoreError>`
+  - Parst einen TOML-String in eine `VoucherStandardDefinition`.
+  - Kanonisiert die Definition (ohne Signatur) in einen stabilen JSON-String.
+  - Berechnet den SHA3-256 Hash des kanonischen JSON-Strings (dies ist der "Konsistenz-Hash").
+  - Verifiziert die im TOML enthaltene Ed25519-Signatur gegen den berechneten Hash.
+  - Gibt bei Erfolg die verifizierte Definition und den Konsistenz-Hash zurück.
+- `pub fn get_localized_text<'a>(texts: &'a [LocalizedText], lang_preference: &str) -> Option<&'a str>`
+  - Löst einen lokalisierten Text gemäß einer definierten Fallback-Logik auf.
 
 ### `services::voucher_manager` Modul
 
 Dieses Modul stellt die Kernlogik für die Erstellung und Verarbeitung von Gutscheinen bereit.
 
-- `pub fn create_voucher(data: NewVoucherData, standard_definition: &VoucherStandardDefinition, creator_signing_key: &SigningKey) -> Result<Voucher, VoucherCoreError>`
-  - Orchestriert die Erstellung eines neuen, vollständigen Gutscheins. Erzeugt eine `voucher_nonce`, um den initialen `prev_hash` unvorhersehbar zu machen und so die Anonymität des Erstellers auf Layer 2 zu schützen. Nutzt eine korrigierte Logik zur Berechnung von Gültigkeitsdauern.
+- `pub fn create_voucher(data: NewVoucherData, verified_standard: &VoucherStandardDefinition, standard_hash: &str, creator_signing_key: &SigningKey, lang_preference: &str) -> Result<Voucher, VoucherCoreError>`
+  - Orchestriert die Erstellung eines neuen, vollständigen Gutscheins.
+  - Erzeugt eine `voucher_nonce`, um den initialen `prev_hash` unvorhersehbar zu machen und so die Anonymität des Erstellers auf Layer 2 zu schützen.
+  - Nutzt eine korrigierte Logik zur Berechnung von Gültigkeitsdauern.
+  - Nimmt den **Konsistenz-Hash** des verifizierten Standards entgegen und bettet ihn in den Gutschein ein.
+  - Verwendet die Logik zur Auswahl des mehrsprachigen Beschreibungstextes aus dem Standard.
 - `pub fn create_transaction(voucher: &Voucher, standard: &VoucherStandardDefinition, sender_id: &str, sender_key: &SigningKey, recipient_id: &str, amount_to_send_str: &str) -> Result<Voucher, VoucherCoreError>`
-  - Erstellt eine Kopie des Gutscheins mit einer neuen Transaktion. Die Signatur der Transaktion sichert nun ein minimales Objekt (`{prev_hash, sender_id, t_id}`). Verwendet `decimal_utils` zur **strengen Validierung der Betragspräzision** und zur **kanonischen Formatierung** der Werte.
+  - Erstellt eine Kopie des Gutscheins mit einer neuen Transaktion.
+  - Die Signatur der Transaktion sichert nun ein minimales Objekt (`{prev_hash, sender_id, t_id}`).
+  - Verwendet `decimal_utils` zur **strengen Validierung der Betragspräzision** und zur **kanonischen Formatierung** der Werte.
+  - Verwendet explizit den Transaktionstyp "transfer" für einen vollen Transfer.
 
 ### `services::voucher_validation` Modul
 
@@ -406,3 +436,6 @@ Dieses Modul enthält die Logik zur Validierung eines `Voucher`-Objekts gegen di
 
 - `pub fn validate_voucher_against_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError>`
   - Führt eine umfassende Prüfung des Gutscheins durch, inklusive der korrekten Verkettung unter Einbeziehung des `voucher_nonce`, der Validierung der vereinfachten Transaktions-Signatur und neuer Geschäftsregeln (z.B. keine Transaktionen an sich selbst).
+  - Überprüft die **Konsistenz des eingebetteten Standard-Hashes** mit dem Hash des aktuellen Standard-Objekts, um sicherzustellen, dass der Gutschein immer gegen die exakte Version des Standards validiert wird, mit der er erstellt wurde.
+  - Überprüft, ob der **Transaktionstyp** (`t_type`) laut Standard erlaubt ist.
+  - Überprüft die Integrität und kryptographische Gültigkeit aller **zusätzlichen Signaturen** (`additional_signatures`).
