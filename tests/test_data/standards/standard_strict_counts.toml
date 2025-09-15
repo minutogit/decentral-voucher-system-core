@@ -1,0 +1,29 @@
+[metadata]
+name = "Strict Counts Test Standard"
+uuid = "TEST-STRICT-COUNTS-V1"
+abbreviation = "SCT"
+issuer_name = "Voucher-Core Test Suite"
+
+[template.fixed]
+primary_redemption_type = "goods_or_services"
+is_summable = true
+is_divisible = false
+[template.fixed.nominal_value]
+unit = "TestUnit"
+[template.fixed.collateral]
+type = "None"
+description = ""
+redeem_condition = ""
+[template.fixed.guarantor_info]
+needed_count = 0
+description = ""
+
+[validation]
+[validation.counts]
+guarantor_signatures = { min = 1, max = 1 }
+additional_signatures = { min = 0, max = 0 }
+transactions = { min = 1, max = 2 }
+
+[signature]
+issuer_id = "did:key:z6Mkk7yqnGF3YwTrLpqrW6Hzt36gV5p82nL4s58gG4nEaG9e" # Dummy Key
+signature = "dummy_signature_for_testing_purposes_only"

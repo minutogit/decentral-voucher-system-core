@@ -59,6 +59,7 @@ use crate::services::voucher_manager::NewVoucherData;
 use crate::storage::file_storage::FileStorage;
 use crate::storage::AuthMethod;
 use crate::wallet::{ProcessBundleResult, VoucherDetails, VoucherSummary, Wallet};
+use crate::services::bundle_processor;
 use bip39::Language;
 use std::collections::HashMap;
 use std::path::Path;
@@ -418,6 +419,9 @@ impl AppService {
     pub fn receive_bundle(
         &mut self,
         bundle_data: &[u8],
+        // NEU: Caller muss die benötigten Standard-Definitionen als TOML-Strings bereitstellen.
+        // Key: Standard-UUID, Value: TOML-Inhalt als String.
+        standard_definitions_toml: &HashMap<String, String>,
         archive: Option<&dyn VoucherArchive>,
         password: &str,
     ) -> Result<ProcessBundleResult, String> {
@@ -425,15 +429,22 @@ impl AppService {
 
         let (result, new_state) = match current_state {
             AppState::Unlocked { mut wallet, identity } => {
+                // Führe die Vorab-Validierung durch, bevor das Wallet modifiziert wird.
+                if let Err(e) = self.validate_vouchers_in_bundle(&identity, bundle_data, standard_definitions_toml) {
+                    // Wenn die Validierung fehlschlägt, stelle den alten Zustand wieder her und gib den Fehler zurück.
+                    return (Err(e), AppState::Unlocked { wallet, identity });
+                }
+
+                // Die Validierung war erfolgreich, fahre mit der Verarbeitung im Wallet fort.
                 match wallet.process_encrypted_transaction_bundle(&identity, bundle_data, archive) {
                     Ok(proc_result) => {
                         if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
-                            (Err(e.to_string()), AppState::Unlocked { wallet, identity })
+                            (Err(e.to_string()), AppState::Unlocked { wallet, identity})
                         } else {
-                            (Ok(proc_result), AppState::Unlocked { wallet, identity })
+                            (Ok(proc_result), AppState::Unlocked { wallet, identity})
                         }
                     }
-                    Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
+                    Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity})
                 }
             }
             AppState::Locked => (Err("Wallet is locked.".to_string()), AppState::Locked),
@@ -527,6 +538,36 @@ impl AppService {
     }
 }
 
+// --- Interne Hilfsmethoden ---
+
+impl AppService {
+    /// Validiert alle Gutscheine innerhalb eines verschlüsselten Bundles.
+    /// Diese Methode wird aufgerufen, bevor das Bundle an das Wallet zur Verarbeitung übergeben wird.
+    fn validate_vouchers_in_bundle(
+        &self,
+        identity: &UserIdentity,
+        bundle_data: &[u8],
+        standard_definitions_toml: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        // 1. Bundle öffnen, um an die Gutscheine zu kommen.
+        let (bundle, _) = bundle_processor::open_and_verify_bundle(identity, bundle_data)
+            .map_err(|e| e.to_string())?;
+
+        // 2. Jeden Gutschein im Bundle validieren.
+        for voucher in &bundle.vouchers {
+            let standard_uuid = &voucher.voucher_standard.uuid;
+            let standard_toml = standard_definitions_toml.get(standard_uuid)
+                .ok_or_else(|| format!("Required standard definition for UUID '{}' not provided.", standard_uuid))?;
+            
+            let (verified_standard, _) = crate::services::standard_manager::verify_and_parse_standard(standard_toml)
+                .map_err(|e| e.to_string())?;
+
+            crate::services::voucher_validation::validate_voucher_against_standard(voucher, &verified_standard)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
 
 // --- Interne Hilfsmethoden für Tests ---
 

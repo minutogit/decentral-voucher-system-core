@@ -505,6 +505,45 @@ fn test_split_fails_on_insufficient_funds() {
     ));
 }
 
+
+// --- NEUER TEST FÜR DATENGESTEUERTE VALIDIERUNG (PHASE 4) ---
+
+#[test]
+fn test_fails_to_create_forbidden_transaction_type() {
+    // 1. Setup: Lade den neuen Test-Standard, der "split" verbietet.
+    let toml_str = include_str!("test_data/standards/standard_no_split.toml");
+    let standard: voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition =
+        toml::from_str(toml_str).unwrap();
+
+    // Da der Standard zur Laufzeit geladen wird, müssen wir den Hash für die Erstellung manuell berechnen.
+    let mut standard_to_hash = standard.clone();
+    standard_to_hash.signature = None;
+    let standard_hash = get_hash(to_canonical_json(&standard_to_hash).unwrap());
+
+    // 2. Erstelle einen Gutschein, der nach diesem Standard gültig ist.
+    let sender = &ACTORS.alice;
+    let recipient = &ACTORS.bob;
+    let creator = Creator { id: sender.user_id.clone(), ..Default::default() };
+    let mut voucher_data = create_minuto_voucher_data(creator);
+    voucher_data.nominal_value.amount = "100".to_string();
+
+    let initial_voucher = create_voucher(voucher_data, &standard, &standard_hash, &sender.signing_key, "en").unwrap();
+    assert!(validate_voucher_against_standard(&initial_voucher, &standard).is_ok());
+
+    // 3. Versuche, eine "split"-Transaktion zu erstellen, obwohl sie verboten ist.
+    let split_result = create_transaction(
+        &initial_voucher,
+        &standard,
+        &sender.user_id,
+        &sender.signing_key,
+        &recipient.user_id,
+        "50", // Teilbetrag, der einen "split" erzwingt
+    );
+
+    // 4. Assert: Die Erstellung muss mit einem `TransactionTypeNotAllowed`-Fehler fehlschlagen.
+    assert!(matches!(split_result.unwrap_err().downcast_ref::<ValidationError>().unwrap(),
+        ValidationError::TransactionTypeNotAllowed { t_type, .. } if t_type == "split"
+    ));
 #[test]
 fn test_split_fails_on_non_divisible_voucher() {
     // Manipuliere den Standard, um ihn nicht-teilbar zu machen

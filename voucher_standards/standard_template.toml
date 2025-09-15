@@ -114,31 +114,55 @@ default_validity_duration = "P5Y"
 # =================================================================================
 #
 # Legt die Regeln fest, nach denen ein Gutschein dieses Standards validiert wird.
+# Die gesamte `[validation]`-Sektion ist optional. Wenn sie fehlt, werden keine
+# dieser spezifischen Prüfungen durchgeführt.
 #
 [validation]
-# (String, Optional) Legt eine Mindestgültigkeitsdauer bei Erstellung fest.
-issuance_minimum_validity_duration = "P1Y"
-
-# (Integer) Legt die Anzahl der erlaubten Nachkommastellen für Beträge fest.
-amount_decimal_places = 2
-
-# (Array von Strings) Definiert die erlaubten Transaktionstypen.
-allowed_transaction_types = ["init", "split", "redeem"]
-
-# (Array von Strings) Liste aller Felder, die zwingend vorhanden sein müssen.
-required_voucher_fields = [
-    "voucher_id",
-    "creation_date",
-    "creator.signature",
-    "guarantor_signatures",
-]
-
-[validation.guarantor_rules]
-# (Boolean) Wenn `true`, werden die Geschlechter der Bürgen überprüft.
-gender_specific = true
-# (Array von Strings) Liste der benötigten Geschlechter (ISO 5218: "1"=m, "2"=f).
-genders_needed = ["1", "2"]
-
+#
+# # -- Sektion für quantitative Regeln --
+# [validation.counts]
+# # Legt die minimale und maximale Anzahl für bestimmte Elemente fest.
+# guarantor_signatures = { min = 1, max = 3 }
+# additional_signatures = { min = 0, max = 5 }
+# transactions = { min = 1, max = 100 } # z.B. um die Dateigröße zu begrenzen
+#
+# # -- Sektion für Signatur-Anforderungen --
+# # Definiert spezifische, erforderliche Signaturen von bestimmten Parteien.
+# [[validation.required_signatures]]
+# # Eine menschenlesbare Beschreibung der Rolle des Unterzeichners.
+# role_description = "Signatur der ausgebenden Institution"
+# # Eine Liste von `did:key`-IDs, die zur Unterzeichnung berechtigt sind.
+# allowed_signer_ids = ["did:key:z...", "did:key:z..."]
+# # Optional: Die Signatur muss exakt diesen `description`-Text enthalten.
+# required_signature_description = "Offizielle Freigabe"
+# # Wenn `true`, muss eine passende Signatur zwingend vorhanden sein.
+# is_mandatory = true
+#
+# # -- Sektion für Inhalts-Regeln --
+# [validation.content_rules]
+#   # Definiert Felder, die einen exakten, festen Wert haben müssen.
+#   [validation.content_rules.fixed_fields]
+#   # Der Key ist ein JSON-Pfad. Der Wert muss ein gültiger JSON-Wert sein.
+#   "nominal_value.unit" = "Euro"
+#   "divisible" = false
+#
+#   # Definiert Felder, deren Wert aus einer vorgegebenen Liste stammen muss.
+#   [validation.content_rules.allowed_values]
+#   "nominal_value.amount" = ["25", "50", "100"]
+#
+#   # Definiert Felder, deren Wert einem bestimmten Regex-Muster entsprechen muss.
+#   [validation.content_rules.regex_patterns]
+#   # Beispiel: Rechnungsnummer im Format RE-YYYY-NNNNNN
+#   description = '^RE-202[5-9]-[0-9]{6}$'
+#
+# # -- Sektion für Verhaltens-Regeln --
+# [validation.behavior_rules]
+# # Legt fest, welche Transaktionstypen (`t_type`) erlaubt sind.
+# allowed_t_types = ["transfer", "split", "redeem"]
+#
+# # Legt die maximal erlaubte Gültigkeitsdauer ab Erstellung fest (ISO 8601 Duration).
+# # Verhindert, dass Gutscheine mit unrealistisch langer Lebensdauer erstellt werden.
+# max_creation_validity_duration = "P10Y" # z.B. maximal 10 Jahre
 
 # =================================================================================
 # Block 4: Kryptographische Signatur (NEU & ZWINGEND ERFORDERLICH)

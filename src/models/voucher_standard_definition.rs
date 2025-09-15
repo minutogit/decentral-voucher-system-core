@@ -5,6 +5,9 @@
 //! und fügt die Unterstützung für kryptographische Signaturen und Mehrsprachigkeit hinzu.
 
 use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
+
+// --- Bestehende Strukturen (unverändert) ---
 
 /// Repräsentiert einen einzelnen, sprachabhängigen Text.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -83,28 +86,6 @@ pub struct VoucherTemplate {
     pub default: TemplateDefault,
 }
 
-/// Regeln, die zur Validierung eines Gutscheins herangezogen werden.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct ValidationRules {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issuance_minimum_validity_duration: Option<String>,
-    #[serde(default)]
-    pub amount_decimal_places: u8,
-    pub guarantor_rules: ValidationGuarantorRules,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub required_voucher_fields: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_transaction_types: Vec<String>,
-}
-
-/// Spezifische Validierungsregeln für die Bürgen.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct ValidationGuarantorRules {
-    pub gender_specific: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub genders_needed: Vec<String>,
-}
-
 /// Enthält die kryptographische Signatur, die die Authentizität des Standards beweist.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SignatureBlock {
@@ -114,12 +95,67 @@ pub struct SignatureBlock {
     pub signature: String,
 }
 
+// --- Neue, erweiterte Validierungs-Strukturen ---
+
+/// Definiert Min/Max-Grenzen für quantitative Prüfungen.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MinMax {
+    pub min: u32,
+    pub max: u32,
+}
+
+/// Bündelt alle Regeln zur Zählung von Elementen (z.B. Signaturen, Transaktionen).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CountRules {
+    pub guarantor_signatures: Option<MinMax>,
+    pub additional_signatures: Option<MinMax>,
+    pub transactions: Option<MinMax>,
+}
+
+/// Definiert eine Regel für eine erforderliche Signatur.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct RequiredSignatureRule {
+    pub role_description: String,
+    pub allowed_signer_ids: Vec<String>,
+    pub required_signature_description: Option<String>,
+    pub is_mandatory: bool,
+}
+
+/// Bündelt alle Regeln, die den Inhalt von Feldern im Gutschein betreffen.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ContentRules {
+    /// Key ist der JSON-Pfad, z.B. "nominal_value.unit"
+    pub fixed_fields: Option<HashMap<String, serde_json::Value>>,
+    pub allowed_values: Option<HashMap<String, Vec<serde_json::Value>>>,
+    pub regex_patterns: Option<HashMap<String, String>>,
+}
+
+/// Bündelt alle Regeln, die das Verhalten und die Aktionen des Gutscheins steuern.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct BehaviorRules {
+    pub allowed_t_types: Option<Vec<String>>,
+    pub max_creation_validity_duration: Option<String>,
+}
+
+/// Die neue Hauptstruktur für alle Validierungsregeln.
+/// Alle Felder sind optional, um eine flexible Definition zu ermöglichen.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Validation {
+    pub counts: Option<CountRules>,
+    pub required_signatures: Option<Vec<RequiredSignatureRule>>,
+    pub content_rules: Option<ContentRules>,
+    pub behavior_rules: Option<BehaviorRules>,
+}
+
+// --- Haupt-Struct ---
+
 /// Das Haupt-Struct, das die gesamte, nun signierte Standard-Definition kapselt.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct VoucherStandardDefinition {
     pub metadata: StandardMetadata,
     pub template: VoucherTemplate,
-    pub validation: ValidationRules,
+    // Ersetzt die alte `ValidationRules` durch die neue, flexible Struktur.
+    pub validation: Option<Validation>,
     // Die Signatur ist optional, da sie für die Kanonisierung temporär entfernt wird.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<SignatureBlock>,

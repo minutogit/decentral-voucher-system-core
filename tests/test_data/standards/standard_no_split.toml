@@ -1,0 +1,29 @@
+[metadata]
+name = "No Split Test Standard"
+uuid = "TEST-NO-SPLIT-V1"
+abbreviation = "NST"
+issuer_name = "Voucher-Core Test Suite"
+
+[template.fixed]
+primary_redemption_type = "goods_or_services"
+is_summable = true
+# Der Gutschein selbst kann als teilbar initialisiert werden...
+is_divisible = true
+[template.fixed.nominal_value]
+unit = "TestUnit"
+[template.fixed.collateral]
+type = "None"
+description = ""
+redeem_condition = ""
+[template.fixed.guarantor_info]
+needed_count = 0
+description = ""
+
+[validation]
+# ...aber die Verhaltensregeln des Standards verbieten die Ausführung.
+[validation.behavior_rules]
+allowed_t_types = ["init", "transfer"] # "split" fehlt absichtlich
+
+[signature]
+issuer_id = "did:key:z6Mkk7yqnGF3YwTrLpqrW6Hzt36gV5p82nL4s58gG4nEaG9e" # Dummy Key
+signature = "dummy_signature_for_testing_purposes_only"

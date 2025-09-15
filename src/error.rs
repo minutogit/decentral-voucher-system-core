@@ -8,9 +8,8 @@ use thiserror::Error;
 use crate::{
     services::{
         crypto_utils::{GetPubkeyError, SymmetricEncryptionError},
-        // ContainerManagerError wird wieder benötigt
         secure_container_manager::ContainerManagerError,
-        voucher_manager::VoucherManagerError, 
+        voucher_manager::VoucherManagerError,
     },
     storage::StorageError,
 };
@@ -33,104 +32,165 @@ pub enum StandardDefinitionError {
     SignatureDecode(String),
 }
 
+/// Definiert die verschiedenen Fehler, die während der Validierung auftreten können.
+/// Diese Fehler sind spezifisch für die Überprüfung eines Gutscheins gegen seinen Standard.
+#[derive(Error, Debug)]
+pub enum ValidationError {
+    // --- Phase 2: Neue, datengesteuerte Validierungsfehler ---
+
+    /// Eine quantitative Regel wurde verletzt (z.B. zu viele oder zu wenige Signaturen).
+    #[error("Count for '{field}' is out of bounds. Expected min: {min}, max: {max}, but found: {found}.")]
+    CountOutOfBounds {
+        field: String,
+        min: u32,
+        max: u32,
+        found: usize,
+    },
+
+    /// Eine im Standard als zwingend erforderliche Signatur fehlt oder ist ungültig.
+    #[error("A required signature is missing for role: '{role}'.")]
+    MissingRequiredSignature { role: String },
+
+    /// Der Wert eines Feldes entspricht nicht dem im Standard festgeschriebenen Wert.
+    #[error("Field '{field}' has a mismatched value. Expected: {expected}, Found: {found}.")]
+    FieldValueMismatch {
+        field: String,
+        expected: serde_json::Value,
+        found: serde_json::Value,
+    },
+
+    /// Der Wert eines Feldes ist in der Liste der erlaubten Werte nicht enthalten.
+    #[error("Field '{field}' has a value that is not in the allowed list. Found: {found}, Allowed: {allowed:?}.")]
+    FieldValueNotAllowed {
+        field: String,
+        found: serde_json::Value,
+        allowed: Vec<serde_json::Value>,
+    },
+
+    /// Der Wert eines Feldes entspricht nicht dem geforderten Regex-Muster.
+    #[error("Field '{field}' does not match the required pattern '{pattern}'. Found value: '{found}'.")]
+    FieldRegexMismatch {
+        field: String,
+        pattern: String,
+        found: String,
+    },
+
+    /// Der Transaktionstyp (`t_type`) ist laut Standard nicht zulässig.
+    #[error("Transaction type '{t_type}' is not allowed. Allowed types are: {allowed:?}.")]
+    TransactionTypeNotAllowed {
+        t_type: String,
+        allowed: Vec<String>,
+    },
+
+    /// Die Gültigkeitsdauer des Gutscheins überschreitet die im Standard definierte Maximaldauer.
+    #[error("Voucher validity duration exceeds the maximum allowed. Max allowed: '{max_allowed}', Found: '{found}'.")]
+    ValidityDurationExceeded {
+        max_allowed: String,
+        found: String,
+    },
+
+    /// Ein JSON-Pfad konnte im Gutschein-Objekt nicht gefunden werden.
+    #[error("Content rule failed: Path '{path}' could not be resolved in the voucher.")]
+    PathNotFound(String),
+
+    // --- Bestehende Fehler (angepasst & beibehalten) ---
+
+    /// Die UUID des Standards im Gutschein stimmt nicht mit der UUID der Validierungsdefinition überein.
+    #[error("Voucher standard UUID mismatch. Expected: {expected}, Found: {found}")]
+    StandardUuidMismatch { expected: String, found: String },
+
+    /// Die Signatur des Erstellers ist ungültig.
+    #[error("Creator signature is invalid for creator {creator_id} and data hash {data_hash}")]
+    InvalidCreatorSignature {
+        creator_id: String,
+        data_hash: String,
+    },
+
+    /// Die User ID des Erstellers ist ungültig oder der Public Key kann nicht extrahiert werden.
+    #[error("Invalid creator ID: {0}")]
+    InvalidCreatorId(#[from] GetPubkeyError),
+
+    /// Die voucher_id in einer Signatur stimmt nicht mit der des Gutscheins überein.
+    #[error("Signature references wrong voucher. Expected ID: {expected}, Found ID: {found}")]
+    MismatchedVoucherIdInSignature { expected: String, found: String },
+
+    /// Die Signatur-ID ist ungültig, was auf manipulierte Signatur-Metadaten hindeutet.
+    #[error("The signature ID {0} is invalid or data was tampered with")]
+    InvalidSignatureId(String),
+
+    /// Eine Signatur ist kryptographisch ungültig.
+    #[error("Invalid signature for signer {signer_id}")]
+    InvalidSignature(String),
+
+    /// Die Transaktionskette ist ungültig (z.B. falscher prev_hash oder Signatur).
+    #[error("Invalid transaction: {0}")]
+    InvalidTransaction(String),
+
+    /// Die Signatur einer Transaktion ist ungültig.
+    #[error("Invalid signature for transaction '{t_id}' from sender '{sender_id}'")]
+    InvalidTransactionSignature { t_id: String, sender_id: String },
+
+    /// Fehler bei der Dekodierung einer Signatur (z.B. Base58).
+    #[error("Failed to decode signature: {0}")]
+    SignatureDecodeError(String),
+
+    /// Der Betrag hat mehr Nachkommastellen als vom Standard erlaubt.
+    #[error("Invalid amount precision. Allowed up to {allowed} decimal places, but found {found}")]
+    TooManyDecimalPlaces { allowed: u32, found: u32 },
+
+    /// Der Betrag der `init`-Transaktion stimmt nicht mit dem Nennwert des Gutscheins überein.
+    #[error("Initial transaction amount must match nominal value. Expected: {expected}, Found: {found}")]
+    InitAmountMismatch { expected: String, found: String },
+}
+
+
 /// Der zentrale Fehlertyp für alle Operationen in der `voucher_core`-Bibliothek.
-///
-/// Dieser Enum fasst Fehler aus allen Modulen (Manager, Validierung, Crypto, Serialisierung)
-/// an einem Ort zusammen und bildet die einheitliche Fehler-API der Bibliothek.
 #[derive(Error, Debug)]
 pub enum VoucherCoreError {
-    /// Ein Fehler, der während der Gutschein-Validierung aufgetreten ist.
-    /// Kapselt den spezifischeren `ValidationError`-Typ.
     #[error("Validation Error: {0}")]
-    Validation(#[from] crate::services::voucher_validation::ValidationError),
-
-    /// Ein Fehler, der während der Gutschein-Verwaltung (Erstellung, Transaktionen) aufgetreten ist.
-    /// Kapselt den spezifischeren `VoucherManagerError`-Typ.
+    Validation(#[from] ValidationError),
     #[error("Voucher Manager Error: {0}")]
     Manager(#[from] VoucherManagerError),
-
-    /// Ein Fehler, der während einer Speicheroperation (Laden, Speichern) aufgetreten ist.
     #[error("Storage Error: {0}")]
     Storage(#[from] StorageError),
-
-    /// Ein Fehler, der bei der Verarbeitung eines `SecureContainer` auftrat.
     #[error("Secure Container Error: {0}")]
     Container(#[from] ContainerManagerError),
-
-    /// Ein Fehler, der bei der Verarbeitung einer Gutschein-Standard-Definition auftrat.
     #[error("Standard Definition Error: {0}")]
     Standard(#[from] StandardDefinitionError),
-
-    /// Ein Fehler, der während einer Archiv-Operation aufgetreten ist.
     #[error("Archive error: {0}")]
     Archive(#[from] crate::archive::ArchiveError),
-
-    /// Ein Fehler bei der Verarbeitung von JSON (Serialisierung oder Deserialisierung).
     #[error("JSON Processing Error: {0}")]
     Json(#[from] serde_json::Error),
-
-    /// Ein Fehler bei der Deserialisierung von TOML (z.B. beim Laden einer Standard-Definition).
     #[error("TOML Deserialization Error: {0}")]
     Toml(#[from] toml::de::Error),
-
-    /// Ein Fehler bei der Konvertierung oder Berechnung von Beträgen.
     #[error("Amount Conversion Error: {0}")]
     AmountConversion(#[from] rust_decimal::Error),
-
-    /// Ein Fehler bei der symmetrischen Ver- oder Entschlüsselung.
-    /// Kapselt den spezifischen `SymmetricEncryptionError`-Typ.
     #[error("Symmetric Encryption Error: {0}")]
     SymmetricEncryption(#[from] SymmetricEncryptionError),
-
-    /// Ein Fehler bei der Verarbeitung einer User ID oder eines Public Keys.
     #[error("User ID or Key Error: {0}")]
     KeyOrId(#[from] GetPubkeyError),
-
-    /// Ein Platzhalter für allgemeine kryptographische Fehler, die nicht von anderen Typen abgedeckt werden.
     #[error("Cryptography error: {0}")]
     Crypto(String),
-
-    /// Ein Fehler bei I/O-Operationen (z.B. beim zukünftigen Speichern/Laden von Profilen).
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-
-    /// Ein allgemeiner Fehler, der für verschiedene Zwecke verwendet werden kann.
     #[error("Generic error: {0}")]
     Generic(String),
-
-    /// Der im `SecureContainer` gefundene Payload-Typ entspricht nicht dem erwarteten Typ.
     #[error("Invalid payload type in secure container.")]
     InvalidPayloadType,
-
-    /// Es wurde versucht, eine Aktion mit einem Gutschein durchzuführen, der unter Quarantäne steht.
     #[error("Action aborted: The voucher is quarantined due to a detected double-spend conflict.")]
     VoucherInQuarantine,
-
-    /// Eine Funktion oder ein Codepfad ist noch nicht implementiert.
     #[error("Feature not implemented yet: {0}")]
     NotImplemented(String),
-
-    /// Der angeforderte Gutschein wurde im Wallet-Speicher nicht gefunden.
     #[error("Voucher with local instance ID '{0}' not found in wallet.")]
     VoucherNotFound(String),
-
-    /// Es wurde versucht, eine Aktion mit einem Gutschein durchzuführen, der nicht den Status 'Active' hat.
     #[error("Action requires an active voucher, but its status is {0:?}.")]
     VoucherNotActive(VoucherStatus),
-
-    /// Die proaktive, lokale Prüfung hat einen versuchten Double Spend verhindert.
     #[error("Double spend attempt blocked: A transaction has already been issued from this voucher state.")]
     DoubleSpendAttemptBlocked,
-
-    /// Ein Fehler bei der Base58-Dekodierung.
     #[error("Base58 decode error: {0}")]
     Bs58Decode(#[from] bs58::decode::Error),
-
-    /// Ein Fehler in der ed25519-Kryptographiebibliothek.
     #[error("Ed25519 crypto error: {0}")]
     Ed25519(#[from] ed25519_dalek::ed25519::Error),
-
-    /// Die Daten in einer Signatur (z.B. voucher_id) stimmen nicht mit dem Kontext überein.
     #[error("Mismatched signature data: {0}")]
     MismatchedSignatureData(String),
 }

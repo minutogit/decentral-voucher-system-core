@@ -235,6 +235,13 @@ pub fn create_voucher(
 
     temp_voucher.transactions.push(init_transaction);
 
+    // NEU: Validiere den final erstellten Gutschein gegen seinen eigenen Standard.
+    // Dies stellt sicher, dass die Erstellungslogik selbst einen konformen Gutschein produziert.
+    crate::services::voucher_validation::validate_voucher_against_standard(
+        &temp_voucher,
+        verified_standard,
+    )?;
+
     Ok(temp_voucher)
 }
 
@@ -365,7 +372,5 @@ pub fn create_transaction(
     // SICHERHEITSPATCH: Validiere den *neuen* Gutschein-Zustand, BEVOR er zurückgegeben wird.
     // Dies stellt sicher, dass keine Transaktion erstellt werden kann, die gegen die Regeln des Standards verstößt.
     crate::services::voucher_validation::validate_voucher_against_standard(&new_voucher, standard)?;
-
-
     Ok(new_voucher)
 }

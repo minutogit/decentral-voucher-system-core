@@ -383,6 +383,54 @@ fn test_get_total_balance_by_currency() {
     assert_eq!(actual_silver_balance, expected_silver_balance, "Balance for 'Unzen' should be 2.00");
 }
 
+
+// --- NEUER INTEGRATIONSTEST FÜR DATENGESTEUERTE VALIDIERUNG (PHASE 4) ---
+
+#[test]
+fn test_wallet_rejects_bundle_with_invalid_voucher() {
+    // 1. Setup
+    let alice_identity = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let bob_identity = &ACTORS.bob;
+    let mut bob_wallet = setup_in_memory_wallet(bob_identity);
+
+    // Lade den Standard mit strengen Inhaltsregeln
+    let toml_str = include_str!("test_data/standards/standard_content_rules.toml");
+    let standard: VoucherStandardDefinition = toml::from_str(toml_str).unwrap();
+
+    // 2. Alice erstellt einen Gutschein.
+    // WICHTIG: Wir fügen den Gutschein NICHT zu Alice' Wallet hinzu, da wir ihn gleich manipulieren.
+     let mut voucher_data = voucher_lib::services::voucher_manager::NewVoucherData {
+        creator: voucher_lib::models::voucher::Creator { id: alice_identity.user_id.clone(), ..Default::default() },
+        nominal_value: voucher_lib::models::voucher::NominalValue { amount: "50.00".to_string(), ..Default::default() },
+        description: "INV-123456".to_string(), // Korrekt laut Regex
+        ..Default::default()
+    };
+
+    let mut standard_to_hash = standard.clone();
+    standard_to_hash.signature = None;
+    let standard_hash = voucher_lib::services::crypto_utils::get_hash(voucher_lib::services::utils::to_canonical_json(&standard_to_hash).unwrap());
+
+    let mut voucher = voucher_lib::services::voucher_manager::create_voucher(voucher_data, &standard, &standard_hash, &alice_identity.signing_key, "en").unwrap();
+
+    // 3. Alice manipuliert den Gutschein, sodass er UNGÜLTIG wird.
+    voucher.description = "BAD-FORMAT".to_string(); // Verstößt gegen die Regex-Regel
+
+    // 4. Alice erstellt ein Bündel mit dem ungültigen Gutschein.
+    let bundle_bytes = alice_wallet.create_and_encrypt_transaction_bundle(alice_identity, vec![voucher.clone()], &bob_identity.user_id, None).unwrap();
+
+    // 5. Bob (bzw. seine Anwendungslogik) empfängt das Bündel.
+    // Die Logik ÖFFNET zuerst den Container, um an den Gutschein zu kommen...
+    let (decrypted_bundle, _) = voucher_lib::services::bundle_processor::open_and_verify_bundle(bob_identity, &bundle_bytes).unwrap();
+    let received_voucher = decrypted_bundle.vouchers.first().unwrap();
+
+    // ...und VALIDIERT ihn dann, BEVOR er ans Wallet übergeben wird.
+    let validation_result = voucher_lib::services::voucher_validation::validate_voucher_against_standard(received_voucher, &standard);
+    assert!(validation_result.is_err(), "Validation of the manipulated voucher should fail");
+    
+    // 6. Assert: Da die Validierung fehlschlug, wurde der Gutschein nie zum Wallet hinzugefügt.
+    assert!(bob_wallet.voucher_store.vouchers.is_empty(), "Bob's wallet should remain empty after receiving an invalid voucher.");
+}
 // --- 3. Signatur-Workflow (signature_handler.rs) ---
 
 /// Testet den Signatur-Roundtrip für den Minuto-Standard.
