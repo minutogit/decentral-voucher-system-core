@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- SETUP ---
     // Standard laden und Schlüsselpaare für alle Teilnehmer erzeugen
     // Lade den Standard aus der TOML-Datei
-    let standard_toml = std::fs::read_to_string("../voucher_standards/standard.toml")?;
+    let standard_toml = std::fs::read_to_string("voucher_standards/minuto_v1/standard.toml")?;
     let (standard, standard_hash) = verify_and_parse_standard(&standard_toml)?;
     println!(
         "\n✅ Standard '{}' erfolgreich geladen.",

@@ -31,10 +31,15 @@ rust_decimal = "1.35"
 thiserror = "1.0"
 rust_decimal_macros = "1.35"
 anyhow = "1.0.99"
+clap = { version = "4.5", features = ["derive"] }
 
 [lib]
 name = "voucher_lib"
 path = "src/lib.rs"
+
+[[bin]]
+name = "voucher-cli"
+path = "src/bin/voucher-cli.rs"
 
 [dev-dependencies]
 rand = "0.8"

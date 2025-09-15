@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ Identitäten für Alice ({}) und Bob ({}) erstellt.", alice_identity.user_id, bob_identity.user_id);
 
     // Lade den für den Gutschein gültigen Standard
-    let standard_toml = std::fs::read_to_string("voucher_standards/silver_standard.toml")?;
+    let standard_toml = std::fs::read_to_string("voucher_standards/silver_v1/standard.toml")?;
     let (standard, standard_hash) = verify_and_parse_standard(&standard_toml)?;
     println!("✅ Standard '{}' verifiziert und geladen.", standard.metadata.name);
 
