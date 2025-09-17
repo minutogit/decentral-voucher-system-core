@@ -57,6 +57,15 @@ allowed_t_types = [
 amount_decimal_places = 0
 issuance_minimum_validity_duration = "P3Y"
 
+# NEU: Erzwingt, dass von den zwei Bürgen exakt einer männlich ('1')
+# und einer weiblich ('2') sein muss, gemäß ISO 5218.
+[validation.field_group_rules]
+[validation.field_group_rules.guarantor_signatures]
+field = "gender"
+value_counts = [
+    { value = "1", count = 1 },
+    { value = "2", count = 1 },
+]
 [signature]
 # Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.
 issuer_id = "did:key:z6Mkoim7ZGcaKdoeD41USV5gmxfiVXXiPDeYt4T9rnEB5zfM"

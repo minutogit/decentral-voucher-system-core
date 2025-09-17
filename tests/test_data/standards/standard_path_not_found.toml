@@ -1,0 +1,30 @@
+# Test-Standard zur isolierten Prüfung des PathNotFound-Fehlers.
+
+[metadata]
+name = "Path Not Found Test Standard"
+uuid = "PNF-TEST-V1"
+abbreviation = "PNF"
+issuer_name = "Test Council"
+
+[template.fixed]
+primary_redemption_type = "goods_or_services"
+is_summable = true
+is_divisible = true
+[template.fixed.nominal_value]
+unit = "TestUnit"
+[template.fixed.collateral]
+type = ""
+description = ""
+redeem_condition = ""
+[template.fixed.guarantor_info]
+needed_count = 0
+description = ""
+
+[validation]
+[validation.field_group_rules]
+# Diese Regel zielt auf ein Feld, das im Basis-Gutschein nicht existiert.
+[validation.field_group_rules.non_existent_field]
+field = "some_sub_field"
+value_counts = [
+    { value = "X", count = 1 },
+]

@@ -23,150 +23,18 @@
 
 // Wir importieren die öffentlichen Typen, die in lib.rs re-exportiert wurden.
 use voucher_lib::{
-    create_transaction, create_voucher, crypto_utils, to_canonical_json,
-    validate_voucher_against_standard, Creator, GuarantorSignature, NewVoucherData, NominalValue,
-    Transaction, UserIdentity, Voucher, VoucherCoreError, VoucherStandard,
-    VoucherStandardDefinition,
+    create_transaction, create_voucher, crypto_utils, to_canonical_json, validate_voucher_against_standard, Creator, NewVoucherData, NominalValue,
+    Transaction, UserIdentity, VoucherCoreError,
 };
 // Importiere die spezifischen Fehlertypen direkt aus ihren Modulen für die `matches!`-Makros.
 use voucher_lib::services::voucher_manager::VoucherManagerError;
 use voucher_lib::error::ValidationError;
-
-use ed25519_dalek::SigningKey;
-use rand::RngCore;
 mod test_utils;
-use test_utils::{ACTORS, MINUTO_STANDARD, SILVER_STANDARD};
-
-/// Erstellt eine gültige, entkoppelte Bürgen-Signatur für einen gegebenen Gutschein.
-fn create_guarantor_signature(
-    voucher_id: &str,
-    guarantor_id: String,
-    guarantor_first_name: &str,
-    guarantor_gender: &str,
-    signing_key: &SigningKey,
-    signature_time: &str,
-) -> GuarantorSignature {
-    let mut signature_data = GuarantorSignature {
-        voucher_id: voucher_id.to_string(),
-        signature_id: "".to_string(),
-        guarantor_id,
-        first_name: guarantor_first_name.to_string(),
-        last_name: "Guarantor".to_string(),
-        organization: None,
-        community: Some("Test Community".to_string()),
-        address: None,
-        gender: guarantor_gender.to_string(),
-        email: None,
-        phone: None,
-        coordinates: None,
-        url: None,
-        signature: "".to_string(),
-        signature_time: signature_time.to_string(),
-    };
-    let signature_json_for_id = to_canonical_json(&signature_data).unwrap();
-    let signature_id = crypto_utils::get_hash(signature_json_for_id);
-    signature_data.signature_id = signature_id;
-    let digital_signature =
-        crypto_utils::sign_ed25519(signing_key, signature_data.signature_id.as_bytes());
-    signature_data.signature = bs58::encode(digital_signature.to_bytes()).into_string();
-    signature_data
-}
-
-/// Helper zum Neuberechnen von t_id und Signatur einer manipulierten Transaktion.
-/// Isoliert den zu testenden Fehler von Signatur- oder ID-Fehlern.
-fn resign_transaction(
-    mut tx: Transaction,
-    signer_key: &SigningKey,
-) -> Transaction {
-    tx.t_id = "".to_string();
-    tx.sender_signature = "".to_string();
-    tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
-    let payload = serde_json::json!({
-        "prev_hash": tx.prev_hash,
-        "sender_id": tx.sender_id,
-        "t_id": tx.t_id
-    });
-    let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
-    tx.sender_signature = bs58::encode(
-        crypto_utils::sign_ed25519(signer_key, signature_hash.as_bytes()).to_bytes(),
-    )
-        .into_string();
-    tx
-}
-
-/// Hilfsfunktion, um einen Gutschein ohne die finale Validierung zu erstellen.
-/// Dies ermöglicht es Tests, einen Basis-Gutschein zu erzeugen, der dann
-/// in einen Zustand manipuliert werden kann, der bei der initialen Validierung
-/// fehlschlagen würde (z.B. keine Bürgen bei einem Standard, der welche erfordert).
-fn create_voucher_for_manipulation(
-    data: NewVoucherData,
-    standard: &VoucherStandardDefinition,
-    standard_hash: &str,
-    signing_key: &SigningKey,
-    _lang: &str,
-) -> Voucher {
-    let creation_date = voucher_lib::services::utils::get_current_timestamp();
-    // Vereinfachte Dauerlogik für Testzwecke. In der echten Implementierung
-    // wird dies korrekt aus dem Standard abgeleitet.
-    let valid_until = "2029-12-31T23:59:59Z".to_string();
-
-    let mut nonce_bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
-    let voucher_nonce = bs58::encode(nonce_bytes).into_string();
-
-    let mut voucher = Voucher {
-        voucher_standard: VoucherStandard {
-            name: standard.metadata.name.clone(),
-            uuid: standard.metadata.uuid.clone(),
-            standard_definition_hash: standard_hash.to_string(),
-        },
-        voucher_id: "".to_string(), // Wird berechnet
-        voucher_nonce,
-        description: "Test Description".to_string(), // Vereinfacht für Test
-        primary_redemption_type: "goods_or_services".to_string(), // Vereinfacht
-        divisible: standard.template.fixed.is_divisible,
-        creation_date: creation_date.clone(),
-        valid_until,
-        standard_minimum_issuance_validity: standard.validation.as_ref()
-            .and_then(|v| v.behavior_rules.as_ref())
-            .and_then(|b| b.issuance_minimum_validity_duration.clone())
-            .unwrap_or_default(), // Korrekt vom Standard übernehmen
-        non_redeemable_test_voucher: false,
-        nominal_value: data.nominal_value,
-        collateral: Default::default(), // Vereinfacht für Test
-        creator: data.creator,
-        guarantor_requirements_description: "Test requirements".to_string(), // Vereinfacht
-        footnote: "Test footnote".to_string(), // Vereinfacht
-        guarantor_signatures: vec![],
-        needed_guarantors: 2, // Vereinfacht, passend für Minuto
-        transactions: vec![],
-        additional_signatures: vec![],
-    };
-
-    // Berechne voucher_id und Ersteller-Signatur
-    let mut voucher_to_hash = voucher.clone();
-    voucher_to_hash.creator.signature = "".to_string();
-    voucher_to_hash.voucher_id = "".to_string();
-    let voucher_json = to_canonical_json(&voucher_to_hash).unwrap();
-    let voucher_hash = crypto_utils::get_hash(voucher_json);
-    voucher.voucher_id = voucher_hash.clone();
-    let signature = crypto_utils::sign_ed25519(signing_key, voucher_hash.as_bytes());
-    voucher.creator.signature = bs58::encode(signature.to_bytes()).into_string();
-
-    // Erstelle und füge die 'init'-Transaktion hinzu
-    let prev_hash =
-        crypto_utils::get_hash(format!("{}{}", &voucher.voucher_id, &voucher.voucher_nonce));
-    let init_tx = Transaction {
-        t_id: "".to_string(), prev_hash, t_type: "init".to_string(),
-        t_time: creation_date, sender_id: voucher.creator.id.clone(),
-        recipient_id: voucher.creator.id.clone(), amount: voucher.nominal_value.amount.clone(),
-        sender_remaining_amount: None, sender_signature: "".to_string(),
-    };
-    
-    voucher.transactions.push(resign_transaction(init_tx, signing_key));
-    voucher
-}
-
+use test_utils::{
+    create_female_guarantor_signature, create_guarantor_signature_with_time,
+    create_male_guarantor_signature,
+    create_voucher_for_manipulation, resign_transaction, ACTORS, MINUTO_STANDARD, SILVER_STANDARD,
+};
 
 // --- NEUE, ERWEITERTE TESTS ---
 
@@ -188,16 +56,8 @@ fn test_validation_fails_on_standard_uuid_mismatch() {
 
     // SETUP-FIX: Füge zwei valide Bürgen hinzu, damit die Validierung nicht vorzeitig an
     // der `CountOutOfBounds`-Regel des Minuto-Standards scheitert.
-    let g1 = &ACTORS.guarantor1;
-    let g2 = &ACTORS.guarantor2;
-    let sig_time = "2026-01-01T00:00:00Z";
-    let sig1 = create_guarantor_signature(
-        &voucher.voucher_id, g1.user_id.clone(), "G1", "1", &g1.signing_key, sig_time,
-    );
-    let sig2 = create_guarantor_signature(
-        &voucher.voucher_id, g2.user_id.clone(), "G2", "2", &g2.signing_key, sig_time,
-    );
-    voucher.guarantor_signatures.extend([sig1, sig2]);
+    voucher.guarantor_signatures.push(create_male_guarantor_signature(&voucher));
+    voucher.guarantor_signatures.push(create_female_guarantor_signature(&voucher));
 
     assert_eq!(
         voucher.voucher_standard.uuid,
@@ -231,16 +91,8 @@ fn test_validation_fails_on_invalid_date_logic() {
     let mut voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en");
 
     // SETUP-FIX: Füge zwei valide Bürgen hinzu, damit die Validierung bis zur Datumslogik kommt.
-    let g1 = &ACTORS.guarantor1;
-    let g2 = &ACTORS.guarantor2;
-    let sig_time = "2026-01-01T00:00:00Z"; // Eine Zeit nach der Erstellung
-    let sig1 = create_guarantor_signature(
-        &voucher.voucher_id, g1.user_id.clone(), "G1", "1", &g1.signing_key, sig_time,
-    );
-    let sig2 = create_guarantor_signature(
-        &voucher.voucher_id, g2.user_id.clone(), "G2", "2", &g2.signing_key, sig_time,
-    );
-    voucher.guarantor_signatures.extend([sig1, sig2]);
+    voucher.guarantor_signatures.push(create_male_guarantor_signature(&voucher));
+    voucher.guarantor_signatures.push(create_female_guarantor_signature(&voucher));
 
     // Manipuliere die Daten so, dass das Gültigkeitsdatum vor dem Erstellungsdatum liegt.
     voucher.valid_until = "2020-01-01T00:00:00Z".to_string();
@@ -347,17 +199,25 @@ fn test_validation_fails_on_duplicate_guarantor() {
     // erfüllt die `CountOutOfBounds`-Regel `{min=2, max=2}`, aber der Inhalt
     // verletzt die Duplikats-Logik.
     let guarantor1 = &ACTORS.guarantor1;
-    let sig1 = create_guarantor_signature(
+    let sig1 = create_guarantor_signature_with_time(
         &voucher.voucher_id,
-        guarantor1.user_id.clone(),
+        &guarantor1,
         "Hans",
         "1",
-        &guarantor1.signing_key,
         "2026-08-01T10:00:00Z",
     );
+    // Erstelle eine zweite Signatur vom selben Bürgen, aber mit anderem Gender,
+    // um die FieldGroupRule zu umgehen und den Duplikats-Check zu isolieren.
+    let sig2 = create_guarantor_signature_with_time(
+        &voucher.voucher_id,
+        &guarantor1,
+        "Hans",
+        "2", // Falsches Gender, nur um die Regel zu umgehen
+        "2026-08-01T10:00:01Z", // Geringfügig anderer Zeitstempel
+    );
 
-    voucher.guarantor_signatures.push(sig1.clone());
     voucher.guarantor_signatures.push(sig1);
+    voucher.guarantor_signatures.push(sig2);
 
     let validation_result = validate_voucher_against_standard(&voucher, standard);
 
@@ -384,24 +244,21 @@ fn test_validation_fails_on_invalid_guarantor_signature_time() {
 
     let guarantor1 = &ACTORS.guarantor1;
 
-    // Signaturzeit ist VOR der Erstellung des Gutscheins.
+    // 1. Signaturzeit ist VOR der Erstellung des Gutscheins.
     let invalid_time = "2020-01-01T00:00:00Z";
     assert!(invalid_time < voucher.creation_date.as_str());
 
-    let sig = create_guarantor_signature(
+    let sig = create_guarantor_signature_with_time(
         &voucher.voucher_id,
-        guarantor1.user_id.clone(),
+        &guarantor1,
         "Zeitreiser",
         "1",
-        &guarantor1.signing_key,
         invalid_time,
     );
 
-    // SETUP-FIX: Füge einen zweiten, validen Bürgen hinzu, damit die `CountOutOfBounds`-
+    // 2. Füge einen zweiten, validen Bürgen hinzu, damit die `CountOutOfBounds`-
     // Regel erfüllt ist und der Zeitfehler der ersten Signatur geprüft wird.
-    let guarantor2 = &ACTORS.guarantor2;
-    let valid_sig = create_guarantor_signature(&voucher.voucher_id, guarantor2.user_id.clone(),
-                                               "Gabi", "2", &guarantor2.signing_key, "2026-01-01T00:00:00Z");
+    let valid_sig = create_female_guarantor_signature(&voucher);
 
     voucher.guarantor_signatures.push(sig);
     voucher.guarantor_signatures.push(valid_sig);
@@ -872,19 +729,13 @@ fn test_guarantor_sig_fails_on_mismatched_voucher_id() {
 
     // SETUP-FIX: Füge zuerst eine valide Signatur hinzu, damit die `CountOutOfBounds`-Regel
     // mit min=2 nicht sofort greift, wenn wir die zweite, manipulierte Signatur hinzufügen.
-    let guarantor2 = &ACTORS.guarantor2;
-    let sig2 = create_guarantor_signature(
-        &voucher.voucher_id, guarantor2.user_id.clone(), "G2", "2", &guarantor2.signing_key,
-        "2026-08-01T10:00:00Z",
-    );
-    voucher.guarantor_signatures.push(sig2);
-
+    voucher.guarantor_signatures.push(create_female_guarantor_signature(&voucher));
 
     let guarantor1 = &ACTORS.guarantor1;
 
     // Erstelle eine valide Signatur
-    let mut sig1 = create_guarantor_signature(
-        &voucher.voucher_id, guarantor1.user_id.clone(), "G1", "1", &guarantor1.signing_key,
+    let mut sig1 = create_guarantor_signature_with_time(
+        &voucher.voucher_id, &guarantor1, "G1", "1", // Hier wird die umbenannte Funktion verwendet
         "2026-08-01T10:00:00Z",
     );
     // Manipuliere die voucher_id NACH der Erstellung
@@ -897,4 +748,39 @@ fn test_guarantor_sig_fails_on_mismatched_voucher_id() {
         validation_result.unwrap_err(),
         VoucherCoreError::Validation(ValidationError::MismatchedVoucherIdInSignature { .. })
     ));
+}
+
+
+#[test]
+fn test_validation_fails_on_field_group_rule_gender_mismatch() {
+    let (standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+    let creator_identity = &ACTORS.alice;
+    let voucher_data = NewVoucherData {
+        creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
+        nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+        ..Default::default()
+    };
+
+    // Erstelle einen Basis-Gutschein.
+    let mut voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en");
+
+    // Füge zwei männliche Bürgen hinzu. Dies verletzt die Regel "1x male, 1x female".
+    // Die Gesamtzahl (2) ist aber korrekt laut `counts`-Regel.
+    let male_sig_1 = create_guarantor_signature_with_time(&voucher.voucher_id, &ACTORS.guarantor1, "Hans", "1", "2026-01-01T12:00:00Z");
+    let male_sig_2 = create_guarantor_signature_with_time(&voucher.voucher_id, &ACTORS.male_guarantor, "Martin", "1", "2026-01-01T13:00:00Z");
+
+    voucher.guarantor_signatures.push(male_sig_1);
+    voucher.guarantor_signatures.push(male_sig_2);
+
+    // Die Validierung muss nun wegen der `FieldValueCountMismatch`-Regel fehlschlagen.
+    let validation_result = validate_voucher_against_standard(&voucher, standard);
+
+    let err = validation_result.unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            VoucherCoreError::Validation(ValidationError::FieldValueCountMismatch { path, field, .. }) if path == "guarantor_signatures" && field == "gender"
+        ),
+        "Validation should fail with a gender count mismatch, but got: {:?}", err
+    );
 }

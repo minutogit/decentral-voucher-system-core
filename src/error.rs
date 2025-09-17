@@ -82,6 +82,23 @@ pub enum ValidationError {
         allowed: Vec<String>,
     },
 
+    /// Ein Wert unter einem Pfad hatte einen unerwarteten Datentyp.
+    #[error("Invalid data type at path '{path}', expected {expected}")]
+    InvalidDataType {
+        path: String,
+        expected: String,
+    },
+
+    /// Ein Feldwert in einer Gruppe von Objekten kam nicht in der erwarteten Häufigkeit vor.
+    #[error("Field group validation failed for field '{field}' at path '{path}': Expected value '{expected_value}' to appear {expected_count} times, but found {found_count}.")]
+    FieldValueCountMismatch {
+        path: String,
+        field: String,
+        expected_value: String,
+        expected_count: u32,
+        found_count: u32,
+    },
+
     /// Es wurde versucht, einen nicht teilbaren Gutschein zu teilen.
     #[error("The voucher is not divisible and a split transaction was attempted.")]
     VoucherNotDivisible,

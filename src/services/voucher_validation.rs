@@ -5,8 +5,8 @@
 
 use crate::error::{StandardDefinitionError, ValidationError, VoucherCoreError};
 use crate::models::voucher::{Transaction, Voucher};
-use crate::models::voucher_standard_definition::{
-    BehaviorRules, ContentRules, CountRules, RequiredSignatureRule, VoucherStandardDefinition,
+use crate::models::voucher_standard_definition::{BehaviorRules, ContentRules, CountRules, FieldGroupRule,
+    RequiredSignatureRule, VoucherStandardDefinition
 };
 use crate::services::crypto_utils::{get_hash, get_pubkey_from_user_id, verify_ed25519};
 use crate::services::utils::to_canonical_json;
@@ -16,7 +16,7 @@ use ed25519_dalek::Signature;
 use regex::Regex;
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 /// Hauptfunktion zur Validierung eines Gutscheins gegen seinen Standard.
@@ -52,6 +52,9 @@ pub fn validate_voucher_against_standard(
         }
         if let Some(behavior_rules) = &rules.behavior_rules {
             validate_behavior_rules(voucher, behavior_rules)?;
+        }
+        if let Some(field_group_rules) = &rules.field_group_rules {
+            validate_field_group_rules(&voucher_json, field_group_rules)?;
         }
     }
 
@@ -266,6 +269,50 @@ pub fn validate_behavior_rules(voucher: &Voucher, rules: &BehaviorRules) -> Resu
         }
     }
 
+    Ok(())
+}
+
+/// Prüft Regeln, die sich auf die Werteverteilung von Feldern in einer Liste von Objekten beziehen.
+/// z.B. "In der Liste der Bürgen muss das Feld 'gender' genau einmal den Wert '1' und einmal '2' haben."
+pub fn validate_field_group_rules(
+    voucher_json: &Value,
+    rules: &HashMap<String, FieldGroupRule>,
+) -> Result<(), ValidationError> {
+    for (path, rule) in rules {
+        let array_value =
+            get_value_by_path(voucher_json, path).ok_or_else(|| ValidationError::PathNotFound { path: path.clone() })?;
+
+        let array = array_value.as_array().ok_or_else(|| ValidationError::InvalidDataType {
+            path: path.clone(),
+            expected: "Array".to_string(),
+        })?;
+
+        let mut value_occurrences: HashMap<String, u32> = HashMap::new();
+
+        for item in array {
+            // Wir extrahieren den Wert des relevanten Feldes als String, um ihn zu zählen.
+            if let Some(value_node) = item.get(&rule.field) {
+                if let Some(s) = value_node.as_str() {
+                    *value_occurrences.entry(s.to_string()).or_insert(0) += 1;
+                } else if value_node.is_number() || value_node.is_boolean() {
+                     *value_occurrences.entry(value_node.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        for count_rule in &rule.value_counts {
+            let found_count = value_occurrences.get(&count_rule.value).copied().unwrap_or(0);
+            if found_count != count_rule.count {
+                return Err(ValidationError::FieldValueCountMismatch {
+                    path: path.clone(),
+                    field: rule.field.clone(),
+                    expected_value: count_rule.value.clone(),
+                    expected_count: count_rule.count,
+                    found_count,
+                });
+            }
+        }
+    }
     Ok(())
 }
 

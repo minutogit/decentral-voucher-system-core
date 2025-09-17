@@ -1,0 +1,39 @@
+# Test-Standard zur isolierten Prüfung der `field_group_rules`.
+
+[metadata]
+name = "Field Group Rules Test Standard"
+uuid = "FGR-TEST-V1"
+abbreviation = "FGR"
+issuer_name = "Test Council"
+
+[template.fixed]
+primary_redemption_type = "goods_or_services"
+is_summable = true
+is_divisible = true
+
+[template.fixed.nominal_value]
+unit = "TestUnit"
+
+[template.fixed.collateral]
+type = ""
+description = ""
+redeem_condition = ""
+
+[template.fixed.guarantor_info]
+needed_count = 3
+description = "Requires 1 'A' and 2 'B's."
+
+[validation]
+[validation.counts]
+# Die Gesamtzahl muss 3 sein.
+guarantor_signatures = { min = 3, max = 3 }
+
+[validation.field_group_rules]
+# Regel: Das Feld 'gender' in der Liste 'guarantor_signatures' muss
+# exakt einmal den Wert "A" und zweimal den Wert "B" enthalten.
+[validation.field_group_rules.guarantor_signatures]
+field = "gender"
+value_counts = [
+    { value = "A", count = 1 },
+    { value = "B", count = 2 },
+]

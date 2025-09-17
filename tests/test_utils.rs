@@ -52,6 +52,8 @@ pub struct TestActors {
     pub hacker: UserIdentity,
     pub guarantor1: UserIdentity,
     pub guarantor2: UserIdentity,
+    pub male_guarantor: UserIdentity,
+    pub female_guarantor: UserIdentity,
     pub sender: UserIdentity,
     pub recipient1: UserIdentity,
     pub recipient2: UserIdentity,
@@ -70,6 +72,8 @@ lazy_static! {
         hacker: identity_from_seed("hacker", "ha"),
         guarantor1: identity_from_seed("guarantor1", "g1"),
         guarantor2: identity_from_seed("guarantor2", "g2"),
+        male_guarantor: identity_from_seed("male_guarantor", "mg"),
+        female_guarantor: identity_from_seed("female_guarantor", "fg"),
         sender: identity_from_seed("sender", "se"),
         recipient1: identity_from_seed("recipient1", "r1"),
         recipient2: identity_from_seed("recipient2", "r2"),
@@ -369,61 +373,6 @@ pub fn create_minuto_voucher_data(creator: Creator) -> NewVoucherData {
     }
 }
 
-/// Erstellt eine gültige, entkoppelte Bürgen-Signatur für einen gegebenen Gutschein.
-#[allow(dead_code)]
-pub fn create_guarantor_signature(
-    voucher: &Voucher,
-    guarantor_identity: &UserIdentity,
-    guarantor_first_name: &str,
-    guarantor_gender: &str,
-) -> GuarantorSignature {
-    let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date).unwrap().with_timezone(&chrono::Utc);
-    let signature_dt = creation_dt + chrono::Duration::days(1);
-    let signature_time_str = signature_dt.to_rfc3339();
-
-    let mut signature_data = GuarantorSignature {
-        voucher_id: voucher.voucher_id.clone(),
-        signature_id: "".to_string(),
-        guarantor_id: guarantor_identity.user_id.clone(),
-        first_name: guarantor_first_name.to_string(),
-        last_name: "Guarantor".to_string(),
-        gender: guarantor_gender.to_string(),
-        signature_time: signature_time_str,
-        ..Default::default()
-    };
-
-    let signature_json_for_id = to_canonical_json(&signature_data).unwrap();
-    let signature_id = get_hash(signature_json_for_id);
-    signature_data.signature_id = signature_id;
-
-    let digital_signature = sign_ed25519(&guarantor_identity.signing_key, signature_data.signature_id.as_bytes());
-    signature_data.signature = bs58::encode(digital_signature.to_bytes()).into_string();
-    signature_data
-}
-
-/// Helper zum Neuberechnen von t_id und Signatur einer manipulierten Transaktion.
-/// Isoliert den zu testenden Fehler von Signatur- oder ID-Fehlern.
-#[allow(dead_code)]
-pub fn resign_transaction(
-    mut tx: Transaction,
-    signer_key: &ed25519_dalek::SigningKey,
-) -> Transaction {
-    tx.t_id = "".to_string();
-    tx.sender_signature = "".to_string();
-    tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
-    let payload = serde_json::json!({
-        "prev_hash": tx.prev_hash,
-        "sender_id": tx.sender_id,
-        "t_id": tx.t_id
-    });
-    let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
-    tx.sender_signature = bs58::encode(
-        crypto_utils::sign_ed25519(signer_key, signature_hash.as_bytes()).to_bytes(),
-    )
-    .into_string();
-    tx
-}
-
 /// Erstellt einen Gutschein ohne die finale Validierung, um Manipulationen zu ermöglichen.
 #[allow(dead_code)]
 pub fn create_voucher_for_manipulation(
@@ -493,6 +442,96 @@ pub fn create_voucher_for_manipulation(
     voucher
 }
 
+/// **ZENTRALISIERTER HELFER**
+/// Erstellt eine konfigurierbare, gültige Bürgen-Signatur für einen gegebenen Gutschein.
+/// Wird für Tests benötigt, die spezifische Konstellationen (z.B. falsche Zeit) erfordern.
+#[allow(dead_code)]
+pub fn create_guarantor_signature_with_time(
+    voucher_id: &str,
+    guarantor_identity: &UserIdentity,
+    guarantor_first_name: &str,
+    guarantor_gender: &str,
+    signature_time: &str,
+) -> GuarantorSignature {
+    let mut signature_data = GuarantorSignature {
+        voucher_id: voucher_id.to_string(),
+        signature_id: "".to_string(),
+        guarantor_id: guarantor_identity.user_id.clone(),
+        first_name: guarantor_first_name.to_string(),
+        last_name: "Guarantor".to_string(),
+        gender: guarantor_gender.to_string(),
+        signature_time: signature_time.to_string(),
+        ..Default::default()
+    };
+
+    let signature_json_for_id = to_canonical_json(&signature_data).unwrap();
+    let signature_id = get_hash(signature_json_for_id);
+    signature_data.signature_id = signature_id;
+
+    let digital_signature = sign_ed25519(&guarantor_identity.signing_key, signature_data.signature_id.as_bytes());
+    signature_data.signature = bs58::encode(digital_signature.to_bytes()).into_string();
+    signature_data
+}
+
+/// **KOMPATIBILITÄTS-HELFER**
+/// Stellt die alte, einfache Signatur wieder her, die von den meisten Tests verwendet wird.
+/// Berechnet eine valide Standard-Signaturzeit (Erstellung + 1 Tag).
+#[allow(dead_code)]
+pub fn create_guarantor_signature(
+    voucher: &Voucher,
+    guarantor_identity: &UserIdentity,
+    guarantor_first_name: &str,
+    guarantor_gender: &str,
+) -> GuarantorSignature {
+    let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date).unwrap();
+    let signature_time = (creation_dt + chrono::Duration::days(1)).to_rfc3339();
+    create_guarantor_signature_with_time(
+        &voucher.voucher_id,
+        guarantor_identity,
+        guarantor_first_name,
+        guarantor_gender,
+        &signature_time,
+    )
+}
+
+/// Erstellt eine valide Signatur vom dedizierten männlichen Test-Bürgen.
+#[allow(dead_code)]
+pub fn create_male_guarantor_signature(voucher: &Voucher) -> GuarantorSignature {
+    let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date).unwrap();
+    let signature_time = (creation_dt + chrono::Duration::days(1)).to_rfc3339();
+    create_guarantor_signature_with_time(&voucher.voucher_id, &ACTORS.male_guarantor, "Martin", "1", &signature_time)
+}
+
+/// Erstellt eine valide Signatur vom dedizierten weiblichen Test-Bürgen.
+#[allow(dead_code)]
+pub fn create_female_guarantor_signature(voucher: &Voucher) -> GuarantorSignature {
+    let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date).unwrap();
+    let signature_time = (creation_dt + chrono::Duration::days(2)).to_rfc3339();
+    create_guarantor_signature_with_time(&voucher.voucher_id, &ACTORS.female_guarantor, "Frida", "2", &signature_time)
+}
+
+/// **ZENTRALISIERTER HELFER**
+/// Helper zum Neuberechnen von t_id und Signatur einer manipulierten Transaktion.
+#[allow(dead_code)]
+pub fn resign_transaction(
+    mut tx: Transaction,
+    signer_key: &ed25519_dalek::SigningKey,
+) -> Transaction {
+    tx.t_id = "".to_string();
+    tx.sender_signature = "".to_string();
+    tx.t_id = crypto_utils::get_hash(to_canonical_json(&tx).unwrap());
+    let payload = serde_json::json!({
+        "prev_hash": tx.prev_hash,
+        "sender_id": tx.sender_id,
+        "t_id": tx.t_id
+    });
+    let signature_hash = crypto_utils::get_hash(to_canonical_json(&payload).unwrap());
+    tx.sender_signature = bs58::encode(
+        crypto_utils::sign_ed25519(signer_key, signature_hash.as_bytes()).to_bytes(),
+    )
+    .into_string();
+    tx
+}
 
 // --- Bestehende interne Tests für die `utils`-Services ---
 

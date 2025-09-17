@@ -165,3 +165,114 @@ mod content_rules_validation {
         ));
     }
 }
+
+#[cfg(test)]
+mod field_group_rules_validation {
+    use super::*;
+    use serde_json::json;
+
+    // Diese Tests prüfen die `validate_field_group_rules`-Logik.
+
+    fn create_test_guarantor(gender: &str) -> GuarantorSignature {
+        let mut sig = GuarantorSignature::default();
+        sig.gender = gender.to_string();
+        sig
+    }
+
+    #[test]
+    fn test_field_group_rules_ok() {
+        let standard = load_test_standard("standard_field_group_rules.toml");
+        let mut voucher = create_base_voucher();
+        // Entspricht exakt der Regel: 1x "A", 2x "B"
+        voucher.guarantor_signatures = vec![
+            create_test_guarantor("A"),
+            create_test_guarantor("B"),
+            create_test_guarantor("B"),
+        ];
+
+        let voucher_json = serde_json::to_value(&voucher).unwrap();
+        let rules = standard.validation.as_ref().unwrap().field_group_rules.as_ref().unwrap();
+        let result = voucher_validation::validate_field_group_rules(&voucher_json, rules);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_fails_on_wrong_value_count() {
+        let standard = load_test_standard("standard_field_group_rules.toml");
+        let mut voucher = create_base_voucher();
+        // Falsch: 2x "A", 1x "B". Gesamtzahl 3 ist aber korrekt.
+        voucher.guarantor_signatures = vec![
+            create_test_guarantor("A"),
+            create_test_guarantor("A"),
+            create_test_guarantor("B"),
+        ];
+
+        let voucher_json = serde_json::to_value(&voucher).unwrap();
+        let rules = standard.validation.as_ref().unwrap().field_group_rules.as_ref().unwrap();
+        let result = voucher_validation::validate_field_group_rules(&voucher_json, rules);
+
+        // Erwartet einen Fehler, weil entweder "A" (found 2, expected 1) oder "B" (found 1, expected 2) fehlschlägt.
+        // Wir prüfen nur den Fehlertyp und das Feld, um den Test robust zu machen.
+        let err = result.err().unwrap();
+        assert!(matches!(
+            err,
+            ValidationError::FieldValueCountMismatch { path, field, .. } if path == "guarantor_signatures" && field == "gender"
+        ));
+    }
+
+    #[test]
+    fn test_ok_if_other_values_exist_but_required_are_met() {
+        // Die Regel prüft nur, ob die definierten Werte in der korrekten Anzahl da sind.
+        // Sie verbietet keine zusätzlichen Werte. Die Gesamtzahl wird von `counts` geprüft.
+        let standard = load_test_standard("standard_field_group_rules.toml");
+        let mut voucher = create_base_voucher();
+        // Enthält 1x "A" und 2x "B", aber auch ein "C".
+        voucher.guarantor_signatures = vec![
+            create_test_guarantor("A"),
+            create_test_guarantor("B"),
+            create_test_guarantor("B"),
+            create_test_guarantor("C"),
+        ];
+
+        let voucher_json = serde_json::to_value(&voucher).unwrap();
+        let rules = standard.validation.as_ref().unwrap().field_group_rules.as_ref().unwrap();
+        let result = voucher_validation::validate_field_group_rules(&voucher_json, rules);
+
+        // Die `field_group_rules`-Prüfung allein ist erfolgreich.
+        // In einem E2E-Test würde `validate_counts` fehlschlagen (max=3).
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_fails_when_path_not_found() {
+        let standard = load_test_standard("standard_path_not_found.toml");
+        let voucher = create_base_voucher(); // Hat kein "non_existent_field"
+        let voucher_json = serde_json::to_value(&voucher).unwrap();
+        let rules = standard.validation.as_ref().unwrap().field_group_rules.as_ref().unwrap();
+        let result = voucher_validation::validate_field_group_rules(&voucher_json, rules);
+
+        assert!(matches!(
+            result.err().unwrap(),
+            ValidationError::PathNotFound { path } if path == "non_existent_field"
+        ));
+    }
+
+    #[test]
+    fn test_fails_when_path_is_not_an_array() {
+        let standard = load_test_standard("standard_field_group_rules.toml");
+        // Manipuliertes JSON, in dem der Pfad kein Array ist.
+        let voucher_json = json!({
+            "guarantor_signatures": "this should be an array"
+        });
+
+        let rules = standard.validation.as_ref().unwrap().field_group_rules.as_ref().unwrap();
+        let result = voucher_validation::validate_field_group_rules(&voucher_json, rules);
+
+        assert!(matches!(
+            result.err().unwrap(),
+            ValidationError::InvalidDataType { path, expected }
+            if path == "guarantor_signatures" && expected == "Array"
+        ));
+    }
+}

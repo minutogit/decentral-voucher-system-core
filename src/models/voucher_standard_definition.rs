@@ -139,6 +139,25 @@ pub struct BehaviorRules {
     pub amount_decimal_places: Option<u8>,
 }
 
+/// Definiert die exakte Anzahl für einen bestimmten Wert in einer Gruppenprüfung.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ValueCountRule {
+    /// Der Wert, der gezählt werden soll (als String, da aus JSON kommend).
+    pub value: String,
+    /// Die exakte Anzahl, die erwartet wird.
+    pub count: u32,
+}
+
+/// Definiert eine Regel für eine Gruppe von Feldern in einer Objektliste.
+/// Beispiel: "Prüfe das 'gender'-Feld in allen 'guarantor_signatures'".
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct FieldGroupRule {
+    /// Das zu prüfende Feld innerhalb jedes Objekts der Liste (z.B. "gender").
+    pub field: String,
+    /// Eine Liste von Regeln, die die Häufigkeit bestimmter Werte vorschreiben.
+    pub value_counts: Vec<ValueCountRule>,
+}
+
 /// Die neue Hauptstruktur für alle Validierungsregeln.
 /// Alle Felder sind optional, um eine flexible Definition zu ermöglichen.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -147,6 +166,7 @@ pub struct Validation {
     pub required_signatures: Option<Vec<RequiredSignatureRule>>,
     pub content_rules: Option<ContentRules>,
     pub behavior_rules: Option<BehaviorRules>,
+    pub field_group_rules: Option<HashMap<String, FieldGroupRule>>,
 }
 
 // --- Haupt-Struct ---
