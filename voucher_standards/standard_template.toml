@@ -185,11 +185,13 @@ amount_decimal_places = 2
 # Das zu prüfende Feld innerhalb jedes Objekts der Liste (z.B. "gender").
 field = "gender"
 # Eine Liste von Regeln, die die Häufigkeit bestimmter Werte vorschreiben.
+# Jede Regel definiert einen `value` und einen erlaubten Bereich (`min`, `max`).
+# Um einen exakten Wert zu erzwingen, setzt man min = max.
 # Diese Regel erzwingt, dass es genau einen Bürgen mit gender='1' (männlich)
 # und genau einen mit gender='2' (weiblich) geben muss, um Diversität zu sichern.
 value_counts = [
-    { value = "1", count = 1 },
-    { value = "2", count = 1 },
+    { value = "1", min = 1, max = 1 },
+    { value = "2", min = 1, max = 1 },
 ]
 
 

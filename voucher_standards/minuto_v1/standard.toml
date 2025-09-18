@@ -63,8 +63,8 @@ issuance_minimum_validity_duration = "P3Y"
 [validation.field_group_rules.guarantor_signatures]
 field = "gender"
 value_counts = [
-    { value = "1", count = 1 },
-    { value = "2", count = 1 },
+    { value = "1", min = 1, max = 1 },
+    { value = "2", min = 1, max = 1 },
 ]
 [signature]
 # Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.

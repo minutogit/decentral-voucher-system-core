@@ -302,13 +302,14 @@ pub fn validate_field_group_rules(
 
         for count_rule in &rule.value_counts {
             let found_count = value_occurrences.get(&count_rule.value).copied().unwrap_or(0);
-            if found_count != count_rule.count {
-                return Err(ValidationError::FieldValueCountMismatch {
+            if found_count < count_rule.min || found_count > count_rule.max {
+                return Err(ValidationError::FieldValueCountOutOfBounds {
                     path: path.clone(),
                     field: rule.field.clone(),
-                    expected_value: count_rule.value.clone(),
-                    expected_count: count_rule.count,
-                    found_count,
+                    value: count_rule.value.clone(),
+                    min: count_rule.min,
+                    max: count_rule.max,
+                    found: found_count,
                 });
             }
         }

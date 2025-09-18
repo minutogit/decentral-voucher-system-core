@@ -160,16 +160,19 @@ Definiert komplexe Regeln für die Werteverteilung von Feldern innerhalb einer L
 **Parameter:**
 
 * `field` (String): Das Feld *innerhalb* der Objekte in der Liste, das geprüft werden soll (z.B. `"gender"`).
-* `value_counts` (Array von Tabellen): Eine Liste von Zählregeln, die jeweils aus `value` (der erwartete Wert) und `count` (die exakt erwartete Anzahl) bestehen.
+* `value_counts` (Array von Tabellen): Eine Liste von Zählregeln. Jede Regel besteht aus:
+    * `value` (String): Der zu zählende Wert.
+    * `min` (Integer): Wie oft dieser Wert mindestens vorkommen muss.
+    * `max` (Integer): Wie oft dieser Wert maximal vorkommen darf.
 
-**Beispiel:** Um Diversität zu gewährleisten, muss ein Gutschein von **exakt einem Mann (`gender = "1"`) und exakt einer Frau (`gender = "2"`)** gebürgt werden.
+**Beispiel:** Um Diversität zu gewährleisten, muss ein Gutschein von **exakt einem Mann (`gender = "1"`) und exakt einer Frau (`gender = "2"`)** gebürgt werden. Um einen exakten Wert zu erzwingen, wird `min` und `max` auf denselben Wert gesetzt.
 
 ```toml
 [validation.field_group_rules.guarantor_signatures]
 field = "gender"
 value_counts = [
-  { value = "1", count = 1 }, # Der Wert "1" muss genau 1x vorkommen.
-  { value = "2", count = 1 }, # Der Wert "2" muss genau 1x vorkommen.
+  { value = "1", min = 1, max = 1 }, # Der Wert "1" muss genau 1x vorkommen.
+  { value = "2", min = 1, max = 1 }, # Der Wert "2" muss genau 1x vorkommen.
 ]
 ```
 

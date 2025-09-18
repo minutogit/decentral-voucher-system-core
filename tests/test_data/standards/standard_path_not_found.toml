@@ -26,5 +26,5 @@ description = ""
 [validation.field_group_rules.non_existent_field]
 field = "some_sub_field"
 value_counts = [
-    { value = "X", count = 1 },
+    { value = "X", min = 1, max = 1 },
 ]

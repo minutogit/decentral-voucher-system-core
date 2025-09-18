@@ -779,7 +779,7 @@ fn test_validation_fails_on_field_group_rule_gender_mismatch() {
     assert!(
         matches!(
             &err,
-            VoucherCoreError::Validation(ValidationError::FieldValueCountMismatch { path, field, .. }) if path == "guarantor_signatures" && field == "gender"
+            VoucherCoreError::Validation(ValidationError::FieldValueCountOutOfBounds { path, field, .. }) if path == "guarantor_signatures" && field == "gender"
         ),
         "Validation should fail with a gender count mismatch, but got: {:?}", err
     );

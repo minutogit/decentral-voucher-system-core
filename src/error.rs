@@ -89,14 +89,15 @@ pub enum ValidationError {
         expected: String,
     },
 
-    /// Ein Feldwert in einer Gruppe von Objekten kam nicht in der erwarteten Häufigkeit vor.
-    #[error("Field group validation failed for field '{field}' at path '{path}': Expected value '{expected_value}' to appear {expected_count} times, but found {found_count}.")]
-    FieldValueCountMismatch {
+    /// Ein Feldwert in einer Gruppe von Objekten kam nicht in der erwarteten Häufigkeit (min/max) vor.
+    #[error("Field group validation failed for field '{field}' at path '{path}': Expected value '{value}' to appear between {min} and {max} times, but found {found}.")]
+    FieldValueCountOutOfBounds {
         path: String,
         field: String,
-        expected_value: String,
-        expected_count: u32,
-        found_count: u32,
+        value: String,
+        min: u32,
+        max: u32,
+        found: u32,
     },
 
     /// Es wurde versucht, einen nicht teilbaren Gutschein zu teilen.

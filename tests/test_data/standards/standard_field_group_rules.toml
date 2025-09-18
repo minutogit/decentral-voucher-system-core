@@ -34,6 +34,6 @@ guarantor_signatures = { min = 3, max = 3 }
 [validation.field_group_rules.guarantor_signatures]
 field = "gender"
 value_counts = [
-    { value = "A", count = 1 },
-    { value = "B", count = 2 },
+    { value = "A", min = 1, max = 1 },
+    { value = "B", min = 2, max = 2 },
 ]

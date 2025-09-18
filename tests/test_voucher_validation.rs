@@ -217,7 +217,7 @@ mod field_group_rules_validation {
         let err = result.err().unwrap();
         assert!(matches!(
             err,
-            ValidationError::FieldValueCountMismatch { path, field, .. } if path == "guarantor_signatures" && field == "gender"
+            ValidationError::FieldValueCountOutOfBounds { path, field, .. } if path == "guarantor_signatures" && field == "gender"
         ));
     }
 

@@ -144,8 +144,10 @@ pub struct BehaviorRules {
 pub struct ValueCountRule {
     /// Der Wert, der gezählt werden soll (als String, da aus JSON kommend).
     pub value: String,
-    /// Die exakte Anzahl, die erwartet wird.
-    pub count: u32,
+    /// Die minimale Anzahl, die erwartet wird.
+    pub min: u32,
+    /// Die maximale Anzahl, die erwartet wird.
+    pub max: u32,
 }
 
 /// Definiert eine Regel für eine Gruppe von Feldern in einer Objektliste.
