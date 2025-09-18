@@ -305,7 +305,10 @@ fn test_create_new_voucher_and_get_user_id() {
             amount: "500".to_string(),
             ..Default::default()
         },
-        ..Default::default()
+        // KORREKTUR: Explizite Initialisierung, um Panic zu vermeiden.
+        validity_duration: Some("P4Y".to_string()),
+        non_redeemable_test_voucher: false,
+        collateral: Default::default(),
     };
 
     // Aktion: Neuen Gutschein erstellen
@@ -339,10 +342,14 @@ fn test_get_total_balance_by_currency() {
 
     // Helfer zum Hinzufügen von Gutscheinen für einen bestimmten Standard
     let mut add_voucher = |amount: &str, status: VoucherStatus, standard: &VoucherStandardDefinition| {
+        // KORREKTUR: `validity_duration` muss explizit gesetzt werden, um den Panic in der
+        // Test-Hilfsfunktion `create_voucher_for_manipulation` zu vermeiden.
         let new_voucher_data = voucher_lib::services::voucher_manager::NewVoucherData {
             creator: voucher_lib::models::voucher::Creator { id: identity.user_id.clone(), first_name: "Test".to_string(), last_name: "User".to_string(), ..Default::default() },
             nominal_value: voucher_lib::models::voucher::NominalValue { amount: amount.to_string(), ..Default::default() },
-            ..Default::default()
+            validity_duration: Some("P4Y".to_string()),
+            non_redeemable_test_voucher: false,
+            collateral: Default::default(),
         };
 
         // HINWEIS: add_voucher verwendet create_voucher, das den Hash benötigt.

@@ -18,7 +18,6 @@ use test_utils::{
     create_voucher_for_manipulation, resign_transaction, ACTORS, MINUTO_STANDARD, SILVER_STANDARD,
 };
 use voucher_lib::services::voucher_manager::VoucherManagerError;
-use voucher_lib::Voucher;
 
 // --- Tests zur grundlegenden Struktur und Logik (verschoben aus advanced_validation) ---
 
@@ -31,6 +30,7 @@ fn test_validation_fails_on_standard_uuid_mismatch() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+        validity_duration: Some("P1Y".to_string()),
         ..Default::default()
     };
 
@@ -53,6 +53,7 @@ fn test_validation_fails_on_invalid_date_logic() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+        validity_duration: Some("P1Y".to_string()),
         ..Default::default()
     };
 
@@ -66,6 +67,8 @@ fn test_validation_fails_on_invalid_date_logic() {
     voucher_to_sign.creator.signature = "".to_string();
     voucher_to_sign.voucher_id = "".to_string();
     voucher_to_sign.transactions.clear();
+    voucher_to_sign.guarantor_signatures.clear();
+    voucher_to_sign.additional_signatures.clear();
     let hash = crypto_utils::get_hash(to_canonical_json(&voucher_to_sign).unwrap());
     let new_sig = crypto_utils::sign_ed25519(&creator_identity.signing_key, hash.as_bytes());
     voucher.creator.signature = bs58::encode(new_sig.to_bytes()).into_string();
@@ -87,6 +90,7 @@ fn test_validation_fails_on_malformed_amount_string() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+        validity_duration: Some("P1Y".to_string()),
         ..Default::default()
     };
     let mut voucher = create_voucher(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en").unwrap();
@@ -97,7 +101,7 @@ fn test_validation_fails_on_malformed_amount_string() {
     assert!(
         matches!(
             validation_result.unwrap_err(),
-            VoucherCoreError::AmountConversion(_)
+            VoucherCoreError::Validation(ValidationError::InvalidAmountFormat { .. })
         ),
         "Validation should fail with a DecimalConversionError."
     );
@@ -111,12 +115,13 @@ fn test_validation_fails_on_transaction_time_order() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: sender.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "60.0000".to_string(), ..Default::default() },
+        validity_duration: Some("P1Y".to_string()),
         ..Default::default()
     };
     let initial_voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &sender.signing_key, "en");
     let mut voucher_after_split = create_transaction(&initial_voucher, standard, &sender.user_id, &sender.signing_key, &recipient.user_id, "10.0000").unwrap();
 
-    let first_tx_time = voucher_after_split.transactions[0].t_time.clone();
+    let _first_tx_time = voucher_after_split.transactions[0].t_time.clone();
     let invalid_second_time = "2020-01-01T00:00:00Z";
     voucher_after_split.transactions[1].t_time = invalid_second_time.to_string();
     let tx = voucher_after_split.transactions[1].clone();
@@ -139,6 +144,7 @@ fn test_validation_fails_on_init_tx_with_wrong_prev_hash() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+        validity_duration: Some("P1Y".to_string()),
         ..Default::default()
     };
     let mut voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en");
@@ -161,6 +167,7 @@ fn test_validation_fails_on_init_tx_with_wrong_amount() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+        validity_duration: Some("P1Y".to_string()),
         ..Default::default()
     };
     let mut voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en");
@@ -184,6 +191,7 @@ fn test_validation_fails_on_init_tx_with_wrong_recipient() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+        validity_duration: Some("P1Y".to_string()),
         ..Default::default()
     };
     let mut voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en");
@@ -212,6 +220,7 @@ fn test_tx_fails_on_split_if_not_divisible() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "100.0000".to_string(), ..Default::default() },
+        validity_duration: Some("P1Y".to_string()),
         ..Default::default()
     };
     let voucher = create_voucher(voucher_data, &non_divisible_standard, &standard_hash, &creator.signing_key, "en").unwrap();
@@ -271,14 +280,30 @@ fn test_guarantor_sig_fails_on_mismatched_voucher_id() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+        validity_duration: Some("P4Y".to_string()), // KORREKTUR: Minuto-Standard erfordert >= P3Y
         ..Default::default()
     };
     let mut voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en");
     voucher.guarantor_signatures.push(create_female_guarantor_signature(&voucher));
     let mut sig1 = create_guarantor_signature_with_time(&voucher.voucher_id, &ACTORS.guarantor1, "G1", "1", "2026-08-01T10:00:00Z");
+    // Manipuliere die voucher_id, um den Testfall zu erstellen.
     sig1.voucher_id = "this-is-the-wrong-voucher-id".to_string();
+
+    // KORREKTUR: Die Signatur muss neu berechnet werden, nachdem die Daten manipuliert wurden.
+    // Andernfalls würde die `InvalidSignatureId`-Prüfung vor der `MismatchedVoucherId`-Prüfung fehlschlagen.
+    let mut data_for_id_hash = sig1.clone();
+    data_for_id_hash.signature_id = "".to_string();
+    data_for_id_hash.signature = "".to_string();
+    sig1.signature_id = crypto_utils::get_hash(to_canonical_json(&data_for_id_hash).unwrap());
+    let new_digital_signature = crypto_utils::sign_ed25519(&ACTORS.guarantor1.signing_key, sig1.signature_id.as_bytes());
+    sig1.signature = bs58::encode(new_digital_signature.to_bytes()).into_string();
+
     voucher.guarantor_signatures.push(sig1);
+
     let validation_result = validate_voucher_against_standard(&voucher, standard);
+    if let Err(e) = &validation_result {
+        println!("[DEBUG] test_guarantor_sig_fails_on_mismatched_voucher_id: Error returned: {:?}", e);
+    }
     assert!(matches!(
         validation_result.unwrap_err(),
         VoucherCoreError::Validation(ValidationError::MismatchedVoucherIdInSignature { .. })
@@ -292,6 +317,7 @@ fn test_validation_fails_on_field_group_rule_gender_mismatch() {
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+        validity_duration: Some("P4Y".to_string()), // KORREKTUR: Minuto-Standard erfordert >= P3Y
         ..Default::default()
     };
     let mut voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en");
@@ -300,6 +326,9 @@ fn test_validation_fails_on_field_group_rule_gender_mismatch() {
     voucher.guarantor_signatures.push(male_sig_1);
     voucher.guarantor_signatures.push(male_sig_2);
     let validation_result = validate_voucher_against_standard(&voucher, standard);
+    if let Err(e) = &validation_result {
+        println!("[DEBUG] test_validation_fails_on_field_group_rule_gender_mismatch: Error returned: {:?}", e);
+    }
     assert!(
         matches!(
             validation_result.unwrap_err(),
@@ -327,7 +356,12 @@ mod behavior_and_integrity_rules {
     fn test_behavior_fails_on_validity_too_short() {
         let (standard, standard_hash) = load_toml_standard("tests/test_data/standards/standard_behavior_rules.toml");
         let creator_identity = &ACTORS.alice;
-        let voucher_data = NewVoucherData::default();
+        let voucher_data = NewVoucherData {
+            creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
+            validity_duration: Some("P2Y".to_string()), // Valide Start-Dauer > 1Y
+            nominal_value: NominalValue { amount: "100".to_string(), ..Default::default() },
+            ..Default::default()
+        };
 
         // Dieser Standard erfordert min. 1 Jahr Gültigkeit. Wir erstellen einen Gutschein,
         // der manuell auf eine kürzere Gültigkeit gesetzt wird.
@@ -343,6 +377,8 @@ mod behavior_and_integrity_rules {
         voucher_to_sign.creator.signature = "".to_string();
         voucher_to_sign.voucher_id = "".to_string();
         voucher_to_sign.transactions.clear();
+        voucher_to_sign.guarantor_signatures.clear();
+        voucher_to_sign.additional_signatures.clear();
         let hash = crypto_utils::get_hash(to_canonical_json(&voucher_to_sign).unwrap());
         let new_sig = crypto_utils::sign_ed25519(&creator_identity.signing_key, hash.as_bytes());
         voucher.creator.signature = bs58::encode(new_sig.to_bytes()).into_string();
@@ -361,7 +397,9 @@ mod behavior_and_integrity_rules {
         
         // Fall 1: Der Nennwert hat zu viele Nachkommastellen
         let voucher_data = NewVoucherData {
-             nominal_value: NominalValue { amount: "100.123".to_string(), ..Default::default() },
+            creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
+            validity_duration: Some("P1Y".to_string()),
+            nominal_value: NominalValue { amount: "100.123".to_string(), ..Default::default() },
             ..Default::default()
         };
         let voucher_bad_nominal = create_voucher_for_manipulation(voucher_data, &standard, &standard_hash, &creator_identity.signing_key, "en");
@@ -373,6 +411,8 @@ mod behavior_and_integrity_rules {
 
         // Fall 2: Eine Transaktion hat zu viele Nachkommastellen
         let mut voucher = create_voucher(NewVoucherData {
+            creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
+            validity_duration: Some("P1Y".to_string()),
             nominal_value: NominalValue { amount: "100.00".to_string(), ..Default::default() },
             ..Default::default()
         }, &standard, &standard_hash, &creator_identity.signing_key, "en").unwrap();
@@ -392,7 +432,13 @@ mod behavior_and_integrity_rules {
     fn test_fails_on_conflicting_count_and_group_rules() {
         let (standard, standard_hash) = load_toml_standard("tests/test_data/standards/standard_conflicting_rules.toml");
         let creator_identity = &ACTORS.alice;
-        let base_voucher = create_voucher_for_manipulation(NewVoucherData::default(), &standard, &standard_hash, &creator_identity.signing_key, "en");
+        let voucher_data = NewVoucherData {
+            creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
+            validity_duration: Some("P1Y".to_string()),
+            nominal_value: NominalValue { amount: "100".to_string(), ..Default::default() },
+            ..Default::default()
+        };
+        let base_voucher = create_voucher_for_manipulation(voucher_data, &standard, &standard_hash, &creator_identity.signing_key, "en");
 
         // Fall 1: Erfülle die `field_group_rules` (4 Bürgen), verletze aber die `counts`-Regel (max 3)
         let mut voucher1 = base_voucher.clone();

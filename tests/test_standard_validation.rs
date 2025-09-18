@@ -151,6 +151,8 @@ mod voucher_integration_tests {
         let new_voucher_data_de = NewVoucherData {
             creator: Creator { id: ACTORS.alice.user_id.clone(), ..Default::default() },
             nominal_value: voucher_lib::models::voucher::NominalValue { amount: "888".to_string(), ..Default::default() },
+            // HINZUGEFÜGT: Explizite Gültigkeitsdauer, um den Panic in der Test-Hilfsfunktion zu vermeiden.
+            validity_duration: Some("P1Y".to_string()),
             ..Default::default()
         };
         let voucher_de = test_utils::create_voucher_for_manipulation(
@@ -161,6 +163,8 @@ mod voucher_integration_tests {
         let new_voucher_data_fr = NewVoucherData {
             creator: Creator { id: ACTORS.alice.user_id.clone(), ..Default::default() },
             nominal_value: voucher_lib::models::voucher::NominalValue { amount: "888".to_string(), ..Default::default() },
+            // HINZUGEFÜGT: Explizite Gültigkeitsdauer.
+            validity_duration: Some("P1Y".to_string()),
             ..Default::default()
         };
         let voucher_fr = test_utils::create_voucher_for_manipulation(

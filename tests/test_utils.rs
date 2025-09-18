@@ -15,9 +15,10 @@ use voucher_lib::services::crypto_utils::{
     self,
     create_user_id, generate_ed25519_keypair_for_tests, sign_ed25519,
 };
+use ed25519_dalek::Signer;
 use voucher_lib::services::secure_container_manager;
 use voucher_lib::services::signature_manager;
-use voucher_lib::services::voucher_manager::{NewVoucherData};
+use voucher_lib::services::voucher_manager::{create_transaction, create_voucher, NewVoucherData};
 use voucher_lib::wallet::Wallet;
 use voucher_lib::{
     models::{
@@ -191,6 +192,65 @@ pub fn generate_signed_standard_toml(template_path: &str) -> String {
 
     toml::to_string(&standard).expect("Failed to serialize standard back to TOML string")
 }
+
+/// Hilfsfunktion, um einen Standard zur Laufzeit anzupassen und neu zu signieren.
+/// Ist auf oberster Ebene definiert, damit alle Test-Module sie nutzen können.
+#[allow(dead_code)]
+pub fn create_custom_standard(
+    base_standard: &VoucherStandardDefinition,
+    modifier: impl FnOnce(&mut VoucherStandardDefinition),
+) -> (VoucherStandardDefinition, String) {
+    let mut standard = base_standard.clone();
+    modifier(&mut standard);
+
+    standard.signature = None;
+    let canonical_json = to_canonical_json(&standard).unwrap();
+    let hash = get_hash(canonical_json.as_bytes());
+
+    let signature = TEST_ISSUER.signing_key.sign(hash.as_bytes());
+
+    standard.signature = Some(voucher_lib::models::voucher_standard_definition::SignatureBlock {
+        issuer_id: TEST_ISSUER.user_id.clone(),
+        signature: bs58::encode(signature.to_bytes()).into_string(),
+    });
+
+    (standard, hash)
+}
+
+/// Bereitet einen Gutschein mit einer validen ersten Transaktion (einem Split) vor.
+#[allow(dead_code)]
+pub fn setup_voucher_with_one_tx() -> (
+    &'static VoucherStandardDefinition,
+    &'static String,
+    &'static UserIdentity,
+    &'static UserIdentity,
+    Voucher,
+) {
+    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+    let creator = &ACTORS.alice;
+    let recipient = &ACTORS.bob;
+
+    let voucher_data = NewVoucherData {
+        creator: Creator { id: creator.user_id.clone(), ..Default::default() },
+        nominal_value: NominalValue { amount: "100.0000".to_string(), ..Default::default() },
+        // HINWEIS: Auf P4Y erhöht, um konsistent zu sein und mögliche Fehler mit
+        // anspruchsvolleren Standards (z.B. Minuto) zu vermeiden.
+        validity_duration: Some("P4Y".to_string()),
+        ..Default::default()
+    };
+
+    let initial_voucher = create_voucher(voucher_data, standard, standard_hash, &creator.signing_key, "en").unwrap();
+
+    // Erstelle eine valide Split-Transaktion. Creator -> Recipient
+    // Creator hat danach 60.0000, Recipient hat 40.0000
+    let voucher_after_tx1 = create_transaction(
+        &initial_voucher, standard, &creator.user_id, &creator.signing_key,
+        &recipient.user_id, "40.0000",
+    )
+    .unwrap();
+
+    (standard, standard_hash, creator, recipient, voucher_after_tx1)
+}
 // --- Öffentliche Hilfsfunktionen für Integrationstests ---
 
 
@@ -267,6 +327,9 @@ pub fn add_voucher_to_wallet(
     let new_voucher_data = NewVoucherData {
         creator: creator_info,
         nominal_value: nominal_value_info,
+        // KORREKTUR: P1Y ist für Standards wie Minuto zu kurz. Erhöht auf P4Y,
+        // um `ValidityDurationTooShort`-Fehler in abhängigen Tests zu vermeiden.
+        validity_duration: Some("P4Y".to_string()),
         ..Default::default()
     };
 
@@ -404,8 +467,33 @@ pub fn create_voucher_for_manipulation(
     signing_key: &ed25519_dalek::SigningKey,
     lang_preference: &str,
 ) -> Voucher {
-    let creation_date = voucher_lib::services::utils::get_current_timestamp();
-    let valid_until = "2029-12-31T23:59:59Z".to_string();
+    // KORREKTUR: Die Funktion muss die übergebene `validity_duration` berücksichtigen,
+    // anstatt einen hartcodierten Wert zu verwenden.
+    let creation_date_str = voucher_lib::services::utils::get_current_timestamp();
+    let creation_dt = chrono::DateTime::parse_from_rfc3339(&creation_date_str).unwrap();
+    // KORREKTUR: Die Panic-Message wurde verbessert, um mehr Kontext zu liefern.
+    let duration_str = data.validity_duration.as_deref().unwrap_or_else(|| {
+        panic!(
+            "Test voucher creation requires a validity_duration. Voucher details: creator='{}', amount='{}'",
+            data.creator.id, data.nominal_value.amount
+        )
+    });
+    let mut valid_until_dt = voucher_lib::services::voucher_manager::add_iso8601_duration(creation_dt.into(), duration_str)
+        .expect("Failed to calculate validity in test helper");
+
+    // KORREKTUR: Repliziere die Logik zum Aufrunden des Gültigkeitsdatums aus dem voucher_manager.
+    // Dies ist notwendig, damit Tests, die diese Logik prüfen, nicht fehlschlagen.
+    if let Some(rule) = &standard.template.fixed.round_up_validity_to {
+        if rule == "end_of_year" {
+            use chrono::{Datelike, TimeZone};
+            let rounded_date = chrono::NaiveDate::from_ymd_opt(valid_until_dt.year(), 12, 31).unwrap();
+            let rounded_time = chrono::NaiveTime::from_hms_micro_opt(23, 59, 59, 999_999).unwrap();
+            // KORREKTUR: `from_utc` ist veraltet. Ersetzt durch die empfohlene Methode.
+            valid_until_dt = chrono::Utc.from_utc_datetime(&rounded_date.and_time(rounded_time));
+        }
+    }
+
+    let valid_until = valid_until_dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
 
     let mut nonce_bytes = [0u8; 16];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce_bytes);
@@ -443,7 +531,7 @@ pub fn create_voucher_for_manipulation(
         },
         voucher_id: "".to_string(), voucher_nonce, description: final_description,
         primary_redemption_type: "goods_or_services".to_string(),
-        divisible: standard.template.fixed.is_divisible, creation_date: creation_date.clone(), valid_until,
+        divisible: standard.template.fixed.is_divisible, creation_date: creation_date_str.clone(), valid_until,
         standard_minimum_issuance_validity: standard.validation.as_ref().and_then(|v| v.behavior_rules.as_ref()).and_then(|b| b.issuance_minimum_validity_duration.clone()).unwrap_or_default(),
         non_redeemable_test_voucher: false, nominal_value: final_nominal_value, collateral: final_collateral,
         creator: data.creator, guarantor_requirements_description: standard.template.fixed.guarantor_info.description.clone(), footnote: standard.template.fixed.footnote.clone().unwrap_or_default(),
@@ -464,7 +552,7 @@ pub fn create_voucher_for_manipulation(
     voucher.creator.signature = bs58::encode(signature.to_bytes()).into_string();
 
     let prev_hash = crypto_utils::get_hash(format!("{}{}", &voucher.voucher_id, &voucher.voucher_nonce));
-    let init_tx = Transaction { t_id: "".to_string(), prev_hash, t_type: "init".to_string(), t_time: creation_date, sender_id: voucher.creator.id.clone(), recipient_id: voucher.creator.id.clone(), amount: voucher.nominal_value.amount.clone(), sender_remaining_amount: None, sender_signature: "".to_string() };
+    let init_tx = Transaction { t_id: "".to_string(), prev_hash, t_type: "init".to_string(), t_time: creation_date_str, sender_id: voucher.creator.id.clone(), recipient_id: voucher.creator.id.clone(), amount: voucher.nominal_value.amount.clone(), sender_remaining_amount: None, sender_signature: "".to_string() };
     voucher.transactions.push(resign_transaction(init_tx, signing_key));
     voucher
 }

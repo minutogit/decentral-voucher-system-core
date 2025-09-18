@@ -41,7 +41,7 @@ use voucher_lib::error::ValidationError;
 use voucher_lib::services::voucher_manager::VoucherManagerError;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use test_utils::{setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD};
+use test_utils::{create_custom_standard, setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD};
 
 // --- HELPER-FUNKTIONEN UND TESTDATEN ---
 
@@ -52,22 +52,32 @@ fn test_full_creation_and_validation_cycle() {
     let creator = Creator { id: identity.user_id.clone(), ..Default::default() };
     let voucher_data = test_utils::create_minuto_voucher_data(creator);
 
-    // NEU: Den Standard und seinen Hash aus dem Tupel extrahieren.
-    let (minuto_standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+    // KORREKTUR: Erstelle eine benutzerdefinierte Version des Standards, um sicherzustellen,
+    // dass die Aufrundungsregel für diesen Test aktiv ist. Dies macht den Test
+    // unabhängig vom Zustand der globalen MINUTO_STANDARD-Variable.
+    let (minuto_standard_with_rounding, standard_hash) = create_custom_standard(&MINUTO_STANDARD.0, |s| {
+        s.template.fixed.round_up_validity_to = Some("end_of_year".to_string());
+    });
 
     // 2. Erstellung
-    let mut voucher = test_utils::create_voucher_for_manipulation(voucher_data, minuto_standard, standard_hash, &identity.signing_key, "en");
+    let mut voucher = test_utils::create_voucher_for_manipulation(voucher_data, &minuto_standard_with_rounding, &standard_hash, &identity.signing_key, "en");
     assert!(!voucher.voucher_id.is_empty());
     assert!(!voucher.creator.signature.is_empty());
     // Prüfe die neuen Werte, die aus dem geänderten Standard kommen.
     assert_eq!(voucher.standard_minimum_issuance_validity, "P3Y");
+
+    // --- DEBUG-Ausgabe hinzugefügt ---
+    println!("[DEBUG] Erwartetes Ende: -12-31T23:59:59");
+    println!("[DEBUG] Tatsächliches valid_until: {}", voucher.valid_until);
+    // --- Ende DEBUG-Ausgabe ---
+
     // Prüfe, ob das Gültigkeitsdatum korrekt auf das Jahresende gerundet wurde.
     assert!(voucher.valid_until.contains("-12-31T23:59:59"));
     let expected_description = "A voucher for goods or services worth 60 minutes of quality performance.";
     assert_eq!(voucher.description.trim(), expected_description.trim());
 
     // 3. Erste Validierung: Muss fehlschlagen, da Bürgen fehlen.
-    let initial_validation_result = validate_voucher_against_standard(&voucher, minuto_standard);
+    let initial_validation_result = validate_voucher_against_standard(&voucher, &minuto_standard_with_rounding);
     assert!(matches!(
         initial_validation_result.unwrap_err(),
         VoucherCoreError::Validation(ValidationError::CountOutOfBounds { field, .. }) if field == "guarantor_signatures"
@@ -83,7 +93,7 @@ fn test_full_creation_and_validation_cycle() {
     voucher.guarantor_signatures.push(guarantor_sig_2);
 
     // 5. Finale Validierung (Positivfall mit Bürgen)
-    let final_validation_result = validate_voucher_against_standard(&voucher, minuto_standard);
+    let final_validation_result = validate_voucher_against_standard(&voucher, &minuto_standard_with_rounding);
     assert!(
         final_validation_result.is_ok(),
         "Final validation failed unexpectedly: {:?}",

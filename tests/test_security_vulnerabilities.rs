@@ -23,7 +23,7 @@ use voucher_lib::services::voucher_validation::{self};
 use voucher_lib::services::voucher_manager::get_spendable_balance;
 use serde_json::Value;
 use test_utils::{
-    create_guarantor_signature_with_time, create_voucher_for_manipulation,
+    create_voucher_for_manipulation,
     setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD,
 };
 use rand::{Rng, thread_rng};
@@ -715,7 +715,7 @@ fn test_attack_fuzzing_random_mutations() {
 #[cfg(test)]
 mod required_signatures_validation {
     use super::*;
-    use test_utils::{create_male_guarantor_signature};
+    use test_utils::{create_guarantor_signature_with_time, create_male_guarantor_signature};
     use voucher_lib::models::voucher::AdditionalSignature;
 
     fn load_required_sig_standard() -> (voucher_lib::VoucherStandardDefinition, String) {
@@ -839,6 +839,10 @@ mod required_signatures_validation {
         let voucher_data = NewVoucherData {
             creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
             nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+            // KORREKTUR: Der Minuto-Standard erfordert eine Mindestgültigkeit (z.B. P3Y).
+            // P1Y war zu kurz und löste `ValidityDurationTooShort` aus, bevor die eigentliche
+            // Angriffslogik (`CreatorAsGuarantor`) geprüft werden konnte.
+            validity_duration: Some("P4Y".to_string()),
             ..Default::default()
         };
         let mut voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en");
@@ -856,6 +860,16 @@ mod required_signatures_validation {
         voucher.guarantor_signatures.push(create_male_guarantor_signature(&voucher));
 
         let validation_result = validate_voucher_against_standard(&voucher, standard);
+
+        // --- DEBUG-Ausgabe hinzugefügt ---
+        if let Err(e) = &validation_result {
+            println!("[DEBUG] Validation failed as expected. The actual error was:");
+            println!("[DEBUG] {:?}", e);
+        } else {
+            // Wenn die Validierung unerwartet erfolgreich ist, lassen wir den Test fehlschlagen.
+            panic!("[DEBUG] Validation unexpectedly succeeded, but should have failed!");
+        }
+        // --- Ende DEBUG-Ausgabe ---
 
         // HINWEIS: Mit der Implementierung von `CreatorAsGuarantor` in `error.rs` und
         // `voucher_validation.rs` prüfen wir nun auf den spezifischeren, korrekten Fehler.
