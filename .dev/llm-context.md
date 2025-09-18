@@ -62,7 +62,6 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
 
 - **`[validation]`**: Beinhaltet Regeln (z.B. `required_voucher_fields`, `guarantor_rules`), die zur Überprüfung eines Gutscheins verwendet werden.
 
-
 ```
 {
   "voucher_standard": {
@@ -238,11 +237,6 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 .
 ├── Cargo.lock
 ├── Cargo.toml
-├── examples
-│   ├── playground_crypto_utils.rs
-│   ├── playground_utils.rs
-│   ├── playground_voucher_lifecycle.rs
-│   └── playground_wallet.rs
 ├── output.txt
 ├── README.md
 ├── sign_standards.sh
@@ -255,7 +249,6 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   ├── bin
 │   │   └── voucher-cli.rs
 │   ├── error.rs
-│   ├── examples
 │   ├── lib.rs
 │   ├── main.rs
 │   ├── models
@@ -282,7 +275,6 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   ├── storage
 │   │   ├── file_storage.rs
 │   │   └── mod.rs
-│   ├── utilities
 │   └── wallet
 │       ├── conflict_handler.rs
 │       ├── mod.rs
@@ -293,18 +285,27 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   ├── test_app_service.rs
 │   ├── test_archive.rs
 │   ├── test_crypto_utils.rs
+│   ├── test_data
+│   │   └── standards
+│   │       ├── standard_content_rules.toml
+│   │       ├── standard_field_group_rules.toml
+│   │       ├── standard_no_split.toml
+│   │       ├── standard_path_not_found.toml
+│   │       └── standard_strict_counts.toml
 │   ├── test_date_utils.rs
 │   ├── test_file_storage.rs
+│   ├── test_forward_compatibility.rs
 │   ├── test_local_double_spend_detection.rs
 │   ├── test_local_instance_id.rs
 │   ├── test_secure_container.rs
 │   ├── test_security_vulnerabilities.rs
+│   ├── test_standard_validation.rs
 │   ├── test_transaction_math.rs
 │   ├── test_utils.rs
 │   ├── test_voucher_lifecycle.rs
+│   ├── test_voucher_validation.rs
 │   ├── test_wallet_integration.rs
 │   └── test_wallet_signatures.rs
-├── todo.md
 └── voucher_standards
     ├── minuto_v1
     │   └── standard.toml
@@ -387,6 +388,13 @@ Definiert die Abstraktion für ein persistentes Archiv von Gutschein-Zuständen.
 - `pub struct FileVoucherArchive`
   - Eine Implementierung, die jeden archivierten Gutschein-Zustand als separate JSON-Datei in einer **hierarchischen Struktur** speichert: `{archive_dir}/{voucher_id}/{t_id}.json`.
 
+### `services::bundle_processor` Modul
+
+Kapselt die zustandslose Logik für das Erstellen, Verschlüsseln, Öffnen und Verifizieren von `TransactionBundle`-Objekten.
+
+- `pub fn create_and_encrypt_bundle(...)`: Erstellt ein `TransactionBundle`, signiert es, verpackt es in einen `SecureContainer` und serialisiert das Ergebnis.
+- `pub fn open_and_verify_bundle(...)`: Öffnet einen `SecureContainer`, validiert den Inhalt als `TransactionBundle` und verifiziert dessen digitale Signatur.
+
 ### `services::crypto_utils` Modul
 
 Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierung, Hashing, Signaturen und User ID-Verwaltung.
@@ -394,12 +402,26 @@ Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierun
 - `pub fn get_hash(input: impl AsRef<[u8]>) -> String`
   - Berechnet einen SHA3-256-Hash der Eingabe und gibt ihn als Base58-kodierten String zurück.
 - `pub fn derive_ed25519_keypair(mnemonic_phrase: &str, passphrase: Option<&str>) -> Result<(EdPublicKey, SigningKey), VoucherCoreError>`
-  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase über einen **gehärteten, mehrstufigen Prozess** (BIP-39 Seed -> PBKDF2 Stretch -> HKDF Expand) ab, um die Sicherheit zu erhöhen.
+  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase über einen **gehärteten, mehrstufigen Prozess** (BIP-39 Seed -\> PBKDF2 Stretch -\> HKDF Expand) ab, um die Sicherheit zu erhöhen.
 - `pub fn create_user_id(public_key: &EdPublicKey, user_prefix: Option<&str>) -> Result<String, UserIdError>`
   - Generiert eine User ID konform zum **`did:key`-Standard**. Das Format ist `[prefix]@[did:key:z...Ed25519-PublicKey...]` oder nur `did:key:z...`.
 - `pub fn get_pubkey_from_user_id(user_id: &str) -> Result<EdPublicKey, GetPubkeyError>`
   - Extrahiert den Ed25519 Public Key aus einer `did:key`-basierten User ID-Zeichenkette.
 - Bietet Funktionen zur Generierung und Validierung von BIP-39 Mnemonic-Phrasen (`generate_mnemonic`, `validate_mnemonic_phrase`).
+
+### `services::secure_container_manager` Modul
+
+Stellt die Kernlogik für den generischen `SecureContainer` bereit, der für den sicheren, verschlüsselten Austausch von Daten (z.B. Bundles, Signaturanfragen) verwendet wird.
+
+- `pub fn create_secure_container(...)`: Implementiert eine Multi-Empfänger-Verschlüsselung. Ein symmetrischer Payload-Schlüssel wird für jeden Empfänger mittels statischem Diffie-Hellman (X25519) und Key-Wrapping (HKDF) asymmetrisch verschlüsselt. Der Container wird als Ganzes signiert, um die Authentizität zu gewährleisten.
+- `pub fn open_secure_container(...)`: Verifiziert die Signatur des Containers und entschlüsselt den Payload, indem der symmetrische Schlüssel mit dem privaten Schlüssel des Empfängers und dem öffentlichen Schlüssel des Senders wiederhergestellt wird.
+
+### `services::signature_manager` Modul
+
+Enthält die zustandslose Geschäftslogik für die Erstellung und kryptographische Validierung von losgelösten Signaturen (`DetachedSignature`).
+
+- `pub fn complete_and_sign_detached_signature(...)`: Nimmt unvollständige Signatur-Metadaten, berechnet die `signature_id` durch Hashing des kanonischen Inhalts und fügt die digitale Signatur des Unterzeichners hinzu.
+- `pub fn validate_detached_signature(...)`: Validiert eine losgelöste Signatur, indem die `signature_id` neu berechnet und die kryptographische Signatur gegen die ID und den Public Key des Unterzeichners geprüft wird.
 
 ### `services::standard_manager` Modul
 
