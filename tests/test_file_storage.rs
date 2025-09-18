@@ -10,6 +10,7 @@ use voucher_lib::models::profile::{
 use voucher_lib::{UserIdentity};
 use voucher_lib::models::voucher::{Creator, NominalValue, Voucher};
 use voucher_lib::services::voucher_manager::NewVoucherData;
+use voucher_lib::services::crypto_utils;
 use voucher_lib::services::voucher_manager;
 use voucher_lib::error::VoucherCoreError;
 use voucher_lib::{AuthMethod, FileStorage, Storage, StorageError, Wallet};
@@ -253,4 +254,106 @@ fn test_save_and_load_with_bundle_history() {
         loaded_wallet.profile.user_id,
         alice_wallet.profile.user_id
     );
+}
+
+
+/// Ein Hilfs-Struct, um das Speichern von serialisierten Daten zu testen.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
+struct AppSettings {
+    theme: String,
+    notifications_enabled: bool,
+    user_level: u32,
+}
+
+#[test]
+fn test_save_and_load_arbitrary_data() {
+    // 1. Setup
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let mut storage = FileStorage::new(temp_dir.path());
+    println!("--> Test storage created in: {:?}", temp_dir.path());
+    let password = "arbitrary-data-password";
+    let identity = &ACTORS.alice;
+    let wallet = setup_in_memory_wallet(identity);
+
+    // WICHTIG: Zuerst das Wallet speichern, damit die Schlüssel-Infrastruktur
+    // (master_key.enc, recovery_key.enc) für die Verschlüsselung initialisiert wird.
+    wallet
+        .save(&mut storage, identity, password)
+        .expect("Initial wallet save failed");
+
+    // 2. Erstelle Testdaten (einfach und komplex)
+    let blob_name1 = "simple_blob";
+    let simple_data = b"this is some raw byte data".to_vec();
+
+    let blob_name2 = "app_settings";
+    let complex_data = AppSettings {
+        theme: "dark".to_string(),
+        notifications_enabled: true,
+        user_level: 5,
+    };
+    let complex_data_bytes = bincode::serialize(&complex_data).unwrap();
+
+    // 3. Speichern der Daten
+    println!("--> Saving blobs to storage...");
+    storage
+        .save_arbitrary_data(&identity.user_id, password, blob_name1, &simple_data)
+        .expect("Saving simple blob should succeed");
+
+    storage
+        .save_arbitrary_data(&identity.user_id, password, blob_name2, &complex_data_bytes)
+        .expect("Saving complex blob should succeed");
+
+    println!("--> Blobs saved successfully.");
+
+    // Überprüfe, ob die Dateien mit dem korrekten, benutzerspezifischen Namen erstellt wurden
+    let user_hash = crypto_utils::get_hash(identity.user_id.as_bytes());
+    let expected_path1 = temp_dir
+        .path()
+        .join(format!("generic_{}.{}.enc", blob_name1, user_hash));
+    let expected_path2 = temp_dir
+        .path()
+        .join(format!("generic_{}.{}.enc", blob_name2, user_hash));
+
+    println!("--> Verifying existence of file: {:?}", expected_path1);
+    assert!(expected_path1.exists(), "File for simple blob was not created at the expected path!");
+    println!("--> Verifying existence of file: {:?}", expected_path2);
+    assert!(expected_path2.exists(), "File for complex blob was not created at the expected path!");
+
+    // 4. Laden und Verifizieren
+    let loaded_simple_data = storage
+        .load_arbitrary_data(&identity.user_id, &AuthMethod::Password(password), blob_name1)
+        .expect("Loading simple blob should succeed");
+    assert_eq!(simple_data, loaded_simple_data);
+
+    let loaded_complex_data_bytes = storage
+        .load_arbitrary_data(&identity.user_id, &AuthMethod::Password(password), blob_name2)
+        .expect("Loading complex blob should succeed");
+    let loaded_complex_data: AppSettings = bincode::deserialize(&loaded_complex_data_bytes).unwrap();
+    assert_eq!(complex_data, loaded_complex_data);
+
+    // 5. Fehlerfälle
+    // Falsches Passwort
+    let res =
+        storage.load_arbitrary_data(&identity.user_id, &AuthMethod::Password("wrong-pass"), blob_name1);
+    assert!(matches!(res, Err(StorageError::AuthenticationFailed)));
+
+    // Nicht existierende Daten
+    let res = storage.load_arbitrary_data(
+        &identity.user_id,
+        &AuthMethod::Password(password),
+        "non-existent-blob",
+    );
+    assert!(matches!(res, Err(StorageError::NotFound)));
+
+    // 6. Überschreiben testen
+    let new_simple_data = b"this is updated data".to_vec();
+    storage
+        .save_arbitrary_data(&identity.user_id, password, blob_name1, &new_simple_data)
+        .expect("Overwriting blob should succeed");
+
+    let reloaded_data = storage
+        .load_arbitrary_data(&identity.user_id, &AuthMethod::Password(password), blob_name1)
+        .expect("Loading overwritten blob should succeed");
+    assert_eq!(new_simple_data, reloaded_data);
+    assert_ne!(simple_data, reloaded_data);
 }

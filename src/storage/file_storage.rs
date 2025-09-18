@@ -79,6 +79,51 @@ impl FileStorage {
             wallet_directory: path.into(),
         }
     }
+
+    /// Erstellt einen Hash des Benutzer-IDs für die Verwendung in Dateinamen.
+    fn get_user_hash(user_id: &str) -> String {
+        crypto_utils::get_hash(user_id.as_bytes())
+    }
+
+    /// Lädt den `ProfileStorageContainer`, um an die Schlüssel-Metadaten zu gelangen.
+    fn load_profile_container(&self) -> Result<ProfileStorageContainer, StorageError> {
+        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
+        if !profile_path.exists() {
+            return Err(StorageError::NotFound);
+        }
+        let container_bytes = fs::read(profile_path)?;
+        serde_json::from_slice(&container_bytes)
+            .map_err(|e| StorageError::InvalidFormat(e.to_string()))
+    }
+
+    /// Holt den Master-Dateischlüssel unter Verwendung eines Passworts.
+    /// Diese Logik wird von allen `save_*`-Methoden benötigt.
+    fn get_master_key(&self, password: &str) -> Result<[u8; KEY_SIZE], StorageError> {
+        let profile_container = self.load_profile_container()?;
+
+        let password_key =
+            derive_key_from_password(password, &profile_container.password_kdf_salt)?;
+        let file_key_bytes = crypto_utils::decrypt_data(
+            &password_key,
+            &profile_container.password_wrapped_key_with_nonce,
+        )
+        .map_err(|_| StorageError::AuthenticationFailed)?;
+
+        file_key_bytes
+            .try_into()
+            .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))
+    }
+
+    /// Holt den Master-Dateischlüssel unter Verwendung einer beliebigen `AuthMethod`.
+    /// Diese Logik wird von allen `load_*`-Methoden benötigt.
+    fn get_master_key_from_auth(&self, auth: &AuthMethod) -> Result<[u8; KEY_SIZE], StorageError> {
+        let profile_container = self.load_profile_container()?;
+        let file_key_bytes = get_file_key(auth, &profile_container)?;
+
+        file_key_bytes
+            .try_into()
+            .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))
+    }
 }
 
 impl Storage for FileStorage {
@@ -513,6 +558,55 @@ impl Storage for FileStorage {
 
         Ok(())
     }
+
+    /// Speichert einen beliebigen, benannten Datenblock verschlüsselt.
+    fn save_arbitrary_data(
+        &mut self,
+        user_id: &str,
+        password: &str,
+        name: &str,
+        data: &[u8],
+    ) -> Result<(), StorageError> {
+        // 1. Hole den Master-Schlüssel, der für alle Operationen dieses Wallets verwendet wird.
+        let master_key = self.get_master_key(password)?;
+
+        // 2. Erstelle einen sicheren, benutzerspezifischen Dateipfad.
+        let user_hash = Self::get_user_hash(user_id);
+        let path =
+            self.wallet_directory
+                .join(format!("generic_{}.{}.enc", name, user_hash));
+
+        // 3. Verschlüssele die Daten und speichere sie.
+        let ciphertext = crypto_utils::encrypt_data(&master_key, data)
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+        fs::write(&path, ciphertext).map_err(StorageError::Io)?;
+
+        Ok(())
+    }
+
+    /// Lädt einen beliebigen, benannten und verschlüsselten Datenblock.
+    fn load_arbitrary_data(
+        &self,
+        user_id: &str,
+        auth: &AuthMethod,
+        name: &str,
+    ) -> Result<Vec<u8>, StorageError> {
+        // 1. Leite den Master-Schlüssel aus der Authentifizierungsmethode ab.
+        let master_key = self.get_master_key_from_auth(auth)?;
+
+        // 2. Konstruiere den Pfad, unter dem die Daten erwartet werden.
+        let user_hash = Self::get_user_hash(user_id);
+        let path =
+            self.wallet_directory
+                .join(format!("generic_{}.{}.enc", name, user_hash));
+
+        if !path.exists() {
+            return Err(StorageError::NotFound);
+        }
+
+        // 3. Lese und entschlüssele die Daten.
+        let ciphertext = fs::read(&path).map_err(StorageError::Io)?;
+        crypto_utils::decrypt_data(&master_key, &ciphertext).map_err(|_| StorageError::AuthenticationFailed)    }
 }
 
 // --- Private Hilfsfunktionen ---

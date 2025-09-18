@@ -113,4 +113,24 @@ pub trait Storage {
         password: &str,
         proof_store: &ProofStore,
     ) -> Result<(), StorageError>;
+
+    /// Speichert einen beliebigen, benannten Datenblock verschlüsselt.
+    ///
+    /// Diese Funktion ermöglicht es der Anwendung, eigene Daten sicher im Kontext des
+    /// Wallets zu speichern, ohne eigene Schlüssel verwalten zu müssen.
+    ///
+    /// # Arguments
+    /// * `user_id` - Die ID des Benutzers, dem die Daten zugeordnet sind.
+    /// * `password` - Das Passwort zum Ableiten des Verschlüsselungsschlüssels.
+    /// * `name` - Ein eindeutiger Name für den Datenblock (z.B. "app_settings").
+    /// * `data` - Die zu verschlüsselnden Rohdaten.
+    fn save_arbitrary_data(&mut self, user_id: &str, password: &str, name: &str, data: &[u8]) -> Result<(), StorageError>;
+
+    /// Lädt einen beliebigen, benannten und verschlüsselten Datenblock.
+    ///
+    /// # Arguments
+    /// * `user_id` - Die ID des Benutzers, dem die Daten zugeordnet sind.
+    /// * `auth` - Die Authentifizierungsmethode zum Entschlüsseln.
+    /// * `name` - Der Name des zu ladenden Datenblocks.
+    fn load_arbitrary_data(&self, user_id: &str, auth: &AuthMethod, name: &str) -> Result<Vec<u8>, StorageError>;
 }
