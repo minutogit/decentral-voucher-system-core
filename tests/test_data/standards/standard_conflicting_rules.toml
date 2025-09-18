@@ -1,0 +1,40 @@
+# Test-Standard, dessen Regeln logisch miteinander in Konflikt stehen.
+
+[metadata]
+name = "Conflicting Rules Test Standard"
+uuid = "CONFLICT-TEST-V1"
+abbreviation = "CFT"
+issuer_name = "Test Council"
+
+[template.fixed]
+primary_redemption_type = "goods_or_services"
+is_summable = false
+is_divisible = false
+[template.fixed.nominal_value]
+unit = "TestUnit"
+[template.fixed.collateral]
+type = ""
+description = ""
+redeem_condition = ""
+[template.fixed.guarantor_info]
+needed_count = 0 # Wird von `counts` überschrieben
+description = ""
+
+[validation]
+# Regel 1: Es müssen exakt 3 Bürgen sein.
+[validation.counts]
+guarantor_signatures = { min = 3, max = 3 }
+
+# Regel 2: Es müssen 2x "A" und 2x "B" sein (Summe 4).
+# Dies steht im direkten Widerspruch zur counts-Regel.
+[validation.field_group_rules]
+[validation.field_group_rules.guarantor_signatures]
+field = "gender"
+value_counts = [
+    { value = "A", min = 2, max = 2 },
+    { value = "B", min = 2, max = 2 },
+]
+
+[signature]
+issuer_id = "did:key:zDummy"
+signature = "dummy_signature"

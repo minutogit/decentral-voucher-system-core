@@ -1,0 +1,37 @@
+# Test-Standard zur isolierten Prüfung der `behavior_rules`.
+
+[metadata]
+name = "Behavior Rules Test Standard"
+uuid = "BEHAVE-TEST-V1"
+abbreviation = "BEH"
+issuer_name = "Test Council"
+
+[template.fixed]
+primary_redemption_type = "goods_or_services"
+is_summable = true
+is_divisible = true
+
+[template.fixed.nominal_value]
+unit = "TestUnit"
+
+[template.fixed.collateral]
+type = ""
+description = ""
+redeem_condition = ""
+
+[template.fixed.guarantor_info]
+needed_count = 0
+description = ""
+
+[validation]
+[validation.behavior_rules]
+# Ein Gutschein muss bei Erstellung mindestens 1 Jahr (P1Y) gültig sein.
+issuance_minimum_validity_duration = "P1Y"
+# Die Gültigkeit darf maximal 5 Jahre betragen.
+max_creation_validity_duration = "P5Y"
+# Beträge dürfen maximal 2 Nachkommastellen haben.
+amount_decimal_places = 2
+
+[signature]
+issuer_id = "did:key:zDummy"
+signature = "dummy_signature"

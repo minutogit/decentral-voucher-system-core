@@ -30,7 +30,7 @@ use voucher_lib::{
 use voucher_lib::services::crypto_utils::get_hash;
 use voucher_lib::services::utils::to_canonical_json;
 use toml;
-
+use std::path::PathBuf;
 // --- Zentralisierte Akteure und Standards ---
 
 /// Eine private Hilfsfunktion, um eine deterministische UserIdentity aus einem Seed zu erstellen.
@@ -127,9 +127,32 @@ lazy_static! {
         standard.signature = Some(SignatureBlock { issuer_id: issuer.user_id.clone(), signature: bs58::encode(signature.to_bytes()).into_string() });
         (standard, hash)
     };
+
+    /// Lädt den `required_signatures`-Test-Standard und signiert ihn zur Laufzeit.
+    /// Verwendet `include_str!` für maximale Robustheit in der Testumgebung.
+    pub static ref REQUIRED_SIG_STANDARD: (VoucherStandardDefinition, String) = {
+        let issuer = &TEST_ISSUER;
+        // Der Pfad ist relativ zur aktuellen Datei (test_utils.rs)
+        let toml_str = include_str!("test_data/standards/standard_required_signatures.toml");
+
+        let mut standard: VoucherStandardDefinition = toml::from_str(toml_str)
+            .expect("Failed to parse Required Sig TOML template for tests");
+
+        standard.signature = None;
+        let canonical_json_for_signing = to_canonical_json(&standard)
+            .expect("Failed to create canonical JSON for Required Sig standard");
+        let hash_to_sign = get_hash(canonical_json_for_signing.as_bytes());
+
+        let signature = sign_ed25519(&issuer.signing_key, hash_to_sign.as_bytes());
+        let signature_block = SignatureBlock {
+            issuer_id: issuer.user_id.clone(),
+            signature: bs58::encode(signature.to_bytes()).into_string(),
+        };
+        standard.signature = Some(signature_block);
+        (standard, hash_to_sign)
+    };
 }
 
-// --- Neue Hilfsfunktionen ---
 #[allow(dead_code)]
 /// Generiert eine neue, valide 12-Wort BIP39 Mnemonic-Phrase für Tests.
 pub fn generate_valid_mnemonic() -> String {
@@ -143,21 +166,22 @@ pub fn generate_valid_mnemonic() -> String {
 /// und verifizierbare Definition erhalten.
 #[allow(dead_code)]
 pub fn generate_signed_standard_toml(template_path: &str) -> String {
-    let issuer = &TEST_ISSUER;
-    let toml_str = std::fs::read_to_string(template_path)
-        .unwrap_or_else(|_| panic!("Failed to read TOML template: {}", template_path));
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let mut absolute_path = PathBuf::from(manifest_dir);
+    absolute_path.push(template_path);
 
-    // 1. Parsen, dabei wird die ungültige Signatur im Template ignoriert/überschrieben.
+    let issuer = &TEST_ISSUER;
+    let toml_str = std::fs::read_to_string(&absolute_path)
+        .unwrap_or_else(|e| panic!("Failed to read TOML template at '{:?}': {}", absolute_path, e));
+
     let mut standard: VoucherStandardDefinition = toml::from_str(&toml_str)
         .expect("Failed to parse TOML template for signing");
 
-    // 2. Platzhalter entfernen und Hash für die Signatur erstellen.
     standard.signature = None;
     let canonical_json_for_signing = to_canonical_json(&standard)
         .expect("Failed to create canonical JSON for standard");
     let hash_to_sign = get_hash(canonical_json_for_signing.as_bytes());
 
-    // 3. Gültige Signatur erstellen und einfügen.
     let signature = sign_ed25519(&issuer.signing_key, hash_to_sign.as_bytes());
     let signature_block = SignatureBlock {
         issuer_id: issuer.user_id.clone(),
@@ -165,10 +189,8 @@ pub fn generate_signed_standard_toml(template_path: &str) -> String {
     };
     standard.signature = Some(signature_block);
 
-    // 4. Die aktualisierte Struktur zurück in einen TOML-String serialisieren.
     toml::to_string(&standard).expect("Failed to serialize standard back to TOML string")
 }
-
 // --- Öffentliche Hilfsfunktionen für Integrationstests ---
 
 
@@ -430,6 +452,11 @@ pub fn create_voucher_for_manipulation(
 
     let mut voucher_to_hash = voucher.clone();
     voucher_to_hash.creator.signature = "".to_string(); voucher_to_hash.voucher_id = "".to_string();
+    // KORREKTUR: Laut Spezifikation müssen für die Signatur des Creator-Blocks
+    // alle Listen für Signaturen und Transaktionen geleert werden.
+    voucher_to_hash.transactions.clear();
+    voucher_to_hash.guarantor_signatures.clear();
+    voucher_to_hash.additional_signatures.clear();
     let voucher_json = to_canonical_json(&voucher_to_hash).unwrap();
     let voucher_hash = crypto_utils::get_hash(voucher_json);
     voucher.voucher_id = voucher_hash.clone();
@@ -464,9 +491,13 @@ pub fn create_guarantor_signature_with_time(
         ..Default::default()
     };
 
-    let signature_json_for_id = to_canonical_json(&signature_data).unwrap();
-    let signature_id = get_hash(signature_json_for_id);
-    signature_data.signature_id = signature_id;
+    // KORREKTUR: Die signature_id muss aus dem Hash eines Objekts berechnet werden,
+    // bei dem die Felder `signature_id` und `signature` geleert sind, um konsistent
+    // mit der Verifizierungslogik zu sein.
+    let mut data_for_id_hash = signature_data.clone();
+    data_for_id_hash.signature_id = "".to_string();
+    data_for_id_hash.signature = "".to_string();
+    signature_data.signature_id = get_hash(to_canonical_json(&data_for_id_hash).unwrap());
 
     let digital_signature = sign_ed25519(&guarantor_identity.signing_key, signature_data.signature_id.as_bytes());
     signature_data.signature = bs58::encode(digital_signature.to_bytes()).into_string();

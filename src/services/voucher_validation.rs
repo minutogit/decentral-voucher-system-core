@@ -162,6 +162,7 @@ pub fn validate_required_signatures(
         });
 
         if !is_fulfilled {
+            println!("[DEBUG] Rule was NOT fulfilled. Returning MissingRequiredSignature error.");
             return Err(ValidationError::MissingRequiredSignature {
                 role: rule.role_description.clone(),
             });
@@ -268,7 +269,46 @@ pub fn validate_behavior_rules(voucher: &Voucher, rules: &BehaviorRules) -> Resu
             }
         }
     }
+    // NEU: Prüfung der maximal erlaubten Gültigkeitsdauer bei Erstellung.
+    if let Some(max_duration_str) = &rules.max_creation_validity_duration {
+        if !max_duration_str.is_empty() {
+            let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date)
+                .map_err(|_| ValidationError::InvalidDateLogic { creation: voucher.creation_date.clone(), valid_until: voucher.valid_until.clone() })?
+                .with_timezone(&chrono::Utc);
+            let valid_until_dt = chrono::DateTime::parse_from_rfc3339(&voucher.valid_until)
+                .map_err(|_| ValidationError::InvalidDateLogic { creation: voucher.creation_date.clone(), valid_until: voucher.valid_until.clone() })?
+                .with_timezone(&chrono::Utc);
 
+            let max_end_dt = add_iso8601_duration(creation_dt, max_duration_str).map_err(|e| {
+                ValidationError::InvalidTransaction(format!(
+                    "Failed to calculate max allowed validity duration: {}",
+                    e
+                ))
+            })?;
+
+            if valid_until_dt > max_end_dt {
+                return Err(ValidationError::ValidityDurationTooLong {
+                    max_allowed: max_duration_str.clone(),
+                }.into());
+            }
+        }
+    }
+    // NEU: Prüfung der maximal erlaubten Nachkommastellen für alle Beträge.
+    if let Some(max_places) = rules.amount_decimal_places {
+        // Prüfe den Nennwert des Gutscheins
+        check_decimal_places(&voucher.nominal_value.amount, max_places, "nominal_value.amount")?;
+
+        // Prüfe alle Transaktionen
+        for (i, tx) in voucher.transactions.iter().enumerate() {
+            let amount_path = format!("transactions[{}].amount", i);
+            check_decimal_places(&tx.amount, max_places, &amount_path)?;
+
+            if let Some(remainder) = &tx.sender_remaining_amount {
+                let remainder_path = format!("transactions[{}].sender_remaining_amount", i);
+                check_decimal_places(remainder, max_places, &remainder_path)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -319,6 +359,21 @@ pub fn validate_field_group_rules(
 
 // --- HILFSFUNKTIONEN UND BESTEHENDE KRYPTO-PRÜFUNGEN (leicht angepasst) ---
 
+/// Private Hilfsfunktion zur Überprüfung der Nachkommastellen eines Betrags.
+fn check_decimal_places(amount_str: &str, max_places: u8, field_path: &str) -> Result<(), ValidationError> {
+    let dec = Decimal::from_str(amount_str).map_err(|_| ValidationError::InvalidAmountFormat {
+        path: field_path.to_string(),
+        found: amount_str.to_string(),
+    })?;
+    if dec.scale() > max_places as u32 {
+        return Err(ValidationError::InvalidAmountPrecision {
+            path: field_path.to_string(),
+            max_places,
+            found: dec.scale(),
+        });
+    }
+    Ok(())
+}
 /// Hilfsfunktion, um einen verschachtelten Wert aus einem `serde_json::Value` anhand eines Pfades zu extrahieren.
 fn get_value_by_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(value, |current, key| current.get(key)).filter(|v| !v.is_null())
@@ -382,6 +437,14 @@ fn verify_guarantor_signatures(voucher: &Voucher) -> Result<(), VoucherCoreError
     let mut seen_guarantors = HashSet::new();
 
     for guarantor_signature in &voucher.guarantor_signatures {
+        // NEU: Sicherheitsprüfung, ob der Ersteller versucht, für sich selbst zu bürgen.
+        if guarantor_signature.guarantor_id == voucher.creator.id {
+            return Err(ValidationError::CreatorAsGuarantor {
+                creator_id: voucher.creator.id.clone(),
+            }
+            .into());
+        }
+
         // NEU: Prüfung auf doppelte Bürgen
         if !seen_guarantors.insert(&guarantor_signature.guarantor_id) {
             return Err(ValidationError::DuplicateGuarantor {
@@ -426,6 +489,18 @@ fn verify_guarantor_signatures(voucher: &Voucher) -> Result<(), VoucherCoreError
 /// Verifiziert die kryptographische Gültigkeit aller zusätzlichen Signaturen. (Angepasst)
 fn verify_additional_signatures(voucher: &Voucher) -> Result<(), VoucherCoreError> {
     for signature_obj in &voucher.additional_signatures {
+        // NEU: Prüfung auf chronologische Korrektheit der Signatur.
+        // Eine Signatur kann nicht vor der Erstellung des Gutscheins existieren.
+        if signature_obj.signature_time < voucher.creation_date {
+            return Err(ValidationError::InvalidTimeOrder {
+                entity: "AdditionalSignature".to_string(),
+                id: signature_obj.signature_id.clone(),
+                time1: voucher.creation_date.clone(),
+                time2: signature_obj.signature_time.clone(),
+            }
+            .into());
+        }
+
         if !is_additional_signature_valid(signature_obj, &voucher.voucher_id) {
             return Err(ValidationError::InvalidSignature { signer_id: signature_obj.signer_id.clone() }.into());
         }

@@ -216,6 +216,26 @@ pub enum ValidationError {
         expected: String,
         found: String,
     },
+
+    /// The voucher's validity duration exceeds the maximum allowed by the standard.
+    #[error("Voucher validity duration is too long. Maximum allowed is {max_allowed}.")]
+    ValidityDurationTooLong { max_allowed: String },
+
+    /// An amount string could not be parsed into a valid Decimal number.
+    #[error("Failed to parse amount string at path '{path}': Found '{found}'.")]
+    InvalidAmountFormat { path: String, found: String },
+
+    /// An amount field has more decimal places than the standard allows.
+    #[error("Invalid amount precision at path '{path}'. Standard allows max {max_places} decimal places, but found {found}.")]
+    InvalidAmountPrecision {
+        path: String,
+        max_places: u8,
+        found: u32,
+    },
+
+    /// The creator of the voucher is also listed as a guarantor.
+    #[error("The voucher creator ('{creator_id}') cannot also be a guarantor.")]
+    CreatorAsGuarantor { creator_id: String },
 }
 
 

@@ -1,25 +1,31 @@
 //! # tests/test_security_vulnerabilities.rs
 //!
 //! Diese Test-Suite simuliert eine Reihe von Angriffen durch einen böswilligen Akteur ("Hacker"),
-//! um die Robustheit der Validierungslogik in `voucher_validation.rs` zu ueberpruefen.
+//! um die Robustheit der Validierungslogik in `voucher_validation.rs` zu überprüfen.
 //! Jeder Test zielt auf eine spezifische Schutzschicht des Gutscheinsystems ab.
 
 mod test_utils;
 
+use voucher_lib::{
+    create_transaction, create_voucher, to_canonical_json, validate_voucher_against_standard,
+    VoucherCoreError,
+};
 use voucher_lib::crypto_utils;
 use voucher_lib::models::profile::{TransactionBundle};
 use voucher_lib::{UserIdentity, VoucherStatus};
 use voucher_lib::models::voucher::{Collateral, Creator, GuarantorSignature, NominalValue, Transaction, Voucher};
 use voucher_lib::services::crypto_utils::{create_user_id, get_hash, sign_ed25519};
 use voucher_lib::services::secure_container_manager::create_secure_container;
-use voucher_lib::services::utils::{get_current_timestamp, to_canonical_json};
-use voucher_lib::services::voucher_manager::{self, NewVoucherData, create_voucher, create_transaction};
+use voucher_lib::services::utils::{get_current_timestamp};
+use voucher_lib::services::voucher_manager::{self, NewVoucherData};
 use voucher_lib::error::ValidationError;
 use voucher_lib::services::voucher_validation::{self};
 use voucher_lib::services::voucher_manager::get_spendable_balance;
-use voucher_lib::VoucherCoreError;
 use serde_json::Value;
-use test_utils::{setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
+use test_utils::{
+    create_guarantor_signature_with_time, create_voucher_for_manipulation,
+    setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD,
+};
 use rand::{Rng, thread_rng};
 use rand::seq::SliceRandom;
 use voucher_lib::models::secure_container::PayloadType;
@@ -700,4 +706,162 @@ fn test_attack_fuzzing_random_mutations() {
         );
     }
     println!("--- Intelligenter Fuzzing-Test erfolgreich abgeschlossen ---");
+}
+
+// ===================================================================================
+// ANGRIFFSKLASSE 6: UMGEHUNG VON SIGNATUR-ANFORDERUNGEN (NEU)
+// ===================================================================================
+
+#[cfg(test)]
+mod required_signatures_validation {
+    use super::*;
+    use test_utils::{create_male_guarantor_signature};
+    use voucher_lib::models::voucher::AdditionalSignature;
+
+    fn load_required_sig_standard() -> (voucher_lib::VoucherStandardDefinition, String) {
+        // Verwende die neue, robuste lazy_static-Variable
+        (test_utils::REQUIRED_SIG_STANDARD.0.clone(), test_utils::REQUIRED_SIG_STANDARD.1.clone())
+    }
+
+    fn create_base_voucher_for_sig_test(standard: &voucher_lib::VoucherStandardDefinition, standard_hash: &str) -> Voucher {
+        let creator_identity = &ACTORS.alice;
+        let voucher_data = NewVoucherData {
+            creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
+            validity_duration: Some("P1Y".to_string()), // HINZUGEFÜGT: Gültigkeit explizit setzen
+            // HINZUGEFÜGT: Nennwert explizit setzen, um "Invalid decimal: empty" zu vermeiden
+            nominal_value: NominalValue {
+                amount: "100".to_string(),
+                ..Default::default()
+            },
+            ..Default::default() // Füllt den Rest mit Standardwerten
+        };
+        // Verwende die "manipulation"-Hilfsfunktion, die die finale Validierung überspringt.
+        // Das ist notwendig, da der Standard eine Signatur erfordert, die wir in den Tests erst hinzufügen wollen.
+        create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en")
+    }
+
+    fn create_valid_approval_signature(voucher: &Voucher) -> AdditionalSignature {
+        let signer = &ACTORS.issuer; // Gehört zu den allowed_signer_ids
+        let mut sig = AdditionalSignature {
+            voucher_id: voucher.voucher_id.clone(),
+            signer_id: signer.user_id.clone(),
+            description: "Approved for circulation 2025".to_string(),
+            signature_time: get_current_timestamp(),
+            ..Default::default()
+        };
+        // KORREKTUR: Die signature_id muss aus dem Hash der Metadaten *ohne* die Felder
+        // 'signature_id' und 'signature' selbst berechnet werden. Die Verifizierungslogik
+        // tut genau das. Wir müssen es hier exakt nachbilden.
+        let mut data_for_id_hash = sig.clone();
+        data_for_id_hash.signature_id = "".to_string();
+        data_for_id_hash.signature = "".to_string();
+        sig.signature_id = get_hash(to_canonical_json(&data_for_id_hash).unwrap());
+        let digital_sig = sign_ed25519(&signer.signing_key, sig.signature_id.as_bytes());
+        sig.signature = bs58::encode(digital_sig.to_bytes()).into_string();
+        sig
+    }
+
+    #[test]
+    fn test_required_signature_ok() {
+        let (standard, standard_hash) = load_required_sig_standard();
+        let mut voucher = create_base_voucher_for_sig_test(&standard, &standard_hash);
+        voucher.additional_signatures.push(create_valid_approval_signature(&voucher));
+
+        let result = validate_voucher_against_standard(&voucher, &standard);
+        if let Err(e) = &result {
+            // Hinzufügen von Debug-Ausgabe, um den genauen Fehler zu sehen
+            panic!("Validation failed unexpectedly in test_required_signature_ok: {:?}", e);
+        }
+        // Die ursprüngliche Assertion bleibt bestehen, um den Test im Erfolgsfall grün zu halten.
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_fails_on_missing_mandatory_signature() {
+        let (standard, standard_hash) = load_required_sig_standard();
+        let voucher = create_base_voucher_for_sig_test(&standard, &standard_hash); // Ohne Signatur
+
+        let result = validate_voucher_against_standard(&voucher, &standard);
+        assert!(matches!(
+            result.unwrap_err(),
+            VoucherCoreError::Validation(ValidationError::MissingRequiredSignature { .. })
+        ));
+    }
+
+    #[test]
+    fn test_fails_on_signature_from_wrong_signer() {
+        let (standard, standard_hash) = load_required_sig_standard();
+        let mut voucher = create_base_voucher_for_sig_test(&standard, &standard_hash);
+        let mut wrong_sig = create_valid_approval_signature(&voucher);
+        wrong_sig.signer_id = ACTORS.hacker.user_id.clone(); // Nicht in allowed_signer_ids
+        // Muss neu signiert werden, da sich die Daten geändert haben
+        let mut obj_to_hash = wrong_sig.clone();
+        obj_to_hash.signature_id = "".to_string();
+        obj_to_hash.signature = "".to_string();
+        wrong_sig.signature_id = get_hash(to_canonical_json(&obj_to_hash).unwrap());
+        let digital_sig = sign_ed25519(&ACTORS.hacker.signing_key, wrong_sig.signature_id.as_bytes());
+        wrong_sig.signature = bs58::encode(digital_sig.to_bytes()).into_string();
+        voucher.additional_signatures.push(wrong_sig);
+
+        let result = validate_voucher_against_standard(&voucher, &standard);
+        assert!(matches!(
+            result.unwrap_err(),
+            VoucherCoreError::Validation(ValidationError::MissingRequiredSignature { .. })
+        ));
+    }
+
+    #[test]
+    fn test_fails_on_wrong_signature_description() {
+        let (standard, standard_hash) = load_required_sig_standard();
+        let mut voucher = create_base_voucher_for_sig_test(&standard, &standard_hash);
+        let mut wrong_desc_sig = create_valid_approval_signature(&voucher);
+        wrong_desc_sig.description = "Some other description".to_string();
+        // Muss neu signiert werden
+        let mut obj_to_hash = wrong_desc_sig.clone();
+        obj_to_hash.signature_id = "".to_string();
+        obj_to_hash.signature = "".to_string();
+        wrong_desc_sig.signature_id = get_hash(to_canonical_json(&obj_to_hash).unwrap());
+        let digital_sig = sign_ed25519(&ACTORS.issuer.signing_key, wrong_desc_sig.signature_id.as_bytes());
+        wrong_desc_sig.signature = bs58::encode(digital_sig.to_bytes()).into_string();
+        voucher.additional_signatures.push(wrong_desc_sig);
+
+        let result = validate_voucher_against_standard(&voucher, &standard);
+        assert!(matches!(
+            result.unwrap_err(),
+            VoucherCoreError::Validation(ValidationError::MissingRequiredSignature { .. })
+        ));
+    }
+
+    #[test]
+    fn test_creator_as_guarantor_attack_fails() {
+        let (standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+        let creator_identity = &ACTORS.alice;
+        let voucher_data = NewVoucherData {
+            creator: Creator { id: creator_identity.user_id.clone(), ..Default::default() },
+            nominal_value: NominalValue { amount: "60".to_string(), ..Default::default() },
+            ..Default::default()
+        };
+        let mut voucher = create_voucher_for_manipulation(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en");
+
+        // Angriff: Der Ersteller (Alice) versucht, für sich selbst zu bürgen.
+        let self_guarantor_sig = create_guarantor_signature_with_time(
+            &voucher.voucher_id,
+            creator_identity, // Alice bürgt
+            "Alice", "2",
+            "2026-08-01T10:00:00Z"
+        );
+
+        voucher.guarantor_signatures.push(self_guarantor_sig);
+        // Füge einen zweiten, validen Bürgen hinzu, um die `CountOutOfBounds`-Regel zu umgehen
+        voucher.guarantor_signatures.push(create_male_guarantor_signature(&voucher));
+
+        let validation_result = validate_voucher_against_standard(&voucher, standard);
+
+        // HINWEIS: Mit der Implementierung von `CreatorAsGuarantor` in `error.rs` und
+        // `voucher_validation.rs` prüfen wir nun auf den spezifischeren, korrekten Fehler.
+        assert!(matches!(
+            validation_result.unwrap_err(),
+            VoucherCoreError::Validation(ValidationError::CreatorAsGuarantor { .. })
+        ));
+    }
 }
