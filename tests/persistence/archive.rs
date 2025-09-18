@@ -1,6 +1,7 @@
-//! # tests/test_archive.rs
+//! # tests/persistence/archive.rs
 //!
 //! Testet die Funktionalität des `VoucherArchive`-Traits und der `FileVoucherArchive`-Implementierung.
+//! Ursprünglich in `tests/test_archive.rs`.
 
 use voucher_lib::{
     archive::file_archive::FileVoucherArchive, models::profile::UserProfile,
@@ -9,9 +10,10 @@ use voucher_lib::{
 use std::fs;
 use tempfile::tempdir;
 
-// Binde das zentrale Test-Utils-Modul ein.
+// Lade die Test-Hilfsfunktionen aus dem übergeordneten Verzeichnis.
+#[path = "../test_utils.rs"]
 mod test_utils;
-use test_utils::{ACTORS, SILVER_STANDARD};
+use self::test_utils::{ACTORS, SILVER_STANDARD};
 
 // --- Haupttest ---
 

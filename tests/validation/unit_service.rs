@@ -1,15 +1,13 @@
-//! # tests/test_voucher_validation.rs
+//! # tests/validation/unit_service.rs
 //!
-//! Unit-Tests für die datengesteuerte Validierungs-Engine.
+//! Unit-Tests für die einzelnen, datengesteuerten Funktionen
+//! der Validierungs-Engine im `voucher_validation`-Service.
 
 use voucher_lib::error::ValidationError;
 use voucher_lib::models::voucher::{
     AdditionalSignature, GuarantorSignature, NominalValue, Transaction, Voucher,
 };
-use voucher_lib::models::voucher_standard_definition::{
-    VoucherStandardDefinition,
-};
-
+use voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition;
 use voucher_lib::services::voucher_validation;
 use std::fs;
 
@@ -37,14 +35,13 @@ fn create_base_voucher() -> Voucher {
 
 // --- Test-Module ---
 
+/// Prüft die `validate_counts`-Logik.
 #[cfg(test)]
 mod counts_validation {
     use super::*;
 
-    // Diese Tests prüfen die `validate_counts`-Logik.
-
     #[test]
-    fn test_counts_ok() {
+    fn test_validate_counts_when_counts_are_valid_then_succeeds() {
         let standard = load_test_standard("standard_strict_counts.toml");
         let mut voucher = create_base_voucher();
         voucher.guarantor_signatures.push(GuarantorSignature::default()); // 1 ist erlaubt
@@ -56,7 +53,7 @@ mod counts_validation {
     }
 
     #[test]
-    fn test_fails_if_guarantor_count_below_min() {
+    fn test_validate_counts_when_guarantor_count_is_below_min_then_fails() {
         let standard = load_test_standard("standard_strict_counts.toml");
         let voucher = create_base_voucher(); // Hat 0 Bürgen, Standard erfordert min 1
 
@@ -71,7 +68,7 @@ mod counts_validation {
     }
 
     #[test]
-    fn test_fails_if_additional_signatures_above_max() {
+    fn test_validate_counts_when_additional_signatures_are_above_max_then_fails() {
         let standard = load_test_standard("standard_strict_counts.toml");
         let mut voucher = create_base_voucher();
         voucher.guarantor_signatures.push(GuarantorSignature::default());
@@ -90,15 +87,14 @@ mod counts_validation {
     }
 }
 
+/// Prüft die `validate_content_rules`-Logik.
 #[cfg(test)]
 mod content_rules_validation {
     use super::*;
     use serde_json::json;
 
-    // Diese Tests prüfen die `validate_content_rules`-Logik.
-
     #[test]
-    fn test_content_rules_ok() {
+    fn test_validate_content_rules_when_content_is_valid_then_succeeds() {
         let standard = load_test_standard("standard_content_rules.toml");
         let mut voucher = create_base_voucher();
         // Werte entsprechen den Regeln in der TOML
@@ -115,7 +111,7 @@ mod content_rules_validation {
     }
 
     #[test]
-    fn test_fails_on_wrong_fixed_field() {
+    fn test_validate_content_rules_when_fixed_field_is_wrong_then_fails() {
         let standard = load_test_standard("standard_content_rules.toml");
         let mut voucher = create_base_voucher();
         voucher.nominal_value.unit = "USD".to_string(); // Falsch, Standard erfordert EUR
@@ -132,7 +128,7 @@ mod content_rules_validation {
     }
 
     #[test]
-    fn test_fails_on_disallowed_value() {
+    fn test_validate_content_rules_when_value_is_disallowed_then_fails() {
         let standard = load_test_standard("standard_content_rules.toml");
         let mut voucher = create_base_voucher();
         voucher.nominal_value.amount = "75.00".to_string(); // Nicht in der erlaubten Liste
@@ -149,7 +145,7 @@ mod content_rules_validation {
     }
 
     #[test]
-    fn test_fails_on_regex_mismatch() {
+    fn test_validate_content_rules_when_regex_mismatches_then_fails() {
         let standard = load_test_standard("standard_content_rules.toml");
         let mut voucher = create_base_voucher();
         voucher.description = "INVALID-123".to_string(); // Passt nicht zum Regex-Muster
@@ -166,12 +162,11 @@ mod content_rules_validation {
     }
 }
 
+/// Prüft die `validate_field_group_rules`-Logik.
 #[cfg(test)]
 mod field_group_rules_validation {
     use super::*;
     use serde_json::json;
-
-    // Diese Tests prüfen die `validate_field_group_rules`-Logik.
 
     fn create_test_guarantor(gender: &str) -> GuarantorSignature {
         let mut sig = GuarantorSignature::default();
@@ -180,7 +175,7 @@ mod field_group_rules_validation {
     }
 
     #[test]
-    fn test_field_group_rules_ok() {
+    fn test_validate_field_group_rules_when_counts_are_correct_then_succeeds() {
         let standard = load_test_standard("standard_field_group_rules.toml");
         let mut voucher = create_base_voucher();
         // Entspricht exakt der Regel: 1x "A", 2x "B"
@@ -198,7 +193,7 @@ mod field_group_rules_validation {
     }
 
     #[test]
-    fn test_fails_on_wrong_value_count() {
+    fn test_validate_field_group_rules_when_value_count_is_wrong_then_fails() {
         let standard = load_test_standard("standard_field_group_rules.toml");
         let mut voucher = create_base_voucher();
         // Falsch: 2x "A", 1x "B". Gesamtzahl 3 ist aber korrekt.
@@ -212,8 +207,6 @@ mod field_group_rules_validation {
         let rules = standard.validation.as_ref().unwrap().field_group_rules.as_ref().unwrap();
         let result = voucher_validation::validate_field_group_rules(&voucher_json, rules);
 
-        // Erwartet einen Fehler, weil entweder "A" (found 2, expected 1) oder "B" (found 1, expected 2) fehlschlägt.
-        // Wir prüfen nur den Fehlertyp und das Feld, um den Test robust zu machen.
         let err = result.err().unwrap();
         assert!(matches!(
             err,
@@ -222,9 +215,7 @@ mod field_group_rules_validation {
     }
 
     #[test]
-    fn test_ok_if_other_values_exist_but_required_are_met() {
-        // Die Regel prüft nur, ob die definierten Werte in der korrekten Anzahl da sind.
-        // Sie verbietet keine zusätzlichen Werte. Die Gesamtzahl wird von `counts` geprüft.
+    fn test_validate_field_group_rules_when_other_values_exist_but_required_are_met_then_succeeds() {
         let standard = load_test_standard("standard_field_group_rules.toml");
         let mut voucher = create_base_voucher();
         // Enthält 1x "A" und 2x "B", aber auch ein "C".
@@ -239,13 +230,11 @@ mod field_group_rules_validation {
         let rules = standard.validation.as_ref().unwrap().field_group_rules.as_ref().unwrap();
         let result = voucher_validation::validate_field_group_rules(&voucher_json, rules);
 
-        // Die `field_group_rules`-Prüfung allein ist erfolgreich.
-        // In einem E2E-Test würde `validate_counts` fehlschlagen (max=3).
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_fails_when_path_not_found() {
+    fn test_validate_field_group_rules_when_path_is_not_found_then_fails() {
         let standard = load_test_standard("standard_path_not_found.toml");
         let voucher = create_base_voucher(); // Hat kein "non_existent_field"
         let voucher_json = serde_json::to_value(&voucher).unwrap();
@@ -259,9 +248,8 @@ mod field_group_rules_validation {
     }
 
     #[test]
-    fn test_fails_when_path_is_not_an_array() {
+    fn test_validate_field_group_rules_when_path_is_not_an_array_then_fails() {
         let standard = load_test_standard("standard_field_group_rules.toml");
-        // Manipuliertes JSON, in dem der Pfad kein Array ist.
         let voucher_json = json!({
             "guarantor_signatures": "this should be an array"
         });

@@ -1,7 +1,9 @@
-//! tests/test_file_storage.rs
+//! tests/persistence/file_storage.rs
 //!
 //! Enthält Integrationstests für das refaktorierte Profil- und VoucherStore-Management,
 //! inklusive der Passwort-Wiederherstellungslogik und Randbedingungen.
+//! Ursprünglich in `tests/test_file_storage.rs`.
+
 use std::fs;
 use tempfile::tempdir;
 use voucher_lib::models::profile::{
@@ -14,8 +16,11 @@ use voucher_lib::services::crypto_utils;
 use voucher_lib::services::voucher_manager;
 use voucher_lib::error::VoucherCoreError;
 use voucher_lib::{AuthMethod, FileStorage, Storage, StorageError, Wallet};
+
+// Lade die Test-Hilfsfunktionen aus dem übergeordneten Verzeichnis.
+#[path = "../test_utils.rs"]
 mod test_utils;
-use test_utils::{add_voucher_to_wallet, setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
+use self::test_utils::{add_voucher_to_wallet, setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
 
 // --- Hilfsfunktionen ---
 fn create_test_voucher(identity: &UserIdentity) -> Voucher {

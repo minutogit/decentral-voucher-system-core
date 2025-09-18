@@ -1,4 +1,4 @@
-// tests/test_transaction_math.rs
+// tests/core_logic/math.rs
 
 //! # Integrationstest für die numerische Robustheit von Transaktionen
 //!
@@ -18,6 +18,9 @@
 //! - **Vollständiger Transfer:** Korrekte Erstellung einer Transaktion ohne Restbetrag,
 //!   wenn das gesamte Guthaben überwiesen wird.
 
+#[path = "../test_utils.rs"]
+mod test_utils;
+
 use voucher_lib::{
     // Structs from specific modules
     models::voucher::{Creator, NominalValue},
@@ -27,8 +30,7 @@ use voucher_lib::{
     NewVoucherData, VoucherCoreError,
 };
 use rust_decimal_macros::dec;
-mod test_utils;
-use test_utils::{ACTORS, SILVER_STANDARD};
+use self::test_utils::{ACTORS, SILVER_STANDARD};
 
 // --- TESTFÄLLE ---
 
@@ -191,7 +193,7 @@ fn test_chained_transaction_math_and_scaling() {
         &alice.user_id,
         "10",
     )
-    .unwrap();
+        .unwrap();
     validate_voucher_against_standard(&current_voucher, standard).unwrap();
 
     // Prüfe die Guthaben nach der ersten Rücktransaktion
@@ -213,7 +215,7 @@ fn test_chained_transaction_math_and_scaling() {
         &alice.user_id,
         "0.0066",
     )
-    .unwrap();
+        .unwrap();
     validate_voucher_against_standard(&current_voucher, standard).unwrap();
 
     // Prüfe die Guthaben nach der zweiten Rücktransaktion
