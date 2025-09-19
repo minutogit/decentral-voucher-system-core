@@ -237,7 +237,6 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 .
 ├── Cargo.lock
 ├── Cargo.toml
-├── output.txt
 ├── README.md
 ├── sign_standards.sh
 ├── src
@@ -281,34 +280,50 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │       ├── queries.rs
 │       └── signature_handler.rs
 ├── tests
-│   ├── test_advanced_validation.rs
-│   ├── test_app_service.rs
-│   ├── test_archive.rs
-│   ├── test_crypto_utils.rs
+│   ├── core_logic
+│   │   ├── lifecycle.rs
+│   │   ├── math.rs
+│   │   ├── mod.rs
+│   │   └── security.rs
+│   ├── core_logic_tests.rs
+│   ├── persistence
+│   │   ├── archive.rs
+│   │   ├── file_storage.rs
+│   │   └── mod.rs
+│   ├── persistence_tests.rs
+│   ├── services
+│   │   ├── crypto.rs
+│   │   ├── mod.rs
+│   │   └── utils.rs
+│   ├── services_tests.rs
 │   ├── test_data
 │   │   └── standards
+│   │       ├── standard_behavior_rules.toml
+│   │       ├── standard_conflicting_rules.toml
 │   │       ├── standard_content_rules.toml
 │   │       ├── standard_field_group_rules.toml
 │   │       ├── standard_no_split.toml
 │   │       ├── standard_path_not_found.toml
-│   │       └── standard_strict_counts.toml
-│   ├── test_date_utils.rs
-│   ├── test_file_storage.rs
-│   ├── test_forward_compatibility.rs
-│   ├── test_local_double_spend_detection.rs
-│   ├── test_local_instance_id.rs
-│   ├── test_secure_container.rs
-│   ├── test_security_vulnerabilities.rs
-│   ├── test_standard_validation.rs
-│   ├── test_transaction_math.rs
+│   │       ├── standard_required_signatures.toml
+│   │       ├── standard_strict_counts.toml
+│   │       └── standard_strict_sig_description.toml
 │   ├── test_utils.rs
-│   ├── test_voucher_lifecycle.rs
-│   ├── test_voucher_validation.rs
-│   ├── test_wallet_integration.rs
-│   └── test_wallet_signatures.rs
+│   ├── validation
+│   │   ├── business_rules.rs
+│   │   ├── forward_compatibility.rs
+│   │   ├── mod.rs
+│   │   ├── standard_definition.rs
+│   │   └── unit_service.rs
+│   ├── validation_tests.rs
+│   ├── wallet_api
+│   │   ├── general_workflows.rs
+│   │   ├── mod.rs
+│   │   └── signature_workflows.rs
+│   └── wallet_api_tests.rs
 └── voucher_standards
     ├── minuto_v1
     │   └── standard.toml
+    ├── readme_de.md
     ├── silver_v1
     │   └── standard.toml
     └── standard_template.toml
@@ -326,18 +341,44 @@ Definiert den `AppService`, eine übergeordnete Fassade, die die `Wallet`-Logik 
   - Verwaltet den Anwendungszustand (`Locked`/`Unlocked`).
   - Kapselt `UserIdentity` und `Storage`-Implementierung.
   - Stellt sicher, dass Zustandsänderungen im Wallet automatisch gespeichert werden.
+- `pub fn new(...) -> Result<Self, String>`
+  - Initialisiert einen neuen `AppService` im `Locked`-Zustand.
+- `pub fn generate_mnemonic(word_count: u32) -> Result<String, String>`
+  - Generiert eine neue BIP-39 Mnemonic-Phrase.
+- `pub fn validate_mnemonic(mnemonic: &str) -> Result<(), String>`
+  - Validiert eine vom Benutzer eingegebene BIP-39 Mnemonic-Phrase.
 - `pub fn create_profile(...) -> Result<(), String>`
   - Erstellt ein komplett neues Wallet und Profil, speichert es und setzt den Service in den `Unlocked`-Zustand.
 - `pub fn login(...) -> Result<(), String>`
   - Entsperrt ein existierendes Wallet und lädt es in den Speicher.
+- `pub fn recover_wallet_and_set_new_password(...) -> Result<(), String>`
+  - Stellt ein Wallet mit der Mnemonic-Phrase wieder her und setzt ein neues Passwort.
 - `pub fn logout(&mut self)`
   - Sperrt das Wallet und entfernt sensible Daten aus dem Speicher.
+- `pub fn get_voucher_summaries(&self) -> Result<Vec<VoucherSummary>, String>`
+  - Gibt eine Liste von Zusammenfassungen aller Gutscheine im Wallet zurück.
+- `pub fn get_total_balance_by_currency(&self) -> Result<HashMap<String, String>, String>`
+  - Aggregiert die Guthaben aller aktiven Gutscheine, gruppiert nach Währung.
+- `pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String>`
+  - Ruft eine detaillierte Ansicht für einen einzelnen Gutschein ab.
+- `pub fn get_user_id(&self) -> Result<String, String>`
+  - Gibt die User-ID des Wallet-Inhabers zurück.
+- `pub fn create_new_voucher(...) -> Result<Voucher, String>`
+  - Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand.
 - `pub fn create_transfer_bundle(...) -> Result<Vec<u8>, String>`
-  - Führt einen Transfer aus und speichert den neuen Wallet-Zustand.
+  - Erstellt eine Transaktion, verpackt sie in ein `SecureContainer`-Bundle und speichert den neuen Wallet-Zustand.
 - `pub fn receive_bundle(...) -> Result<ProcessBundleResult, String>`
-  - Verarbeitet ein empfangenes Bundle und speichert den neuen Wallet-Zustand.
-- Stellt diverse Query-Methoden bereit, die Lesezugriffe auf das Wallet ermöglichen (z.B. `get_voucher_summaries`, `get_total_balance_by_currency`).
-- Stellt Funktionen zur Generierung und Validierung von BIP-39 Mnemonic-Phrasen bereit (`generate_mnemonic`, `validate_mnemonic`).
+  - Verarbeitet ein empfangenes Transaktions- oder Signatur-Bundle und speichert den neuen Wallet-Zustand.
+- `pub fn create_signing_request_bundle(...) -> Result<Vec<u8>, String>`
+  - Erstellt ein Bundle, um einen Gutschein zur Unterzeichnung an einen Bürgen zu senden.
+- `pub fn create_detached_signature_response_bundle(...) -> Result<Vec<u8>, String>`
+  - Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage.
+- `pub fn process_and_attach_signature(...) -> Result<(), String>`
+  - Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Zustand.
+- `pub fn save_encrypted_data(...) -> Result<(), String>`
+  - Speichert einen beliebigen Byte-Slice verschlüsselt auf der Festplatte.
+- `pub fn load_encrypted_data(...) -> Result<Vec<u8>, String>`
+  - Lädt und entschlüsselt einen zuvor gespeicherten, beliebigen Datenblock.
 
 ### `src/wallet` Modul
 
@@ -402,7 +443,7 @@ Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierun
 - `pub fn get_hash(input: impl AsRef<[u8]>) -> String`
   - Berechnet einen SHA3-256-Hash der Eingabe und gibt ihn als Base58-kodierten String zurück.
 - `pub fn derive_ed25519_keypair(mnemonic_phrase: &str, passphrase: Option<&str>) -> Result<(EdPublicKey, SigningKey), VoucherCoreError>`
-  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase über einen **gehärteten, mehrstufigen Prozess** (BIP-39 Seed -\> PBKDF2 Stretch -\> HKDF Expand) ab, um die Sicherheit zu erhöhen.
+  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase über einen **gehärteten, mehrstufigen Prozess** (BIP-39 Seed -> PBKDF2 Stretch -> HKDF Expand) ab, um die Sicherheit zu erhöhen.
 - `pub fn create_user_id(public_key: &EdPublicKey, user_prefix: Option<&str>) -> Result<String, UserIdError>`
   - Generiert eine User ID konform zum **`did:key`-Standard**. Das Format ist `[prefix]@[did:key:z...Ed25519-PublicKey...]` oder nur `did:key:z...`.
 - `pub fn get_pubkey_from_user_id(user_id: &str) -> Result<EdPublicKey, GetPubkeyError>`
