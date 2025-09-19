@@ -42,6 +42,10 @@ path = "src/lib.rs"
 name = "voucher-cli"
 path = "src/bin/voucher-cli.rs"
 
+[[bin]]
+name = "validate-standard"
+path = "src/bin/validate-standard.rs"
+
 [dev-dependencies]
 rand = "0.8"
 voucher_lib = { version = "0.1.0", path = "." }

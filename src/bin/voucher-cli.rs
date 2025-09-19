@@ -104,45 +104,62 @@ fn sign_standard(key_path: &Path, standard_path: &Path) -> Result<()> {
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let public_key = signing_key.verifying_key();
 
-    // 2. Standard-Datei laden und parsen
+    // 2. Standard-Datei laden
     let toml_content = fs::read_to_string(standard_path)
         .with_context(|| format!("Konnte Standard-Datei {} nicht laden", standard_path.display()))?;
     
-    // Wir parsen den TOML-String in eine `toml::Value`, um den alten Signatur-Block sauber zu entfernen
+    // 3. Alten Signatur-Block entfernen und kanonischen Inhalt für die Signatur erstellen
     let mut toml_value: toml::Value = toml::from_str(&toml_content)?;
     if let Some(table) = toml_value.as_table_mut() {
         table.remove("signature");
     }
-    let content_to_sign_str = toml::to_string_pretty(&toml_value)?;
-
-    // 3. Kanonische Form für die Signatur erstellen
-    let mut standard_def: VoucherStandardDefinition = toml::from_str(&content_to_sign_str)?;
+    
+    // 4. Kanonische Form für die Signatur erstellen
+    let mut standard_def: VoucherStandardDefinition = toml::from_str(&toml::to_string(&toml_value)?)?;
     standard_def.signature = None; // Sicherstellen, dass die Signatur für die Kanonisierung leer ist
     let canonical_json = to_canonical_json(&standard_def)
         .context("Kanonisches JSON konnte nicht erstellt werden")?;
 
-    // 4. Hash berechnen und signieren
+    // 5. Hash berechnen und signieren
     let hash_to_sign = get_hash(canonical_json.as_bytes());
     let signature = crypto_utils::sign_ed25519(&signing_key, hash_to_sign.as_bytes());
     let signature_b58 = bs58::encode(signature.to_bytes()).into_string();
 
-    // 5. Issuer ID erstellen
+    // 6. Issuer ID erstellen
     let issuer_id = crypto_utils::create_user_id(&public_key, None)
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-    // 6. Neuen Signatur-Block erstellen und an die TOML-Datei anhängen
+    // 7. Neuen Signatur-Block erstellen
     let signature_block = format!(
-        "\n\n[signature]\n# Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.\nissuer_id = \"{}\"\n\n# Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).\nsignature = \"{}\"\n",
+        "\n[signature]\n# Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.\nissuer_id = \"{}\"\n\n# Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).\nsignature = \"{}\"\n",
         issuer_id,
         signature_b58
     );
 
-    let final_toml_content = content_to_sign_str.trim_end().to_string() + &signature_block;
+    // 8. Signatur in die ursprüngliche Datei einfügen, ohne die Formatierung zu verändern
+    let final_toml_content = update_signature_in_toml(&toml_content, &signature_block);
 
-    // 7. Datei überschreiben
+    // 9. Datei überschreiben
     fs::write(standard_path, final_toml_content)
         .with_context(|| format!("Konnte signierten Standard nicht in {} schreiben", standard_path.display()))?;
 
     println!("✅ Standard erfolgreich signiert.");
     Ok(())
+}
+
+/// Hilfsfunktion zum Aktualisieren des Signaturblocks in einer TOML-Datei
+/// ohne die ursprüngliche Formatierung zu verändern
+fn update_signature_in_toml(original_content: &str, new_signature_block: &str) -> String {
+    // Suchen des Signaturblocks in der Datei
+    let signature_start = original_content.find("\n[signature]");
+    
+    if let Some(pos) = signature_start {
+        // Wenn ein Signaturblock gefunden wurde, ersetzen wir ihn
+        // Wir behalten die Leerzeile vor dem [signature] Block bei
+        let content_before_signature = &original_content[..pos + 1];
+        content_before_signature.to_string() + new_signature_block.trim_start()
+    } else {
+        // Wenn kein Signaturblock gefunden wurde, fügen wir ihn am Ende hinzu
+        original_content.trim_end().to_string() + new_signature_block
+    }
 }
