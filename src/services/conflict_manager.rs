@@ -66,9 +66,9 @@ pub fn scan_and_update_own_fingerprints(
 ) -> Result<(), VoucherCoreError> {
     fingerprint_store.own_fingerprints.clear();
 
-    for (voucher, _) in voucher_store.vouchers.values() {
-        for tx in &voucher.transactions {
-            let fingerprint = create_fingerprint_for_transaction(tx, voucher)?;
+    for instance in voucher_store.vouchers.values() {
+        for tx in &instance.voucher.transactions {
+            let fingerprint = create_fingerprint_for_transaction(tx, &instance.voucher)?;
 
             fingerprint_store
                 .own_fingerprints
@@ -222,8 +222,8 @@ fn find_transaction_in_stores(
     archive: &dyn VoucherArchive,
 ) -> Result<Option<Transaction>, VoucherCoreError> {
     // Zuerst im aktiven Store suchen
-    for (voucher, _) in voucher_store.vouchers.values() {
-        if let Some(tx) = voucher.transactions.iter().find(|t| t.t_id == t_id) {
+    for instance in voucher_store.vouchers.values() {
+        if let Some(tx) = instance.voucher.transactions.iter().find(|t| t.t_id == t_id) {
             return Ok(Some(tx.clone()));
         }
     }
@@ -241,9 +241,9 @@ fn find_voucher_for_transaction(
     archive: &dyn VoucherArchive,
 ) -> Result<Option<Voucher>, VoucherCoreError> {
     // Zuerst im aktiven Store suchen
-    for (voucher, _) in voucher_store.vouchers.values() {
-        if voucher.transactions.iter().any(|t| t.t_id == t_id) {
-            return Ok(Some(voucher.clone()));
+    for instance in voucher_store.vouchers.values() {
+        if instance.voucher.transactions.iter().any(|t| t.t_id == t_id) {
+            return Ok(Some(instance.voucher.clone()));
         }
     }
 

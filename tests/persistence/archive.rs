@@ -5,7 +5,7 @@
 
 use voucher_lib::{
     archive::file_archive::FileVoucherArchive, models::profile::UserProfile,
-    models::voucher::{Creator, NominalValue}, services::voucher_manager, wallet::Wallet,
+    models::voucher::{Creator, NominalValue}, services::voucher_manager, wallet::Wallet, VoucherStatus
 };
 use std::fs;
 use tempfile::tempdir;
@@ -65,8 +65,7 @@ fn test_voucher_archiving_on_full_spend() {
     let local_id =
         Wallet::calculate_local_instance_id(&voucher, &alice_identity.user_id).unwrap();
     alice_wallet
-        .add_voucher_to_store(voucher.clone(), voucher_lib::models::profile::VoucherStatus::Active, &alice_identity.user_id)
-        .unwrap();
+        .add_voucher_instance(local_id.clone(), voucher.clone(), VoucherStatus::Active);
 
     // 2. AKTION
     // Alice sendet ihr GESAMTES Guthaben ("100") an Bob und übergibt dabei ihr Archiv.

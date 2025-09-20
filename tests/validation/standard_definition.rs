@@ -114,7 +114,8 @@ mod integration_with_voucher {
         let identity = &ACTORS.alice;
         let mut wallet = setup_in_memory_wallet(identity);
         add_voucher_to_wallet(&mut wallet, identity, "100", &MINUTO_STANDARD.0, false).unwrap();
-        let (mut voucher, _) = wallet.voucher_store.vouchers.values().next().unwrap().clone();
+        let instance = wallet.voucher_store.vouchers.values().next().unwrap().clone();
+        let mut voucher = instance.voucher;
         voucher.voucher_standard.standard_definition_hash = "invalid_hash_string_123".to_string();
         let validation_result = validate_voucher_against_standard(&voucher, &MINUTO_STANDARD.0);
         assert!(matches!(validation_result.unwrap_err(), VoucherCoreError::Standard(StandardDefinitionError::StandardHashMismatch)));
@@ -151,7 +152,8 @@ mod integration_with_voucher {
         let identity = &ACTORS.alice;
         let mut wallet = setup_in_memory_wallet(identity);
         add_voucher_to_wallet(&mut wallet, identity, "5", &test_utils::SILVER_STANDARD.0, false).unwrap();
-        let (silver_voucher, _) = wallet.voucher_store.vouchers.values().next().unwrap().clone();
+        let instance = wallet.voucher_store.vouchers.values().next().unwrap().clone();
+        let silver_voucher = instance.voucher;
 
         let result = voucher_manager::create_transaction(&silver_voucher, &MINUTO_STANDARD.0, &identity.user_id, &identity.signing_key, &ACTORS.bob.user_id, "1");
         assert!(result.is_err());

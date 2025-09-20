@@ -5,6 +5,8 @@
 //! und orchestriert die Interaktionen mit einem `Storage`-Backend und den
 //! kryptographischen Operationen der `UserIdentity`.
 
+// Deklariert das `instance`-Modul als öffentlichen Teil des `wallet`-Moduls.
+pub mod instance;
 // Deklariere die anderen Dateien als Teil dieses Moduls
 mod conflict_handler;
 mod queries;
@@ -12,11 +14,11 @@ mod signature_handler;
 
 use crate::archive::VoucherArchive;
 use crate::error::VoucherCoreError;
+use crate::wallet::instance::{VoucherInstance, VoucherStatus};
 use crate::models::conflict::{FingerprintStore, ProofStore};
 use crate::models::profile::{
-    BundleMetadataStore, TransactionBundleHeader, TransactionDirection, UserIdentity, UserProfile,
-    VoucherStatus, VoucherStore,
-}; // NEW
+    BundleMetadataStore, TransactionBundleHeader, TransactionDirection, UserIdentity, UserProfile, VoucherStore,
+};
 use crate::models::secure_container::{PayloadType, SecureContainer};
 use crate::models::voucher::Voucher;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
@@ -173,8 +175,8 @@ impl Wallet {
     ) -> Result<Vec<u8>, VoucherCoreError> {
         for v in &vouchers {
             let local_id = Self::calculate_local_instance_id(v, &identity.user_id)?;
-            if let Some((_, status)) = self.voucher_store.vouchers.get(&local_id) {
-                if *status == VoucherStatus::Quarantined {
+            if let Some(instance) = self.voucher_store.vouchers.get(&local_id) {
+                if matches!(instance.status, VoucherStatus::Quarantined { .. }) {
                     return Err(VoucherCoreError::VoucherInQuarantine);
                 }
             }
@@ -201,12 +203,16 @@ impl Wallet {
         let bundle = bundle_processor::open_and_verify_bundle(identity, container_bytes)?;
 
         for voucher in bundle.vouchers.clone() {
+            // KORREKTUR: Für jeden empfangenen Gutschein muss die korrekte, deterministische
+            // lokale ID berechnet werden. Die `voucher_id` als Schlüssel zu verwenden ist falsch
+            // und führt dazu, dass konfliktierende Instanzen sich gegenseitig überschreiben.
+            let local_id = Self::calculate_local_instance_id(&voucher, &identity.user_id)?;
             println!(
                 "\n[Debug Wallet] Verarbeite empfangenen Gutschein: ID={}, Tx-Anzahl={}",
                 voucher.voucher_id,
                 voucher.transactions.len()
             );
-            self.add_voucher_to_store(voucher, VoucherStatus::Active, &identity.user_id)?;
+            self.add_voucher_instance(local_id, voucher, VoucherStatus::Active);
         }
 
         let header = bundle.to_header(TransactionDirection::Received);
@@ -243,15 +249,13 @@ impl Wallet {
                 )? {
                     if let Some(verdict) = &proof.layer2_verdict {
                         for tx in &proof.conflicting_transactions {
-                            if let Some((local_id, _)) = self.find_local_voucher_by_tx_id(&tx.t_id)
-                            {
-                                if let Some((_, status)) =
-                                    self.voucher_store.vouchers.get_mut(&local_id)
-                                {
-                                    *status = if tx.t_id == verdict.valid_transaction_id {
+                            let instance_id_opt = self.find_local_voucher_by_tx_id(&tx.t_id).map(|i| i.local_instance_id.clone());
+                            if let Some(instance_id) = instance_id_opt {
+                                if let Some(instance_mut) = self.voucher_store.vouchers.get_mut(&instance_id) {
+                                    instance_mut.status = if tx.t_id == verdict.valid_transaction_id {
                                         VoucherStatus::Active
                                     } else {
-                                        VoucherStatus::Quarantined
+                                        VoucherStatus::Quarantined { reason: "L2 verdict".to_string() }
                                     };
                                 }
                             }
@@ -279,17 +283,16 @@ impl Wallet {
 
                         if let Some(the_winner) = winner_tx {
                             for tx in &proof.conflicting_transactions {
-                                if let Some((local_id, _)) =
-                                    self.find_local_voucher_by_tx_id(&tx.t_id)
-                                {
-                                    if let Some((_, status)) =
-                                        self.voucher_store.vouchers.get_mut(&local_id)
-                                    {
-                                        *status = if tx.t_id == the_winner.t_id {
+                                let instance_id_opt = self.find_local_voucher_by_tx_id(&tx.t_id).map(|i| i.local_instance_id.clone());
+                                if let Some(instance_id) = instance_id_opt {
+                                    if let Some(instance_mut) = self.voucher_store.vouchers.get_mut(&instance_id) {
+                                        instance_mut.status = if tx.t_id == the_winner.t_id {
                                             VoucherStatus::Active
                                         } else {
-                                            VoucherStatus::Quarantined
-                                        };
+                                            VoucherStatus::Quarantined {
+                                                reason: "Lost offline race".to_string(),
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -307,22 +310,30 @@ impl Wallet {
         })
     }
 
-    /// Fügt einen Gutschein zum `VoucherStore` hinzu.
-    pub fn add_voucher_to_store(
+    pub fn add_voucher_instance(
         &mut self,
+        local_id: String,
         voucher: Voucher,
         status: VoucherStatus,
-        profile_owner_id: &str,
-    ) -> Result<(), VoucherCoreError> {
-        let local_id = Self::calculate_local_instance_id(&voucher, profile_owner_id)?;
-        println!(
-            "[Debug Wallet] Füge Gutschein zum Store hinzu mit berechneter lokaler ID: {}",
-            local_id
-        );
+    ) {
+        let instance = VoucherInstance {
+            voucher,
+            status,
+            local_instance_id: local_id.clone(),
+        };
         self.voucher_store
             .vouchers
-            .insert(local_id, (voucher, status));
-        Ok(())
+            .insert(local_id, instance);
+    }
+
+    pub fn get_voucher_instance(&self, local_instance_id: &str) -> Option<&VoucherInstance> {
+        self.voucher_store.vouchers.get(local_instance_id)
+    }
+
+    pub fn update_voucher_status(&mut self, local_instance_id: &str, new_status: VoucherStatus) {
+        if let Some(instance) = self.voucher_store.vouchers.get_mut(local_instance_id) {
+            instance.status = new_status;
+        }
     }
 
     /// Berechnet eine deterministische, lokale ID für eine Gutschein-Instanz.
@@ -365,18 +376,18 @@ impl Wallet {
         notes: Option<String>,
         archive: Option<&dyn VoucherArchive>,
     ) -> Result<(Vec<u8>, Voucher), VoucherCoreError> {
-        let (voucher_to_spend, status) = self
+        let instance = self
             .voucher_store
             .vouchers
             .get(local_instance_id)
             .ok_or(VoucherCoreError::VoucherNotFound(
                 local_instance_id.to_string(),
             ))?;
-
-        if *status != VoucherStatus::Active {
-            return Err(VoucherCoreError::VoucherNotActive(status.clone()));
+        
+        if !matches!(instance.status, VoucherStatus::Active) {
+            return Err(VoucherCoreError::VoucherNotActive(instance.status.clone()));
         }
-        let voucher_to_spend = voucher_to_spend.clone();
+        let voucher_to_spend = instance.voucher.clone();
 
         let last_tx = voucher_to_spend
             .transactions
@@ -404,22 +415,31 @@ impl Wallet {
             amount_to_send,
         )?;
 
-        if let Some(last_tx) = new_voucher_state.transactions.last() {
-            if last_tx.sender_id == identity.user_id && last_tx.sender_remaining_amount.is_some() {
-                self.add_voucher_to_store(
-                    new_voucher_state.clone(),
-                    VoucherStatus::Active,
-                    &identity.user_id,
-                )?;
-            } else {
-                self.add_voucher_to_store(
-                    new_voucher_state.clone(),
-                    VoucherStatus::Archived,
-                    &identity.user_id,
-                )?;
-            }
-        }
+        // KORREKTE LOGIK ZUR ZUSTANDSVERWALTUNG:
+        // 1. Entferne die alte Instanz, die gerade ausgegeben wurde.
         self.voucher_store.vouchers.remove(local_instance_id);
+
+        // 2. Bestimme den Status des neuen Gutschein-Zustands für den Sender.
+        if let Some(last_tx) = new_voucher_state.transactions.last() {
+            let (new_status, owner_id) =
+                if last_tx.sender_id == identity.user_id && last_tx.sender_remaining_amount.is_some() {
+                    // Es ist ein Split, der Sender behält einen aktiven Restbetrag.
+                    (VoucherStatus::Active, &identity.user_id)
+                } else {
+                    // Es ist ein voller Transfer, die Kopie des Senders wird archiviert.
+                    (VoucherStatus::Archived, &identity.user_id)
+                };
+            
+            // 3. Ein neuer Zustand bekommt IMMER eine neue lokale ID.
+            let new_local_id = Self::calculate_local_instance_id(&new_voucher_state, owner_id)?;
+            
+            // 4. Füge die neue Instanz mit der NEUEN ID und dem korrekten Status hinzu.
+            self.add_voucher_instance(
+                new_local_id,
+                new_voucher_state.clone(),
+                new_status,
+            );
+        }
 
         if let Some(archive_backend) = archive {
             archive_backend.archive_voucher(&new_voucher_state, &identity.user_id, standard_definition)?;
@@ -476,7 +496,7 @@ impl Wallet {
             lang_preference,
         )?;
 
-        self.add_voucher_to_store(new_voucher.clone(), VoucherStatus::Active, &identity.user_id)?;
+        self.add_voucher_instance(new_voucher.voucher_id.clone(), new_voucher.clone(), VoucherStatus::Active);
         Ok(new_voucher)
     }
 
@@ -489,11 +509,11 @@ impl Wallet {
 
         self.voucher_store
             .vouchers
-            .retain(|_, (voucher, status)| {
-                if *status != VoucherStatus::Archived {
+            .retain(|_, instance| {
+                if !matches!(instance.status, VoucherStatus::Archived) {
                     return true;
                 }
-                if let Ok(valid_until) = DateTime::parse_from_rfc3339(&voucher.valid_until) {
+                if let Ok(valid_until) = DateTime::parse_from_rfc3339(&instance.voucher.valid_until) {
                     let purge_date = valid_until.with_timezone(&Utc) + grace_period;
                     return now < purge_date;
                 }
@@ -510,16 +530,10 @@ impl Wallet {
     }
 
     /// Findet die lokale ID und den Status eines Gutscheins anhand einer enthaltenen Transaktions-ID.
-    fn find_local_voucher_by_tx_id(&self, tx_id: &str) -> Option<(String, VoucherStatus)> {
+    fn find_local_voucher_by_tx_id(&self, tx_id: &str) -> Option<&VoucherInstance>{
         self.voucher_store
             .vouchers
-            .iter()
-            .find_map(|(local_id, (voucher, status))| {
-                if voucher.transactions.iter().any(|tx| tx.t_id == tx_id) {
-                    Some((local_id.clone(), status.clone()))
-                } else {
-                    None
-                }
-            })
+            .values()
+            .find(|instance| instance.voucher.transactions.iter().any(|tx| tx.t_id == tx_id) )
     }
 }

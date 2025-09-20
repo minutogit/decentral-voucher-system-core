@@ -5,7 +5,7 @@
 
 use super::{VoucherDetails, VoucherSummary, Wallet};
 use crate::error::VoucherCoreError;
-use crate::models::profile::VoucherStatus;
+use crate::wallet::instance::VoucherStatus;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::Zero;
 use std::collections::HashMap;
@@ -23,9 +23,10 @@ impl Wallet {
         self.voucher_store
             .vouchers
             .iter()
-            .map(|(local_id, (voucher, status))| {
+            .map(|(local_id, instance)| {
                 // Der aktuelle Betrag steht in der letzten Transaktion.
                 // Bei einem Split ist es `sender_remaining_amount`, sonst `amount`.
+                let voucher = &instance.voucher;
                 let current_amount = voucher
                     .transactions
                     .last()
@@ -43,11 +44,11 @@ impl Wallet {
 
                 VoucherSummary {
                     local_instance_id: local_id.clone(),
-                    status: status.clone(),
+                    status: instance.status.clone(),
                     valid_until: voucher.valid_until.clone(),
                     description: voucher.description.clone(),
                     current_amount,
-                    unit: voucher.nominal_value.unit.clone(),
+                    unit: voucher.nominal_value.abbreviation.clone(),
                 }
             })
             .collect()
@@ -65,16 +66,16 @@ impl Wallet {
         &self,
         local_instance_id: &str,
     ) -> Result<VoucherDetails, VoucherCoreError> {
-        let (voucher, status) = self
+        let instance = self
             .voucher_store
             .vouchers
             .get(local_instance_id)
             .ok_or_else(|| VoucherCoreError::VoucherNotFound(local_instance_id.to_string()))?;
 
         Ok(VoucherDetails {
-            local_instance_id: local_instance_id.to_string(),
-            status: status.clone(),
-            voucher: voucher.clone(),
+            local_instance_id: instance.local_instance_id.clone(),
+            status: instance.status.clone(),
+            voucher: instance.voucher.clone(),
         })
     }
 
@@ -89,9 +90,10 @@ impl Wallet {
     pub fn get_total_balance_by_currency(&self) -> HashMap<String, String> {
         let mut balances: HashMap<String, Decimal> = HashMap::new();
 
-        for (_, (voucher, status)) in self.voucher_store.vouchers.iter() {
-            if *status == VoucherStatus::Active {
-                let amount_str = voucher
+        for instance in self.voucher_store.vouchers.values() {
+            if matches!(instance.status, VoucherStatus::Active) {
+                let amount_str = instance
+                    .voucher
                     .transactions
                     .last()
                     .map(|tx| {
@@ -109,7 +111,7 @@ impl Wallet {
 
                 if let Ok(amount) = Decimal::from_str(&amount_str) {
                     *balances
-                        .entry(voucher.nominal_value.unit.clone())
+                        .entry(instance.voucher.nominal_value.abbreviation.clone())
                         .or_insert_with(Decimal::zero) += amount;
                 }
             }

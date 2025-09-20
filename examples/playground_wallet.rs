@@ -8,10 +8,10 @@
 //! 4. Gibt den finalen Gutschein-Zustand und den dabei erzeugten
 //!    anonymen Transaktions-Fingerprint im Terminal aus.
 
-use voucher_lib::models::profile::{UserIdentity, VoucherStatus};
+use voucher_lib::models::profile::UserIdentity;
 use voucher_lib::models::voucher::{Address, Collateral, Creator, NominalValue};
 use voucher_lib::services::crypto_utils;
-use voucher_lib::{to_json, NewVoucherData, verify_and_parse_standard};
+use voucher_lib::{to_json, NewVoucherData, verify_and_parse_standard, VoucherStatus};
 use voucher_lib::wallet::Wallet;
 
 /// Hilfsfunktion, um eine deterministische UserIdentity für Tests zu erstellen.
@@ -61,7 +61,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         creator: Creator { id: alice_identity.user_id.clone(), first_name: "Alice".into(), last_name: "Silversmith".into(), address: Address::default(), gender: "2".into(), signature: "".into(), ..Default::default() },
     };
     let initial_voucher = voucher_lib::create_voucher(voucher_data, &standard, &standard_hash, &alice_identity.signing_key, "en")?;
-    alice_wallet.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &alice_identity.user_id)?;
+    let local_id = Wallet::calculate_local_instance_id(&initial_voucher, &alice_identity.user_id)?;
+    alice_wallet.add_voucher_instance(local_id, initial_voucher, VoucherStatus::Active);
     println!("✅ Initialen Gutschein erstellt und zu Alices Wallet hinzugefügt.");
 
 

@@ -5,7 +5,8 @@
 
 use super::Wallet;
 use crate::error::VoucherCoreError;
-use crate::models::profile::{UserIdentity, VoucherStatus};
+use crate::models::profile::UserIdentity;
+use crate::wallet::instance::{VoucherInstance, VoucherStatus};
 use crate::models::secure_container::{PayloadType, SecureContainer};
 use crate::models::signature::DetachedSignature;
 use crate::models::voucher::Voucher;
@@ -31,7 +32,7 @@ impl Wallet {
         local_instance_id: &str,
         recipient_id: &str,
     ) -> Result<Vec<u8>, VoucherCoreError> {
-        let (voucher, _) = self
+        let instance = self
             .voucher_store
             .vouchers
             .get(local_instance_id)
@@ -39,7 +40,7 @@ impl Wallet {
                 local_instance_id.to_string(),
             ))?;
 
-        let payload = to_canonical_json(voucher)?;
+        let payload = to_canonical_json(&instance.voucher)?;
 
         let container = crate::services::secure_container_manager::create_secure_container(
             identity,
@@ -101,7 +102,7 @@ impl Wallet {
         &mut self,
         identity: &UserIdentity,
         container_bytes: &[u8],
-    ) -> Result<(), VoucherCoreError> {
+    ) -> Result<String, VoucherCoreError> {
         let container: SecureContainer = serde_json::from_slice(container_bytes)?;
         let (payload, payload_type) =
             crate::services::secure_container_manager::open_secure_container(&container, identity)?;
@@ -118,29 +119,29 @@ impl Wallet {
             DetachedSignature::Additional(s) => &s.voucher_id,
         };
 
-        let (target_voucher, _) = self
-            .find_active_voucher_by_voucher_id(voucher_id)
+        let target_instance = self.find_active_voucher_by_voucher_id(voucher_id)
             .ok_or_else(|| VoucherCoreError::VoucherNotFound(voucher_id.clone()))?;
 
         match signature {
-            DetachedSignature::Guarantor(s) => target_voucher.guarantor_signatures.push(s),
-            DetachedSignature::Additional(s) => target_voucher.additional_signatures.push(s),
+            DetachedSignature::Guarantor(s) => target_instance.voucher.guarantor_signatures.push(s),
+            DetachedSignature::Additional(s) => target_instance.voucher.additional_signatures.push(s),
         }
 
-        Ok(())
+        Ok(target_instance.local_instance_id.clone())
     }
 
     /// Findet die aktive Instanz eines Gutscheins anhand seiner globalen `voucher_id`.
     fn find_active_voucher_by_voucher_id(
         &mut self,
         voucher_id: &str,
-    ) -> Option<(&mut Voucher, &mut VoucherStatus)> {
+    ) -> Option<&mut VoucherInstance> {
         self.voucher_store
             .vouchers
             .values_mut()
-            .find(|(voucher, status)| {
-                voucher.voucher_id == voucher_id && *status == VoucherStatus::Active
+            .find(|instance| { // KORREKTUR: Signaturen können an 'Active' oder 'Incomplete' Gutscheine angehängt werden.
+                instance.voucher.voucher_id == voucher_id
+                    && (matches!(instance.status, VoucherStatus::Active)
+                        || matches!(instance.status, VoucherStatus::Incomplete { .. }))
             })
-            .map(|(voucher, status)| (voucher, status))
     }
 }

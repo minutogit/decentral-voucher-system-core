@@ -21,11 +21,8 @@ use voucher_lib::services::signature_manager;
 use voucher_lib::services::voucher_manager::{create_transaction, create_voucher, NewVoucherData};
 use voucher_lib::wallet::Wallet;
 use voucher_lib::{
-    models::{
-        profile::VoucherStatus,
-        voucher::Transaction,
-        voucher::{Creator, NominalValue},
-    },
+    models::voucher::{Creator, NominalValue, Transaction},
+    VoucherStatus,
     VoucherCoreError,
 };
 use voucher_lib::services::crypto_utils::get_hash;
@@ -367,9 +364,9 @@ pub fn add_voucher_to_wallet(
 
     let local_id = Wallet::calculate_local_instance_id(&voucher, &identity.user_id)?;
     wallet
-        .add_voucher_to_store(voucher, VoucherStatus::Active, &identity.user_id)?;
+        .add_voucher_instance(local_id.clone(), voucher, VoucherStatus::Active);
 
-    Ok(local_id)
+    Ok(local_id.clone())
 }
 
 /// Erstellt die Metadaten für eine Bürgen-Signatur.

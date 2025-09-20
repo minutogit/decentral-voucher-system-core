@@ -5,6 +5,7 @@
 //! Diese Strukturen sind für die Verwaltung der "Wallet" eines Nutzers zuständig.
 
 use crate::models::voucher::Voucher;
+use crate::wallet::instance::VoucherInstance;
 use ed25519_dalek::{SigningKey, VerifyingKey as EdPublicKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap};
@@ -100,34 +101,13 @@ impl TransactionBundle {
     }
 }
 
-/// Definiert den internen Zustand eines Gutscheins im Wallet eines Nutzers.
-/// Dieser Status wird nicht in der Gutschein-Datei selbst gespeichert, sondern ist eine
-/// Metainformation, die vom Wallet verwaltet wird.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub enum VoucherStatus {
-    /// Der Gutschein ist gültig und kann für Transaktionen verwendet werden.
-    Active,
-    /// Der Gutschein wurde aufgrund eines verifizierten Double-Spend-Konflikts gesperrt.
-    /// Er kann nicht mehr transferiert werden.
-    Quarantined,
-    /// Der Gutschein wurde vollständig ausgegeben oder an einen anderen Nutzer transferiert.
-    /// Er wird nur noch zu historischen Zwecken aufbewahrt.
-    Archived,
-}
-
-impl Default for VoucherStatus {
-    fn default() -> Self {
-        VoucherStatus::Active
-    }
-}
-
 /// Repräsentiert den persistenten Speicher für alle Gutscheine eines Nutzers.
 /// Diese Struktur wird separat vom `UserProfile` gehalten, um die Metadaten
 /// leichtgewichtig zu halten und die Gutscheinsammlung effizient zu verwalten.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct VoucherStore {
     /// Der Bestand an Gutscheinen, indiziert nach ihrer lokalen Instanz-ID (`local_voucher_instance_id`).
-    pub vouchers: HashMap<String, (Voucher, VoucherStatus)>,
+    pub vouchers: HashMap<String, VoucherInstance>,
 }
 
 /// Repräsentiert den persistenten Speicher für die Metadaten von Transaktionsbündeln.

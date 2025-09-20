@@ -248,13 +248,6 @@ pub fn create_voucher(
 
     temp_voucher.transactions.push(init_transaction);
 
-    // NEU: Validiere den final erstellten Gutschein gegen seinen eigenen Standard.
-    // Dies stellt sicher, dass die Erstellungslogik selbst einen konformen Gutschein produziert.
-    crate::services::voucher_validation::validate_voucher_against_standard(
-        &temp_voucher,
-        verified_standard,
-    )?;
-
     Ok(temp_voucher)
 }
 

@@ -13,7 +13,7 @@ use crate::{
     },
     storage::StorageError,
 };
-use crate::models::profile::VoucherStatus;
+use crate::wallet::instance::VoucherStatus;
 
 /// Definiert Fehler, die bei der Verarbeitung einer `VoucherStandardDefinition` auftreten können.
 #[derive(Error, Debug)]

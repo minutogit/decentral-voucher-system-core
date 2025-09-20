@@ -25,7 +25,7 @@ mod local_double_spend_detection {
     use super::test_utils;
     use voucher_lib::archive::file_archive::FileVoucherArchive;
     use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat};
-    use std::path::Path;
+    use std::{path::Path};
     use self::test_utils::{setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
     use voucher_lib::{services::crypto_utils, UserIdentity, VoucherStatus};
     use voucher_lib::models::conflict::TransactionFingerprint;
@@ -46,7 +46,7 @@ mod local_double_spend_detection {
     /// Extrahiert den einzigen Gutschein aus dem Wallet eines Akteurs.
     fn get_voucher_from_wallet(wallet: &Wallet) -> Voucher {
         assert_eq!(wallet.voucher_store.vouchers.len(), 1, "Expected exactly one voucher in the wallet");
-        wallet.voucher_store.vouchers.values().next().unwrap().0.clone()
+        wallet.voucher_store.vouchers.values().next().unwrap().voucher.clone()
     }
 
     /// Erstellt einen leeren Fingerprint für Testzwecke.
@@ -108,7 +108,8 @@ mod local_double_spend_detection {
         // create_voucher erwartet den &SigningKey, nicht die ganze Identity.
         let mut voucher = voucher_manager::create_voucher(voucher_data, standard, standard_hash, &identity.signing_key, "en").unwrap();
         voucher = voucher_manager::create_transaction(&voucher, standard, &identity.user_id, &identity.signing_key, "recipient_id", "50").unwrap();
-        wallet.add_voucher_to_store(voucher.clone(), VoucherStatus::Active, &identity.user_id).unwrap();
+        let local_id = Wallet::calculate_local_instance_id(&voucher, &identity.user_id).unwrap();
+        wallet.add_voucher_instance(local_id, voucher.clone(), VoucherStatus::Active);
 
         // Aktion
         wallet.scan_and_update_own_fingerprints().unwrap();
@@ -226,7 +227,8 @@ mod local_double_spend_detection {
         let voucher_data = new_test_voucher_data(sender_identity.user_id.clone());
         let initial_voucher = voucher_manager::create_voucher(voucher_data, standard, standard_hash, &sender_identity.signing_key, "en").unwrap();
         // Wir klonen den Gutschein hier, damit die 'initial_voucher'-Variable für den späteren Test gültig bleibt.
-        sender_wallet.add_voucher_to_store(initial_voucher.clone(), VoucherStatus::Active, &sender_identity.user_id).unwrap();
+        let local_id = Wallet::calculate_local_instance_id(&initial_voucher, &sender_identity.user_id).unwrap();
+        sender_wallet.add_voucher_instance(local_id, initial_voucher.clone(), VoucherStatus::Active);
         let initial_local_id = sender_wallet.voucher_store.vouchers.keys().next().unwrap().clone();
 
         // ### Akt 1: Legitime Transaktion ###
@@ -248,7 +250,8 @@ mod local_double_spend_detection {
         // Wir simulieren, dass der Sender versucht, denselben ursprünglichen Gutschein-Zustand erneut auszugeben.
         // Da create_transfer die ursprüngliche Instanz (`initial_local_id`) entfernt hat, fügen wir sie manuell
         // wieder hinzu. Dies ahmt einen Angreifer nach, der einen alten Wallet-Zustand wiederherstellt.
-        sender_wallet.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &sender_identity.user_id).unwrap();
+        let local_id_2 = Wallet::calculate_local_instance_id(&initial_voucher, &sender_identity.user_id).unwrap();
+        sender_wallet.add_voucher_instance(local_id_2, initial_voucher, VoucherStatus::Active);
 
         // ### Akt 3: Der blockierte Double-Spend-Versuch ###
         // Sender versucht, den wiederhergestellten, ursprünglichen Gutschein an Empfänger 2 zu senden.
@@ -289,7 +292,8 @@ mod local_double_spend_detection {
 
         let voucher_data = new_test_voucher_data(alice_identity.user_id.clone());
         let initial_voucher = voucher_manager::create_voucher(voucher_data, standard, standard_hash, &alice_identity.signing_key, "en").unwrap();
-        alice_wallet.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &alice_identity.user_id).unwrap();
+        let local_id = Wallet::calculate_local_instance_id(&initial_voucher, &alice_identity.user_id).unwrap();
+        alice_wallet.add_voucher_instance(local_id, initial_voucher, VoucherStatus::Active);
 
         // Alice verwendet die neue, korrekte Methode, um den Gutschein an Bob zu senden.
         // Wir klonen die ID, um den immutable borrow auf alice_wallet sofort zu beenden.
@@ -306,9 +310,9 @@ mod local_double_spend_detection {
         bob_wallet.process_encrypted_transaction_bundle(bob_identity, &bundle_to_bob, Some(&archive)).unwrap();
 
         assert_eq!(alice_wallet.voucher_store.vouchers.len(), 1, "Alices Wallet muss den gesendeten Gutschein als 'Archived' behalten.");
-        let (_, status) = alice_wallet.voucher_store.vouchers.values().next().unwrap();
-        assert_eq!(*status, VoucherStatus::Archived, "Der Status von Alices Gutschein muss 'Archived' sein.");
-        assert_eq!(bob_wallet.voucher_store.vouchers.values().next().unwrap().1, VoucherStatus::Active);
+        let instance_a = alice_wallet.voucher_store.vouchers.values().next().unwrap();
+        assert!(matches!(instance_a.status, VoucherStatus::Archived), "Der Status von Alices Gutschein muss 'Archived' sein.");
+        assert!(matches!(bob_wallet.voucher_store.vouchers.values().next().unwrap().status, VoucherStatus::Active));
 
         // ### Akt 2: Der Double Spend ###
         println!("--- Akt 2: Bob begeht einen Double Spend an Charlie und David ---");
@@ -336,7 +340,8 @@ mod local_double_spend_detection {
         charlie_wallet.process_encrypted_transaction_bundle(charlie_identity, &bundle_to_charlie, Some(&archive)).unwrap();
 
         // Um den zweiten Betrug zu ermöglichen, setzt er den Zustand seines Wallets künstlich zurück.
-        bob_wallet.add_voucher_to_store(voucher_from_bob, VoucherStatus::Active, &bob_identity.user_id).unwrap();
+        let local_id_bob = Wallet::calculate_local_instance_id(&voucher_from_bob, &bob_identity.user_id).unwrap();
+        bob_wallet.add_voucher_instance(local_id_bob, voucher_from_bob, VoucherStatus::Active);
         let bundle_to_david = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_david.clone()], &david_identity.user_id, None).unwrap();
         david_wallet.process_encrypted_transaction_bundle(david_identity, &bundle_to_david, Some(&archive)).unwrap();
 
@@ -360,8 +365,8 @@ mod local_double_spend_detection {
         ).unwrap();
 
         println!("\n[Debug Test] Alices Wallet VOR dem Empfang von Charlie:");
-        for (id, (voucher, status)) in &alice_wallet.voucher_store.vouchers {
-            println!("  -> Vorhanden: ID={}, Status={:?}, Tx-Anzahl={}", id, status, voucher.transactions.len());
+        for (id, instance) in &alice_wallet.voucher_store.vouchers {
+            println!("  -> Vorhanden: ID={}, Status={:?}, Tx-Anzahl={}", id, instance.status, instance.voucher.transactions.len());
         }
         println!("[Debug Test] Verarbeite jetzt Bündel von Charlie...");
 
@@ -404,20 +409,23 @@ mod local_double_spend_detection {
 
         // Finde die beiden konkurrierenden Gutschein-Instanzen in Alices Wallet und prüfe ihren Status.
         // Wir müssen die gesamte Transaktionskette durchsuchen, nicht nur die letzte Transaktion.
-        for (local_id, (voucher, status)) in &alice_wallet.voucher_store.vouchers {
+        for (local_id, instance) in &alice_wallet.voucher_store.vouchers {
             // Prüfe, ob die Gewinner-Transaktion Teil der Historie dieses Gutscheins ist.
-            if voucher.transactions.iter().any(|tx| tx.t_id == winning_tx_id) {
-                winner_status = Some(status.clone());
+            if instance.voucher.transactions.iter().any(|tx| tx.t_id == winning_tx_id) {
+                winner_status = Some(instance.status.clone());
             }
             // Prüfe, ob die Verlierer-Transaktion Teil der Historie dieses Gutscheins ist.
-            if voucher.transactions.iter().any(|tx| tx.t_id == losing_tx_id) {
-                loser_status = Some(status.clone());
+            if instance.voucher.transactions.iter().any(|tx| tx.t_id == losing_tx_id) {
+                loser_status = Some(instance.status.clone());
                 loser_local_id = Some(local_id.clone());
             }
         }
 
         assert_eq!(winner_status, Some(VoucherStatus::Active), "Die 'Gewinner'-Instanz (von Charlie, weil früher) muss aktiv bleiben.");
-        assert_eq!(loser_status, Some(VoucherStatus::Quarantined), "Die 'Verlierer'-Instanz (von David, weil später) muss unter Quarantäne gestellt werden.");
+        assert!(
+            matches!(loser_status, Some(VoucherStatus::Quarantined { .. })),
+            "Die 'Verlierer'-Instanz (von David, weil später) muss unter Quarantäne gestellt werden."
+        );
 
         // Der Versuch, den unter Quarantäne stehenden Gutschein (die 'Verlierer'-Instanz) auszugeben, muss fehlschlagen.
         let transfer_attempt = alice_wallet.create_transfer(
@@ -461,7 +469,7 @@ mod security_vulnerabilities {
     use voucher_lib::services::voucher_manager::{self, NewVoucherData};
     use voucher_lib::error::ValidationError;
     use voucher_lib::services::voucher_validation::{self};
-    use voucher_lib::services::voucher_manager::get_spendable_balance;
+    use voucher_lib::{VoucherInstance, services::voucher_manager::get_spendable_balance};
     use serde_json::Value;
     use self::test_utils::{
         create_voucher_for_manipulation,
@@ -473,9 +481,9 @@ mod security_vulnerabilities {
     use voucher_lib::wallet::Wallet;
     use rust_decimal_macros::dec;
     use rust_decimal::Decimal;
-    use std::str::FromStr;
+    use std::{str::FromStr};
     use ed25519_dalek::SigningKey;
-
+    
     // ===================================================================================
     // HILFSFUNKTIONEN & SETUP (Adaptiert aus bestehenden Tests)
     // ===================================================================================
@@ -695,12 +703,13 @@ mod security_vulnerabilities {
         let guarantor_sig = create_guarantor_signature(&valid_voucher, &ACTORS.guarantor1, None, "0");
         valid_voucher.guarantor_signatures.push(guarantor_sig);
         let local_id = Wallet::calculate_local_instance_id(&valid_voucher, &ACTORS.issuer.user_id).unwrap();
-        issuer_wallet.voucher_store.vouchers.insert(local_id.clone(), (valid_voucher, Default::default()));
+        let instance = VoucherInstance { voucher: valid_voucher, status: VoucherStatus::Active, local_instance_id: local_id.clone() };
+        issuer_wallet.voucher_store.vouchers.insert(local_id.clone(), instance);
 
         // Issuer sendet den Gutschein an den Hacker, der ihn nun für Angriffe besitzt.
         let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, standard, &local_id, &ACTORS.hacker.user_id, "100", None, None).unwrap();
         hacker_wallet.process_encrypted_transaction_bundle(&ACTORS.hacker, &container_to_hacker, None).unwrap();
-        let (_, (voucher_in_hacker_wallet, _)) = hacker_wallet.voucher_store.vouchers.iter().next().unwrap();
+        let voucher_in_hacker_wallet = &hacker_wallet.voucher_store.vouchers.iter().next().unwrap().1.voucher;
 
         // ### SZENARIO 1a: WERTINFLATION ###
         println!("--- Angriff 1a: Wertinflation ---");
@@ -724,7 +733,7 @@ mod security_vulnerabilities {
 
         let hacked_container = create_hacked_bundle_and_container(&ACTORS.hacker, &ACTORS.victim.user_id, inflated_voucher);
         victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
-        let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
+        let received_voucher = &victim_wallet.voucher_store.vouchers.iter().next().unwrap().1.voucher;
         let result = voucher_validation::validate_voucher_against_standard(received_voucher, standard);
         assert!(matches!(result, Err(VoucherCoreError::Validation(ValidationError::InvalidCreatorSignature { .. }))),
                 "Validation must fail due to manipulated nominal value.");
@@ -749,7 +758,7 @@ mod security_vulnerabilities {
 
         let hacked_container = create_hacked_bundle_and_container(&ACTORS.hacker, &ACTORS.victim.user_id, tampered_guarantor_voucher);
         victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
-        let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
+        let received_voucher = &victim_wallet.voucher_store.vouchers.iter().next().unwrap().1.voucher;
         let result = voucher_validation::validate_voucher_against_standard(received_voucher, standard);
         assert!(matches!(result, Err(VoucherCoreError::Validation(ValidationError::InvalidSignatureId(_)))),
                 "Validation must fail due to manipulated guarantor metadata (InvalidSignatureId).");
@@ -771,10 +780,11 @@ mod security_vulnerabilities {
 
         let voucher_a = voucher_manager::create_voucher(data, standard, standard_hash, &ACTORS.alice.signing_key, "en").unwrap();
         let local_id_a = Wallet::calculate_local_instance_id(&voucher_a, &ACTORS.alice.user_id).unwrap();
-        alice_wallet.voucher_store.vouchers.insert(local_id_a.clone(), (voucher_a, Default::default()));
+        let instance_a = VoucherInstance { voucher: voucher_a, status: VoucherStatus::Active, local_instance_id: local_id_a.clone() };
+        alice_wallet.voucher_store.vouchers.insert(local_id_a.clone(), instance_a);
         let (container_to_bob, _) = alice_wallet.create_transfer(&ACTORS.alice, standard, &local_id_a, &ACTORS.bob.user_id, "100", None, None).unwrap();
         bob_wallet_hacker.process_encrypted_transaction_bundle(&ACTORS.bob, &container_to_bob, None).unwrap();
-        let (_, (voucher_in_bob_wallet, _)) = bob_wallet_hacker.voucher_store.vouchers.iter().next().unwrap();
+        let voucher_in_bob_wallet = &bob_wallet_hacker.voucher_store.vouchers.iter().next().unwrap().1.voucher;
 
         // ### ANGRIFF ###
         println!("--- Angriff 2a: Transaktionshistorie fälschen ---");
@@ -805,10 +815,11 @@ mod security_vulnerabilities {
 
         let initial_voucher = voucher_manager::create_voucher(data, standard, standard_hash, &ACTORS.issuer.signing_key, "en").unwrap();
         let local_id_issuer = Wallet::calculate_local_instance_id(&initial_voucher, &ACTORS.issuer.user_id).unwrap();
-        issuer_wallet.voucher_store.vouchers.insert(local_id_issuer.clone(), (initial_voucher, Default::default()));
+        let instance_i = VoucherInstance { voucher: initial_voucher, status: VoucherStatus::Active, local_instance_id: local_id_issuer.clone() };
+        issuer_wallet.voucher_store.vouchers.insert(local_id_issuer.clone(), instance_i);
         let (container_to_hacker, _) = issuer_wallet.create_transfer(&ACTORS.issuer, standard, &local_id_issuer, &ACTORS.hacker.user_id, "100", None, None).unwrap();
         hacker_wallet.process_encrypted_transaction_bundle(&ACTORS.hacker, &container_to_hacker, None).unwrap();
-        let (_, (voucher_in_hacker_wallet, _)) = hacker_wallet.voucher_store.vouchers.iter().next().unwrap();
+        let voucher_in_hacker_wallet = &hacker_wallet.voucher_store.vouchers.iter().next().unwrap().1.voucher;
 
         // ### SZENARIO 3a: OVERSPENDING ###
         println!("--- Angriff 3a: Overspending ---");
@@ -826,7 +837,7 @@ mod security_vulnerabilities {
         overspend_voucher.transactions.push(overspend_tx);
         let hacked_container = create_hacked_bundle_and_container(&ACTORS.hacker, &ACTORS.victim.user_id, overspend_voucher);
         victim_wallet.process_encrypted_transaction_bundle(&ACTORS.victim, &hacked_container, None).unwrap();
-        let (_, (received_voucher, _)) = victim_wallet.voucher_store.vouchers.iter().next().unwrap();
+        let received_voucher = &victim_wallet.voucher_store.vouchers.iter().next().unwrap().1.voucher;
         let result = voucher_validation::validate_voucher_against_standard(received_voucher, standard);
 
         // KORREKTUR: Der primäre Fehler bei einer Überziehung ist "unzureichendes Guthaben".
@@ -922,7 +933,8 @@ mod security_vulnerabilities {
 
         let initial_voucher = create_voucher(voucher_data, standard, standard_hash, &a_identity.signing_key, "en").unwrap();
 
-        wallet_a.add_voucher_to_store(initial_voucher, VoucherStatus::Active, &a_identity.user_id).unwrap();
+        let local_id = Wallet::calculate_local_instance_id(&initial_voucher, &a_identity.user_id).unwrap();
+        wallet_a.add_voucher_instance(local_id, initial_voucher, VoucherStatus::Active);
         let original_local_id = wallet_a.voucher_store.vouchers.keys().next().unwrap().clone();
 
         // 3. Aktion: Wallet A sendet 40 an Wallet B
@@ -945,20 +957,20 @@ mod security_vulnerabilities {
         assert_eq!(wallet_a.voucher_store.vouchers.len(), 1, "Wallet A should have exactly one instance (the active remainder).");
         assert!(wallet_a.voucher_store.vouchers.get(&original_local_id).is_none(), "The original voucher instance must be removed.");
 
-        let (remainder_voucher, remainder_status) = wallet_a.voucher_store.vouchers.values()
+        let remainder_instance = wallet_a.voucher_store.vouchers.values()
             .next()
             .expect("Wallet A must have one voucher instance left.");
-        assert_eq!(*remainder_status, VoucherStatus::Active);
+        assert_eq!(remainder_instance.status, VoucherStatus::Active);
 
-        let remainder_balance = get_spendable_balance(remainder_voucher, &a_identity.user_id, standard).unwrap();
+        let remainder_balance = get_spendable_balance(&remainder_instance.voucher, &a_identity.user_id, standard).unwrap();
         assert_eq!(remainder_balance, dec!(60));
 
         // 5. Verifizierung (Wallet B)
         assert_eq!(wallet_b.voucher_store.vouchers.len(), 1, "Wallet B should have one voucher instance.");
-        let (received_voucher, received_status) = wallet_b.voucher_store.vouchers.values().next().unwrap();
-        assert_eq!(*received_status, VoucherStatus::Active);
+        let received_instance = wallet_b.voucher_store.vouchers.values().next().unwrap();
+        assert_eq!(received_instance.status, VoucherStatus::Active);
 
-        let received_balance = get_spendable_balance(received_voucher, &b_identity.user_id, standard).unwrap();
+        let received_balance = get_spendable_balance(&received_instance.voucher, &b_identity.user_id, standard).unwrap();
         assert_eq!(received_balance, dec!(40));
     }
 

@@ -106,20 +106,28 @@ mod compatibility_scenarios {
 
     #[test]
     fn test_parse_standard_with_unknown_fields_in_toml_then_succeeds() {
-        let fixture_path = "voucher_standards/minuto_v1/standard.toml";
-        let mut toml_str = std::fs::read_to_string(fixture_path).expect("Failed to read TOML template for test");
-        toml_str.push_str("\n[validation.new_rules]\nmax_amount = 1000\n");
-        let result = standard_manager::verify_and_parse_standard(&toml_str);
+        // 1. Nimm einen zur Laufzeit gültig signierten Standard.
+        let (mut standard_struct, _) = MINUTO_STANDARD.clone();
 
-        match result {
-            Ok(_) => panic!("Parsing should have failed due to invalid signature, but it succeeded."),
-            Err(VoucherCoreError::Standard(StandardDefinitionError::InvalidSignature)) => {
-                // ERWARTETES ERGEBNIS: Fehler kommt von der ungültigen Signatur, nicht vom Parsen.
-            },
-            Err(e) => panic!("Expected a signature error, but got a different error: {:?}", e),
-        }
+        // 2. Modifiziere ein EXISTIERENDES Feld. Dies ändert den Hash-Wert der Struktur,
+        // aber die Signatur bleibt die alte. Dadurch wird die Signatur ungültig.
+        standard_struct.metadata.keywords.push("modified-for-test".to_string());
 
-        let parse_only_result: Result<voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition, _> = toml::from_str(&toml_str);
-        assert!(parse_only_result.is_ok(), "Parsing the TOML with extra fields should succeed.");
+        // 3. Serialisiere die modifizierte Struktur mit der nun veralteten Signatur in einen String.
+        let toml_str_with_invalid_sig = toml::to_string(&standard_struct).unwrap();
+
+        // 4. Die Verifizierung muss jetzt wegen der ungültigen Signatur fehlschlagen.
+        let result = standard_manager::verify_and_parse_standard(&toml_str_with_invalid_sig);
+        assert!(matches!(
+            result.unwrap_err(),
+            VoucherCoreError::Standard(StandardDefinitionError::InvalidSignature)
+        ));
+
+        // 5. Um die Vorwärtskompatibilität des Parsers selbst zu testen, fügen wir jetzt
+        //    unbekannte Felder hinzu und parsen ohne Signaturprüfung.
+        let mut toml_with_unknown_fields = toml_str_with_invalid_sig;
+        toml_with_unknown_fields.push_str("\n[metadata.new_future_field]\ninfo = 'some data'\n");
+        let parse_only_result: Result<voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition, _> = toml::from_str(&toml_with_unknown_fields);
+        assert!(parse_only_result.is_ok(), "Raw TOML parsing should succeed even with unknown fields.");
     }
 }

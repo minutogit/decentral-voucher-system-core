@@ -6,9 +6,7 @@
 
 use std::fs;
 use tempfile::tempdir;
-use voucher_lib::models::profile::{
-    VoucherStatus,
-};
+use voucher_lib::{VoucherStatus};
 use voucher_lib::{UserIdentity};
 use voucher_lib::models::voucher::{Creator, NominalValue, Voucher};
 use voucher_lib::services::voucher_manager::NewVoucherData;
@@ -88,8 +86,7 @@ fn test_password_recovery_and_reset_with_data() {
     let local_id = Wallet::calculate_local_instance_id(&voucher, &identity.user_id).unwrap();
 
     wallet
-        .add_voucher_to_store(voucher, VoucherStatus::Active, &identity.user_id)
-        .unwrap();
+        .add_voucher_instance(local_id.clone(), voucher, VoucherStatus::Active);
     assert_eq!(wallet.voucher_store.vouchers.len(), 1);
 
     wallet.save(&mut storage, identity, initial_password).expect("Initial save failed");

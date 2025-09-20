@@ -51,23 +51,22 @@
 //! ```
 
 use crate::archive::VoucherArchive;
+use crate::error::{ValidationError, VoucherCoreError};
 use crate::models::profile::UserIdentity;
 use crate::models::signature::DetachedSignature;
 use crate::models::voucher::Voucher;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
+use crate::services::bundle_processor;
 use crate::services::voucher_manager::NewVoucherData;
 use crate::storage::{file_storage::FileStorage, AuthMethod, Storage};
+use crate::wallet::instance::{ValidationFailureReason, VoucherStatus};
 use crate::wallet::{ProcessBundleResult, VoucherDetails, VoucherSummary, Wallet};
-use crate::services::bundle_processor;
 use bip39::Language;
 use std::collections::HashMap;
 use std::path::Path;
+use uuid::Uuid;
 
 /// Repräsentiert den Kernzustand der Anwendung.
-///
-/// Der Service kann entweder gesperrt (`Locked`) sein, ohne Zugriff auf Wallet-Daten
-/// oder private Schlüssel, oder entsperrt (`Unlocked`), wobei `Wallet` und `UserIdentity`
-/// im Speicher gehalten werden.
 pub enum AppState {
     /// Es ist kein Wallet geladen und keine `UserIdentity` im Speicher.
     Locked,
@@ -187,7 +186,7 @@ impl AppService {
         // Diese gibt nun das Wallet UND die entschlüsselte UserIdentity zurück.
         let (wallet, identity) = Wallet::load(&self.storage, &AuthMethod::Password(password))
             .map_err(|e| format!("Login failed (check password): {}", e))?;
- 
+
         self.state = AppState::Unlocked { wallet, identity };
         Ok(())
     }
@@ -247,8 +246,7 @@ impl AppService {
     /// # Errors
     /// Schlägt fehl, wenn das Wallet gesperrt (`Locked`) ist.
     pub fn get_voucher_summaries(&self) -> Result<Vec<VoucherSummary>, String> {
-        let wallet = self.get_wallet()?;
-        Ok(wallet.list_vouchers())
+        Ok(self.get_wallet()?.list_vouchers())
     }
 
     /// Aggregiert die Guthaben aller aktiven Gutscheine, gruppiert nach Währung.
@@ -259,8 +257,7 @@ impl AppService {
     /// # Errors
     /// Schlägt fehl, wenn das Wallet gesperrt (`Locked`) ist.
     pub fn get_total_balance_by_currency(&self) -> Result<HashMap<String, String>, String> {
-        let wallet = self.get_wallet()?;
-        Ok(wallet.get_total_balance_by_currency())
+        Ok(self.get_wallet()?.get_total_balance_by_currency())
     }
 
     /// Ruft eine detaillierte Ansicht für einen einzelnen Gutschein ab.
@@ -274,8 +271,7 @@ impl AppService {
     /// # Errors
     /// Schlägt fehl, wenn das Wallet gesperrt ist oder keine Gutschein-Instanz mit dieser ID existiert.
     pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String> {
-        let wallet = self.get_wallet()?;
-        wallet
+        self.get_wallet()?
             .get_voucher_details(local_id)
             .map_err(|e| e.to_string())
     }
@@ -288,8 +284,7 @@ impl AppService {
     /// # Errors
     /// Schlägt fehl, wenn das Wallet gesperrt (`Locked`) ist.
     pub fn get_user_id(&self) -> Result<String, String> {
-        let wallet = self.get_wallet()?;
-        Ok(wallet.get_user_id().to_string())
+        Ok(self.get_wallet()?.get_user_id().to_string())
     }
 
     // --- Aktionen (Commands) ---
@@ -313,39 +308,45 @@ impl AppService {
         data: NewVoucherData,
         password: &str,
     ) -> Result<Voucher, String> {
-        // Temporär den Zustand aus `self` nehmen, um Borrow-Checker-Regeln zu erfüllen.
-        let current_state = std::mem::replace(&mut self.state, AppState::Locked);
- 
-        let (result, new_state) = match current_state {
-            AppState::Unlocked { mut wallet, identity } => {
-                // 1. Standard hier in der Service-Schicht verifizieren.
-                match crate::services::standard_manager::verify_and_parse_standard(standard_toml_content) {
-                    Ok((verified_standard, standard_hash)) => {
-                        // 2. Bei Erfolg: Wallet-Methode mit den neuen Parametern aufrufen.
-                        match wallet.create_new_voucher(&identity, &verified_standard, &standard_hash, lang_preference, data) {
-                            Ok(new_voucher) => {
-                                if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
-                                    (Err(e.to_string()), AppState::Unlocked { wallet, identity })
-                                } else {
-                                    (Ok(new_voucher), AppState::Unlocked { wallet, identity })
-                                }
-                            }
-                            Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
-                        }
-                    },
-                    Err(e) => {
-                        // 3. Bei Fehler: Gib den Fehler und den unveränderten Zustand zurück.
-                        (
-                            Err(format!("Standard definition is invalid: {}", e)),
-                            AppState::Unlocked { wallet, identity }
-                        )
-                    },
-                }
-            }
-            AppState::Locked => (Err("Wallet is locked.".to_string()), AppState::Locked),
+        let (mut wallet, identity) = match std::mem::replace(&mut self.state, AppState::Locked) {
+            AppState::Unlocked { wallet, identity } => (wallet, identity),
+            AppState::Locked => return Err("Wallet is locked.".to_string()),
         };
 
-        self.state = new_state;
+        let (verified_standard, standard_hash) =
+            match crate::services::standard_manager::verify_and_parse_standard(standard_toml_content) {
+                Ok(res) => res,
+                Err(e) => {
+                    self.state = AppState::Unlocked { wallet, identity };
+                    return Err(e.to_string());
+                }
+            };
+
+        let new_voucher = match crate::services::voucher_manager::create_voucher(
+            data,
+            &verified_standard,
+            &standard_hash,
+            &identity.signing_key,
+            lang_preference,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                self.state = AppState::Unlocked { wallet, identity };
+                return Err(e.to_string());
+            }
+        };
+
+        let result = match self.determine_voucher_status(&new_voucher, &verified_standard) {
+            Err(fatal_error_msg) => Err(format!("Internal logic error during voucher creation: {}. The voucher was not saved.", fatal_error_msg)),
+            Ok(initial_status) => {
+                let local_id = Uuid::new_v4().to_string();
+                wallet.add_voucher_instance(local_id, new_voucher.clone(), initial_status);
+                wallet.save(&mut self.storage, &identity, password)
+                    .map(|_| new_voucher)
+                    .map_err(|e| e.to_string())
+            }
+        };
+        self.state = AppState::Unlocked { wallet, identity };
         result
     }
 
@@ -428,23 +429,25 @@ impl AppService {
 
         let (result, new_state) = match current_state {
             AppState::Unlocked { mut wallet, identity } => {
-                // Restrukturiert für korrekte Fehlerbehandlung: Zuerst validieren, dann verarbeiten.
-                match self.validate_vouchers_in_bundle(&identity, bundle_data, standard_definitions_toml) {
-                    Err(e) => {
-                        // Validierung fehlgeschlagen: Zustand nicht ändern und Fehler zurückgeben.
-                        (Err(e), AppState::Unlocked { wallet, identity })
-                    }
+                match self.validate_vouchers_in_bundle(
+                    &identity,
+                    bundle_data,
+                    standard_definitions_toml,
+                ) {
+                    Err(e) => (Err(e), AppState::Unlocked { wallet, identity }),
                     Ok(_) => {
-                        // Validierung erfolgreich: jetzt das Bundle im Wallet verarbeiten.
-                        match wallet.process_encrypted_transaction_bundle(&identity, bundle_data, archive) {
+                        match wallet
+                            .process_encrypted_transaction_bundle(&identity, bundle_data, archive)
+                        {
                             Ok(proc_result) => {
-                                if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
-                                    (Err(e.to_string()), AppState::Unlocked { wallet, identity})
+                                if let Err(e) = wallet.save(&mut self.storage, &identity, password)
+                                {
+                                    (Err(e.to_string()), AppState::Unlocked { wallet, identity })
                                 } else {
-                                    (Ok(proc_result), AppState::Unlocked { wallet, identity})
+                                    (Ok(proc_result), AppState::Unlocked { wallet, identity })
                                 }
                             }
-                            Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity})
+                            Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
                         }
                     }
                 }
@@ -500,7 +503,12 @@ impl AppService {
         };
         let wallet = self.get_wallet()?;
         wallet
-            .create_detached_signature_response(identity, voucher_to_sign, signature_data, original_sender_id)
+            .create_detached_signature_response(
+                identity,
+                voucher_to_sign,
+                signature_data,
+                original_sender_id,
+            )
             .map_err(|e| e.to_string())
     }
 
@@ -516,26 +524,48 @@ impl AppService {
     pub fn process_and_attach_signature(
         &mut self,
         container_bytes: &[u8],
+        standard_toml_content: &str,
         password: &str,
     ) -> Result<(), String> {
-        let current_state = std::mem::replace(&mut self.state, AppState::Locked);
-
-        let (result, new_state) = match current_state {
-            AppState::Unlocked { mut wallet, identity } => {
-                match wallet.process_and_attach_signature(&identity, container_bytes) {
-                    Ok(_) => {
-                        if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
-                            (Err(e.to_string()), AppState::Unlocked { wallet, identity })
-                        } else {
-                            (Ok(()), AppState::Unlocked { wallet, identity })
-                        }
-                    }
-                    Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
-                }
-            }
-            AppState::Locked => (Err("Wallet is locked.".to_string()), AppState::Locked),
+        let (mut wallet, identity) = match std::mem::replace(&mut self.state, AppState::Locked) {
+            AppState::Unlocked { wallet, identity } => (wallet, identity),
+            AppState::Locked => return Err("Wallet is locked.".to_string()),
         };
-        self.state = new_state;
+
+        let (verified_standard, _) = match crate::services::standard_manager::verify_and_parse_standard(standard_toml_content) {
+            Ok(res) => res,
+            Err(e) => {
+                self.state = AppState::Unlocked { wallet, identity };
+                return Err(e.to_string());
+            }
+        };
+
+        let updated_instance_id = match wallet.process_and_attach_signature(&identity, container_bytes) {
+            Ok(id) => id,
+            Err(e) => {
+                self.state = AppState::Unlocked { wallet, identity };
+                return Err(e.to_string());
+            }
+        };
+
+        let instance = wallet.get_voucher_instance(&updated_instance_id).cloned().unwrap();
+        let result = match self.determine_voucher_status(&instance.voucher, &verified_standard) {
+            Err(fatal_error_msg) => {
+                wallet.update_voucher_status(
+                    &updated_instance_id,
+                    VoucherStatus::Quarantined { reason: fatal_error_msg.clone() },
+                );
+                wallet.save(&mut self.storage, &identity, password).map_err(|e| e.to_string())?;
+                Err(format!("Voucher quarantined due to fatal validation error: {}", fatal_error_msg))
+            }
+            Ok(new_status) => {
+                wallet.update_voucher_status(&updated_instance_id, new_status);
+                wallet.save(&mut self.storage, &identity, password)
+                    .map_err(|e| e.to_string())
+            }
+        };
+
+        self.state = AppState::Unlocked { wallet, identity };
         result
     }
 
@@ -561,9 +591,10 @@ impl AppService {
         password: &str,
     ) -> Result<(), String> {
         match &mut self.state {
-            AppState::Unlocked { identity, .. } => {
-                self.storage.save_arbitrary_data(&identity.user_id, password, name, data).map_err(|e| e.to_string())
-            },
+            AppState::Unlocked { identity, .. } => self
+                .storage
+                .save_arbitrary_data(&identity.user_id, password, name, data)
+                .map_err(|e| e.to_string()),
             AppState::Locked => Err("Wallet is locked.".to_string()),
         }
     }
@@ -591,7 +622,9 @@ impl AppService {
                     .load_arbitrary_data(&identity.user_id, &auth_method, name)
                     .map_err(|e| e.to_string())
             }
-            AppState::Locked => Err("Cannot load data while wallet is locked. Please log in first.".to_string()),
+            AppState::Locked => Err(
+                "Cannot load data while wallet is locked. Please log in first.".to_string(),
+            ),
         }
     }
 }
@@ -599,28 +632,80 @@ impl AppService {
 // --- Interne Hilfsmethoden ---
 
 impl AppService {
+    /// Die zentrale Logik zur Bestimmung des Gutschein-Status.
+    fn determine_voucher_status(
+        &self,
+        voucher: &Voucher,
+        standard: &VoucherStandardDefinition,
+    ) -> Result<VoucherStatus, String> {
+        match crate::services::voucher_validation::validate_voucher_against_standard(
+            voucher, standard,
+        ) {
+            Ok(_) => Ok(VoucherStatus::Active),
+            Err(e) => {
+                if let VoucherCoreError::Validation(validation_error) = e {
+                    let reason = match validation_error {
+                        ValidationError::CountOutOfBounds { ref field, min, found, .. } if field == "guarantor_signatures" => {
+                            Some(ValidationFailureReason::GuarantorCountLow { required: min, current: found as u32 })
+                        }
+                        ValidationError::CountOutOfBounds { ref field, min, found, .. } if field == "guarantor_signatures" => Some(
+                            ValidationFailureReason::GuarantorCountLow {
+                                required: min,
+                                current: found as u32,
+                            },
+                        ),
+                        ValidationError::CountOutOfBounds { ref field, min, found, .. } if field == "additional_signatures" => Some(
+                            ValidationFailureReason::AdditionalSignatureCountLow {
+                                required: min,
+                                current: found as u32,
+                            },
+                        ),
+                        ValidationError::MissingRequiredSignature {
+                            ref role
+                        } => Some(
+                            ValidationFailureReason::RequiredSignatureMissing {
+                                role_description: role.clone(),
+                            },
+                        ),
+                        _ => None,
+                    };
+
+                    if let Some(r) = reason{
+                        Ok(VoucherStatus::Incomplete { reasons: vec![r] })
+                    } else {
+                        Err(validation_error.to_string())
+                    }
+                } else {
+                    Err(e.to_string())
+                }
+            }
+        }
+    }
+
     /// Validiert alle Gutscheine innerhalb eines verschlüsselten Bundles.
-    /// Diese Methode wird aufgerufen, bevor das Bundle an das Wallet zur Verarbeitung übergeben wird.
     fn validate_vouchers_in_bundle(
         &self,
         identity: &UserIdentity,
         bundle_data: &[u8],
         standard_definitions_toml: &HashMap<String, String>,
     ) -> Result<(), String> {
-        // 1. Bundle öffnen, um an die Gutscheine zu kommen.
         let bundle = bundle_processor::open_and_verify_bundle(identity, bundle_data)
             .map_err(|e| e.to_string())?;
 
-        // 2. Jeden Gutschein im Bundle validieren.
         for voucher in &bundle.vouchers {
             let standard_uuid = &voucher.voucher_standard.uuid;
-            let standard_toml = standard_definitions_toml.get(standard_uuid)
-                .ok_or_else(|| format!("Required standard definition for UUID '{}' not provided.", standard_uuid))?;
-            
-            let (verified_standard, _) = crate::services::standard_manager::verify_and_parse_standard(standard_toml)
-                .map_err(|e| e.to_string())?;
+            let standard_toml = standard_definitions_toml.get(standard_uuid).ok_or_else(
+                || format!("Required standard definition for UUID '{}' not provided.", standard_uuid),
+            )?;
 
-            crate::services::voucher_validation::validate_voucher_against_standard(voucher, &verified_standard)
+            let (verified_standard, _) =
+                crate::services::standard_manager::verify_and_parse_standard(standard_toml)
+                    .map_err(|e| e.to_string())?;
+
+            crate::services::voucher_validation::validate_voucher_against_standard(
+                voucher,
+                &verified_standard,
+            )
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -628,11 +713,10 @@ impl AppService {
 }
 
 // --- Interne Hilfsmethoden für Tests ---
-
 impl AppService {
     /// Eine Hilfsmethode nur für Tests, um Zugriff auf die interne Identität zu bekommen.
     #[doc(hidden)]
-    pub fn get_unlocked_mut_for_test(&mut self) -> (&mut Wallet, &UserIdentity) {
+    pub fn get_unlocked_mut_for_test(&mut self) -> (&mut Wallet, &UserIdentity){
         match &mut self.state {
             AppState::Unlocked { wallet, identity } => (wallet, identity),
             _ => panic!("Service must be unlocked for this test helper"),

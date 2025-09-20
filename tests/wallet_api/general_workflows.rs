@@ -18,14 +18,13 @@ use tempfile::tempdir;
 use voucher_lib::{
     app_service::AppService,
     models::{
-        profile::VoucherStatus,
         voucher::{Creator, NominalValue},
         voucher_standard_definition::VoucherStandardDefinition,
     },
     services::voucher_manager::NewVoucherData,
     storage::{file_storage::FileStorage, AuthMethod},
     wallet::Wallet,
-    VoucherCoreError,
+    VoucherCoreError, VoucherStatus,
 };
 
 // --- 1. AppService Workflows ---
@@ -126,7 +125,9 @@ fn api_app_service_full_lifecycle() {
         .receive_bundle(&transfer_bundle, &standards, None, password)
         .expect("Receive failed");
     let balance_bob = service_bob.get_total_balance_by_currency().unwrap();
-    assert_eq!(balance_bob.get("Unzen").unwrap(), "100.0000");
+    // KORREKTUR: Die Bilanz wird jetzt nach der Abkürzung der Währung gruppiert, nicht nach der Einheit.
+    let silver_abbreviation = &SILVER_STANDARD.0.metadata.abbreviation;
+    assert_eq!(balance_bob.get(silver_abbreviation).unwrap(), "100.0000");
 }
 
 /// Testet die statischen Mnemonic-Hilfsfunktionen des `AppService`.
@@ -408,12 +409,12 @@ fn api_wallet_transfer_inactive_voucher() {
             .unwrap();
     let bob_identity = &ACTORS.bob;
 
-    let (_, status) = alice_wallet
+    let instance = alice_wallet
         .voucher_store
         .vouchers
         .get_mut(&voucher_id)
         .unwrap();
-    *status = VoucherStatus::Quarantined;
+    instance.status = VoucherStatus::Quarantined { reason: "test".to_string() };
 
     let result = alice_wallet.create_transfer(
         alice_identity,
@@ -426,9 +427,7 @@ fn api_wallet_transfer_inactive_voucher() {
     );
     assert!(matches!(
         result,
-        Err(VoucherCoreError::VoucherNotActive(
-            VoucherStatus::Quarantined
-        ))
+        Err(VoucherCoreError::VoucherNotActive(VoucherStatus::Quarantined{..}))
     ));
 }
 
@@ -565,26 +564,29 @@ fn api_wallet_query_total_balance() {
                 &identity.signing_key,
                 "en",
             );
+            let local_id = Wallet::calculate_local_instance_id(&voucher, &identity.user_id).unwrap();
             wallet
-                .add_voucher_to_store(voucher, status, &identity.user_id)
-                .unwrap();
+                .add_voucher_instance(local_id, voucher, status);
         };
 
     add_voucher("100", VoucherStatus::Active, minuto_standard);
     add_voucher("50", VoucherStatus::Active, minuto_standard);
-    add_voucher("200", VoucherStatus::Quarantined, minuto_standard); // Ignored
+    add_voucher("200", VoucherStatus::Quarantined { reason: "test".to_string() }, minuto_standard); // Ignored
     add_voucher("1.25", VoucherStatus::Active, silver_standard);
     add_voucher("0.75", VoucherStatus::Active, silver_standard);
 
     let balances = wallet.get_total_balance_by_currency();
 
     assert_eq!(balances.len(), 2, "Two currencies should be present");
+    // KORREKTUR: Die Tests müssen die korrekten Währungs-Abkürzungen aus den Standards verwenden.
+    let minuto_abbreviation = &minuto_standard.metadata.abbreviation;
     let expected_minuto_balance = Decimal::from_str("150").unwrap();
-    let actual_minuto_balance = Decimal::from_str(balances.get("Minuto").unwrap()).unwrap();
+    let actual_minuto_balance = Decimal::from_str(balances.get(minuto_abbreviation).unwrap()).unwrap();
     assert_eq!(actual_minuto_balance, expected_minuto_balance);
 
+    let silver_abbreviation = &silver_standard.metadata.abbreviation;
     let expected_silver_balance = Decimal::from_str("2.00").unwrap();
-    let actual_silver_balance = Decimal::from_str(balances.get("Unzen").unwrap()).unwrap();
+    let actual_silver_balance = Decimal::from_str(balances.get(silver_abbreviation).unwrap()).unwrap();
     assert_eq!(actual_silver_balance, expected_silver_balance);
 }
 

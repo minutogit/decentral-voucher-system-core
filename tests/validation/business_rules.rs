@@ -266,7 +266,12 @@ mod signature_requirements {
             nominal_value: NominalValue { amount: "100".to_string(), ..Default::default() },
             ..Default::default()
         };
-        let result = create_voucher(voucher_data, &standard, &standard_hash, &creator_identity.signing_key, "en");
+        // KORREKTUR: Nach dem Refactoring validiert `create_voucher` nicht mehr selbst.
+        // 1. Wir erwarten, dass die Erstellung des (unvollständigen) Gutscheins erfolgreich ist.
+        let voucher = create_voucher(voucher_data, &standard, &standard_hash, &creator_identity.signing_key, "en").unwrap();
+
+        // 2. Wir validieren den Gutschein in einem separaten Schritt und erwarten hier den Fehler.
+        let result = validate_voucher_against_standard(&voucher, &standard);
         assert!(matches!(
             result.unwrap_err(),
             VoucherCoreError::Validation(ValidationError::MissingRequiredSignature { .. })

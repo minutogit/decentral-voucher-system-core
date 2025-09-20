@@ -37,7 +37,7 @@ mod test_utils;
 use voucher_lib::{
     create_transaction, create_voucher, crypto_utils, from_json, get_spendable_balance,
     to_canonical_json, to_json, validate_voucher_against_standard, Collateral, Creator,
-    NewVoucherData, NominalValue, Transaction, Voucher, VoucherCoreError,
+    NewVoucherData, NominalValue, Transaction, Voucher, VoucherCoreError, VoucherStatus, VoucherInstance,
 };
 use voucher_lib::services::crypto_utils::get_hash;
 use voucher_lib::error::ValidationError;
@@ -61,6 +61,8 @@ fn test_full_creation_and_validation_cycle() {
     let (minuto_standard_with_rounding, standard_hash) = create_custom_standard(&MINUTO_STANDARD.0, |s| {
         s.template.fixed.round_up_validity_to = Some("end_of_year".to_string());
     });
+
+
 
     // 2. Erstellung
     let mut voucher = self::test_utils::create_voucher_for_manipulation(voucher_data, &minuto_standard_with_rounding, &standard_hash, &identity.signing_key, "en");
@@ -803,7 +805,7 @@ fn calculate_local_instance_id(voucher: &Voucher, profile_owner_id: &str) -> Str
     get_hash(combined_string)
 }
 
-use voucher_lib::models::profile::VoucherStatus;
+
 #[test]
 fn test_secure_voucher_transfer_via_encrypted_bundle() {
     // --- 1. SETUP ---
@@ -834,7 +836,11 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     let local_id = calculate_local_instance_id(&voucher, &alice_identity.user_id);
 
     // Alice adds the new voucher to her wallet's store
-    alice_wallet.voucher_store.vouchers.insert(local_id.clone(), (voucher, VoucherStatus::Active));
+    alice_wallet.voucher_store.vouchers.insert(local_id.clone(), VoucherInstance {
+        voucher,
+        status: VoucherStatus::Active,
+        local_instance_id: local_id.clone(),
+    });
     assert!(alice_wallet.voucher_store.vouchers.contains_key(&local_id));
 
     // --- 3. SECURE TRANSFER from Alice to Bob ---
@@ -852,8 +858,8 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
 
     // NACH ÄNDERUNG: Die alte Instanz wird gelöscht. Es sollte nur noch eine neue, archivierte Instanz im Wallet sein.
     assert_eq!(alice_wallet.voucher_store.vouchers.len(), 1, "Alice's wallet should contain exactly one (archived) voucher instance.");
-    let (_, status) = alice_wallet.voucher_store.vouchers.values().next().unwrap();
-    assert_eq!(*status, VoucherStatus::Archived, "The remaining voucher's status should be Archived after sending.");
+    let instance = alice_wallet.voucher_store.vouchers.values().next().unwrap();
+    assert!(matches!(instance.status, VoucherStatus::Archived), "The remaining voucher's status should be Archived after sending.");
     assert_eq!(
         alice_wallet.bundle_meta_store.history.len(),
         1,
@@ -874,7 +880,7 @@ fn test_secure_voucher_transfer_via_encrypted_bundle() {
     );
 
     // Berechne die lokale ID für Bobs Instanz des Gutscheins.
-    let (received_voucher, _) = bob_wallet.voucher_store.vouchers.values().next().unwrap();
+    let received_voucher = &bob_wallet.voucher_store.vouchers.values().next().unwrap().voucher;
     let bob_local_id = calculate_local_instance_id(received_voucher, &bob_identity.user_id);
     assert!(bob_wallet.voucher_store.vouchers.contains_key(&bob_local_id), "Voucher with correct local ID should be in Bob's wallet.");
 

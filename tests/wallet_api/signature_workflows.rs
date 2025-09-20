@@ -19,7 +19,6 @@ use voucher_lib::{
     app_service::AppService,
     error::ValidationError,
     models::{
-        profile::VoucherStatus,
         secure_container::SecureContainer,
         signature::DetachedSignature,
         voucher::{Creator, GuarantorSignature, NominalValue, Voucher},
@@ -29,7 +28,7 @@ use voucher_lib::{
         voucher_manager::NewVoucherData,
         voucher_validation,
     },
-    UserIdentity, VoucherCoreError, Wallet,
+    UserIdentity, VoucherCoreError, Wallet, VoucherStatus, VoucherInstance,
 };
 
 /// Hilfsfunktion, um einen Standard-Gutschein für Tests zu erstellen und
@@ -60,7 +59,11 @@ fn setup_voucher_for_alice(
     alice_wallet
         .voucher_store
         .vouchers
-        .insert(local_id.clone(), (voucher.clone(), VoucherStatus::Active));
+        .insert(local_id.clone(), VoucherInstance {
+            voucher: voucher.clone(),
+            status: VoucherStatus::Active,
+            local_instance_id: local_id.clone(),
+        });
     (voucher, local_id)
 }
 
@@ -124,14 +127,14 @@ fn api_wallet_full_signature_workflow() {
         .process_and_attach_signature(alice_identity, &received_response_bytes)
         .unwrap();
 
-    let (voucher_with_sig, _) = alice_wallet.voucher_store.vouchers.get(&local_id).unwrap();
-    assert_eq!(voucher_with_sig.guarantor_signatures.len(), 1);
+    let instance = alice_wallet.voucher_store.vouchers.get(&local_id).unwrap();
+    assert_eq!(instance.voucher.guarantor_signatures.len(), 1);
     assert_eq!(
-        voucher_with_sig.guarantor_signatures[0].guarantor_id,
+        instance.voucher.guarantor_signatures[0].guarantor_id,
         bob_identity.user_id
     );
     assert!(matches!(
-        voucher_validation::validate_voucher_against_standard(voucher_with_sig, minuto_standard)
+        voucher_validation::validate_voucher_against_standard(&instance.voucher, minuto_standard)
             .unwrap_err(),
         VoucherCoreError::Validation(ValidationError::CountOutOfBounds { .. })
     ));
@@ -367,7 +370,7 @@ fn api_app_service_full_signature_workflow() {
         .unwrap();
 
     service_creator
-        .process_and_attach_signature(&response_bytes, password)
+        .process_and_attach_signature(&response_bytes, &silver_standard_toml, password)
         .unwrap();
 
     let details = service_creator.get_voucher_details(&local_id).unwrap();
@@ -429,10 +432,10 @@ fn api_wallet_signature_roundtrip_minuto_required() {
         .unwrap();
 
     // Assert: Der Gutschein hat jetzt genau eine Signatur von Bob
-    let (final_voucher, _) = alice_wallet.voucher_store.vouchers.get(&voucher_id).unwrap();
-    assert_eq!(final_voucher.guarantor_signatures.len(), 1);
+    let final_instance = alice_wallet.voucher_store.vouchers.get(&voucher_id).unwrap();
+    assert_eq!(final_instance.voucher.guarantor_signatures.len(), 1);
     assert_eq!(
-        final_voucher.guarantor_signatures[0].guarantor_id,
+        final_instance.voucher.guarantor_signatures[0].guarantor_id,
         bob_identity.user_id
     );
 }
@@ -482,6 +485,6 @@ fn api_wallet_signature_roundtrip_silver_optional() {
         .process_and_attach_signature(alice_identity, &response_bytes)
         .unwrap();
 
-    let (final_voucher, _) = alice_wallet.voucher_store.vouchers.get(&voucher_id).unwrap();
-    assert_eq!(final_voucher.guarantor_signatures.len(), 1);
+    let final_instance = alice_wallet.voucher_store.vouchers.get(&voucher_id).unwrap();
+    assert_eq!(final_instance.voucher.guarantor_signatures.len(), 1);
 }
