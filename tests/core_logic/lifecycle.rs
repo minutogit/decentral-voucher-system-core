@@ -7,6 +7,8 @@
 //! von der Erstellung bis zur vollständigen Validierung, und prüft kritische
 //! Sicherheitsaspekte.
 //!
+//! #![feature(test-utils)]
+//!
 //! ## Abgedeckte Szenarien:
 //!
 //! - **Vollständiger Lebenszyklus:**
@@ -31,8 +33,8 @@
 //!   - Toleranz gegenüber unbekannten Feldern für Vorwärtskompatibilität.
 
 // Wir importieren die öffentlichen Typen, die in lib.rs re-exportiert wurden.
-#[path = "../test_utils.rs"]
-mod test_utils;
+
+use voucher_lib::test_utils;
 
 use voucher_lib::{
     create_transaction, create_voucher, crypto_utils, from_json, get_spendable_balance,
@@ -44,7 +46,7 @@ use voucher_lib::error::ValidationError;
 use voucher_lib::services::voucher_manager::VoucherManagerError;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use self::test_utils::{create_custom_standard, setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD};
+use voucher_lib::test_utils::{create_custom_standard, setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD};
 
 // --- HELPER-FUNKTIONEN UND TESTDATEN ---
 
@@ -65,7 +67,7 @@ fn test_full_creation_and_validation_cycle() {
 
 
     // 2. Erstellung
-    let mut voucher = self::test_utils::create_voucher_for_manipulation(voucher_data, &minuto_standard_with_rounding, &standard_hash, &identity.signing_key, "en");
+    let mut voucher = voucher_lib::test_utils::create_voucher_for_manipulation(voucher_data, &minuto_standard_with_rounding, &standard_hash, &identity.signing_key, "en");
     assert!(!voucher.voucher_id.is_empty());
     assert!(!voucher.creator.signature.is_empty());
     // Prüfe die neuen Werte, die aus dem geänderten Standard kommen.
@@ -91,8 +93,8 @@ fn test_full_creation_and_validation_cycle() {
     // 4. Simulation des Bürgenprozesses nach neuer Logik
     let g1 = &ACTORS.guarantor1;
     let g2 = &ACTORS.guarantor2;
-    let guarantor_sig_1 = self::test_utils::create_guarantor_signature(&voucher, g1, "Hans", "1");
-    let guarantor_sig_2 = self::test_utils::create_guarantor_signature(&voucher, g2, "Gabi", "2");
+    let guarantor_sig_1 = voucher_lib::test_utils::create_guarantor_signature(&voucher, g1, "Hans", "1");
+    let guarantor_sig_2 = voucher_lib::test_utils::create_guarantor_signature(&voucher, g2, "Gabi", "2");
 
     voucher.guarantor_signatures.push(guarantor_sig_1);
     voucher.guarantor_signatures.push(guarantor_sig_2);
@@ -111,11 +113,11 @@ fn test_serialization_deserialization() {
     // 1. Erstelle einen Gutschein
     let identity = &ACTORS.issuer;
     let creator = Creator { id: identity.user_id.clone(), ..Default::default() };
-    let voucher_data = self::test_utils::create_minuto_voucher_data(creator);
+    let voucher_data = voucher_lib::test_utils::create_minuto_voucher_data(creator);
 
     let (minuto_standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
 
-    let original_voucher = self::test_utils::create_voucher_for_manipulation(voucher_data, minuto_standard, standard_hash, &identity.signing_key, "en");
+    let original_voucher = voucher_lib::test_utils::create_voucher_for_manipulation(voucher_data, minuto_standard, standard_hash, &identity.signing_key, "en");
 
     // 2. Serialisiere zu JSON
     let json_string = to_json(&original_voucher).unwrap();
@@ -132,18 +134,18 @@ fn test_validation_fails_on_invalid_signature() {
     // 1. Erstelle einen gültigen Gutschein
     let identity = &ACTORS.issuer;
     let creator = Creator { id: identity.user_id.clone(), ..Default::default() };
-    let voucher_data = self::test_utils::create_minuto_voucher_data(creator);
+    let voucher_data = voucher_lib::test_utils::create_minuto_voucher_data(creator);
 
     let (minuto_standard, standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
 
-    let mut voucher = self::test_utils::create_voucher_for_manipulation(voucher_data, minuto_standard, standard_hash, &identity.signing_key, "en");
+    let mut voucher = voucher_lib::test_utils::create_voucher_for_manipulation(voucher_data, minuto_standard, standard_hash, &identity.signing_key, "en");
 
     // Füge die benötigten Bürgen hinzu, um den Gutschein valide zu machen, BEVOR wir ihn manipulieren.
     // Ansonsten würde die Validierung bereits an den fehlenden Bürgen scheitern.
     let g1 = &ACTORS.guarantor1;
     let g2 = &ACTORS.guarantor2;
-    let guarantor_sig_1 = self::test_utils::create_guarantor_signature(&voucher, g1, "Guarantor1", "1");
-    let guarantor_sig_2 = self::test_utils::create_guarantor_signature(&voucher, g2, "Guarantor2", "2");
+    let guarantor_sig_1 = voucher_lib::test_utils::create_guarantor_signature(&voucher, g1, "Guarantor1", "1");
+    let guarantor_sig_2 = voucher_lib::test_utils::create_guarantor_signature(&voucher, g2, "Guarantor2", "2");
     voucher.guarantor_signatures.push(guarantor_sig_1);
     voucher.guarantor_signatures.push(guarantor_sig_2);
     assert!(validate_voucher_against_standard(&voucher, minuto_standard).is_ok());
@@ -165,7 +167,7 @@ fn test_validation_fails_on_invalid_signature() {
 fn test_validation_fails_on_missing_required_field() {
     let identity = &ACTORS.issuer;
     let creator = Creator { id: identity.user_id.clone(), ..Default::default() };
-    let voucher_data = self::test_utils::create_minuto_voucher_data(creator);
+    let voucher_data = voucher_lib::test_utils::create_minuto_voucher_data(creator);
 
     let (minuto_standard, _standard_hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
 
@@ -184,14 +186,14 @@ fn test_validation_fails_on_missing_required_field() {
     standard_to_hash.signature = None;
     let new_hash = get_hash(to_canonical_json(&standard_to_hash).unwrap());
 
-    let mut voucher = self::test_utils::create_voucher_for_manipulation(voucher_data, &standard, &new_hash, &identity.signing_key, "en");
+    let mut voucher = voucher_lib::test_utils::create_voucher_for_manipulation(voucher_data, &standard, &new_hash, &identity.signing_key, "en");
 
     // Füge gültige Bürgen hinzu, damit die Validierung nicht an der Anzahl scheitert,
     // bevor die Inhaltsregel überhaupt geprüft wird.
     let g1 = &ACTORS.guarantor1;
     let g2 = &ACTORS.guarantor2;
-    voucher.guarantor_signatures.push(self::test_utils::create_guarantor_signature(&voucher, g1, "G1", "1"));
-    voucher.guarantor_signatures.push(self::test_utils::create_guarantor_signature(&voucher, g2, "G2", "2"));
+    voucher.guarantor_signatures.push(voucher_lib::test_utils::create_guarantor_signature(&voucher, g1, "G1", "1"));
+    voucher.guarantor_signatures.push(voucher_lib::test_utils::create_guarantor_signature(&voucher, g2, "G2", "2"));
 
     // 4. Validierung sollte mit `PathNotFound` fehlschlagen, da das Feld im Gutschein `None` ist.
     let validation_result = validate_voucher_against_standard(&voucher, &standard);
@@ -207,7 +209,7 @@ fn test_validation_fails_on_inconsistent_unit() {
     // Erstelle einen initial gültigen Gutschein nach dem Silber-Standard.
     let identity = &ACTORS.issuer;
     let creator = Creator { id: identity.user_id.clone(), ..Default::default() };
-    let voucher_data = self::test_utils::create_minuto_voucher_data(creator);
+    let voucher_data = voucher_lib::test_utils::create_minuto_voucher_data(creator);
 
     let (silver_standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
 

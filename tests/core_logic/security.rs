@@ -13,8 +13,8 @@
 //!     - Überprüfung der Robustheit der Validierungslogik (`voucher_validation.rs`).
 //!     - Fuzzing-Tests zur Prüfung der strukturellen Integrität.
 
-#[path = "../test_utils.rs"]
-mod test_utils;
+
+use voucher_lib::test_utils;
 
 // ===================================================================================
 // --- BEGINN: LOCAL DOUBLE SPEND DETECTION TESTS ---
@@ -22,11 +22,10 @@ mod test_utils;
 // ===================================================================================
 
 mod local_double_spend_detection {
-    use super::test_utils;
     use voucher_lib::archive::file_archive::FileVoucherArchive;
     use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat};
     use std::{path::Path};
-    use self::test_utils::{setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
+    use voucher_lib::test_utils::{setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
     use voucher_lib::{services::crypto_utils, UserIdentity, VoucherStatus};
     use voucher_lib::models::conflict::TransactionFingerprint;
     use voucher_lib::models::voucher::{Address, Collateral, Creator, NominalValue, Voucher};

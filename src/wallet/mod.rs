@@ -11,10 +11,14 @@ pub mod instance;
 mod conflict_handler;
 mod queries;
 mod signature_handler;
+// in src/wallet/mod.rs
+// ...
+#[cfg(test)]
+mod tests;
 
 use crate::archive::VoucherArchive;
-use crate::error::VoucherCoreError;
-use crate::wallet::instance::{VoucherInstance, VoucherStatus};
+use crate::error::{ValidationError, VoucherCoreError};
+use crate::wallet::instance::{ValidationFailureReason, VoucherInstance, VoucherStatus};
 use crate::models::conflict::{FingerprintStore, ProofStore};
 use crate::models::profile::{
     BundleMetadataStore, TransactionBundleHeader, TransactionDirection, UserIdentity, UserProfile, VoucherStore,
@@ -24,7 +28,7 @@ use crate::models::voucher::Voucher;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
 use crate::services::crypto_utils::{create_user_id, get_hash};
 use crate::services::utils::to_canonical_json;
-use crate::services::{bundle_processor, conflict_manager, voucher_manager};
+use crate::services::{bundle_processor, conflict_manager, voucher_manager, voucher_validation};
 use crate::storage::{AuthMethod, Storage, StorageError};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -341,27 +345,27 @@ impl Wallet {
         voucher: &Voucher,
         profile_owner_id: &str,
     ) -> Result<String, VoucherCoreError> {
-        let mut ownership_defining_tx_id: Option<String> = None;
+        let mut defining_transaction_id: Option<String> = None;
 
+        // Die definierende Transaktion ist einfach die letzte, in der der Benutzer
+        // als Sender oder Empfänger auftaucht.
         for tx in voucher.transactions.iter().rev() {
-            let is_recipient = tx.recipient_id == profile_owner_id;
-            let is_sender = tx.sender_id == profile_owner_id;
-
-            if is_recipient || is_sender {
-                ownership_defining_tx_id = Some(tx.t_id.clone());
+            if tx.recipient_id == profile_owner_id || tx.sender_id == profile_owner_id {
+                defining_transaction_id = Some(tx.t_id.clone());
                 break;
             }
         }
 
-        match ownership_defining_tx_id {
-            Some(t_id) => Ok(get_hash(format!(
+        if let Some(t_id) = defining_transaction_id {
+            Ok(get_hash(format!(
                 "{}{}{}",
                 voucher.voucher_id, t_id, profile_owner_id
-            ))),
-            None => Err(VoucherCoreError::Generic(format!(
-                "Voucher instance '{}' was never owned by profile holder '{}'.",
-                voucher.voucher_id, profile_owner_id
-            ))),
+            )))
+        } else {
+            Err(VoucherCoreError::VoucherOwnershipNotFound(format!(
+                "User '{}' has no ownership history for voucher '{}'",
+                profile_owner_id, voucher.voucher_id
+            )))
         }
     }
 
@@ -496,7 +500,30 @@ impl Wallet {
             lang_preference,
         )?;
 
-        self.add_voucher_instance(new_voucher.voucher_id.clone(), new_voucher.clone(), VoucherStatus::Active);
+        // KORREKTE LOGIK ZUR ZUSTANDSVERWALTUNG:
+        // 1. Berechne die korrekte lokale ID basierend auf der `init`-Transaktion.
+        let local_id = Self::calculate_local_instance_id(&new_voucher, &identity.user_id)?;
+
+        // 2. Bestimme den initialen Status durch eine sofortige Validierung.
+        let initial_status = match voucher_validation::validate_voucher_against_standard(&new_voucher, verified_standard) {
+            Ok(_) => VoucherStatus::Active,
+            // Wenn Bürgen fehlen, ist der Status `Incomplete`.
+            Err(VoucherCoreError::Validation(ValidationError::CountOutOfBounds { field, min, max, found })) if field == "guarantor_signatures" => {
+                VoucherStatus::Incomplete {
+                    reasons: vec![ValidationFailureReason::GuarantorCountLow {
+                        required: min,
+                        max: max,
+                        current: found as u32,
+                    }],
+                }
+            },
+            // Jeder andere Validierungsfehler bei der Erstellung ist ein fataler Fehler.
+            Err(e) => return Err(e),
+        };
+
+        // 3. Füge die Instanz mit der korrekten ID und dem korrekten Status hinzu.
+        self.add_voucher_instance(local_id, new_voucher.clone(), initial_status);
+
         Ok(new_voucher)
     }
 

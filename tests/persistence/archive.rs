@@ -11,9 +11,8 @@ use std::fs;
 use tempfile::tempdir;
 
 // Lade die Test-Hilfsfunktionen aus dem übergeordneten Verzeichnis.
-#[path = "../test_utils.rs"]
-mod test_utils;
-use self::test_utils::{ACTORS, SILVER_STANDARD};
+
+use voucher_lib::test_utils::{ACTORS, SILVER_STANDARD};
 
 // --- Haupttest ---
 

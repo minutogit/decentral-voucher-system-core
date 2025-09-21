@@ -4,12 +4,10 @@
 //! den Secure Container und allgemeine Krypto-Hilfsfunktionen.
 
 // Explizite Pfadangabe für das `test_utils`-Modul, um Unklarheiten zu vermeiden.
-#[path = "../test_utils.rs"]
-mod test_utils;
+
 
 // --- Tests from test_secure_container.rs ---
-
-use self::test_utils::ACTORS;
+use voucher_lib::test_utils::ACTORS;
 use voucher_lib::models::secure_container::PayloadType;
 use voucher_lib::services::secure_container_manager::{
     create_secure_container, open_secure_container, ContainerManagerError,

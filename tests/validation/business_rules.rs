@@ -9,8 +9,9 @@ use voucher_lib::{
     Transaction, VoucherCoreError,
 };
 use voucher_lib::error::ValidationError;
-#[path = "../test_utils.rs"] mod test_utils;
-use test_utils::{
+use voucher_lib::test_utils;
+
+use voucher_lib::test_utils::{
     create_female_guarantor_signature,
     create_male_guarantor_signature, create_voucher_for_manipulation, resign_transaction, ACTORS,
     MINUTO_STANDARD, SILVER_STANDARD,

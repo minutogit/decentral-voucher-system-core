@@ -16,9 +16,8 @@ use voucher_lib::error::VoucherCoreError;
 use voucher_lib::{AuthMethod, FileStorage, Storage, StorageError, Wallet};
 
 // Lade die Test-Hilfsfunktionen aus dem übergeordneten Verzeichnis.
-#[path = "../test_utils.rs"]
-mod test_utils;
-use self::test_utils::{add_voucher_to_wallet, setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
+
+use voucher_lib::test_utils::{add_voucher_to_wallet, setup_in_memory_wallet, ACTORS, SILVER_STANDARD};
 
 // --- Hilfsfunktionen ---
 fn create_test_voucher(identity: &UserIdentity) -> Voucher {

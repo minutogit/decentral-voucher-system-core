@@ -5,10 +5,9 @@
 //! abgewickelt werden.
 
 // Binde das `test_utils` Modul explizit über seinen Dateipfad ein.
-#[path = "../test_utils.rs"]
-mod test_utils;
 
-use self::test_utils::{
+
+use voucher_lib::test_utils::{
     add_voucher_to_wallet, create_voucher_for_manipulation, generate_signed_standard_toml,
     generate_valid_mnemonic, setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD,
 };

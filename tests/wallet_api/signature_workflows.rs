@@ -5,10 +5,10 @@
 //! Dies umfasst das Anfordern, Erstellen und Anhängen von Signaturen.
 
 // Binde das `test_utils` Modul explizit über seinen Dateipfad ein.
-#[path = "../test_utils.rs"]
-mod test_utils;
 
-use self::test_utils::{
+use voucher_lib::test_utils;
+
+use voucher_lib::test_utils::{
     create_additional_signature_data, create_voucher_for_manipulation, debug_open_container,
     generate_signed_standard_toml, generate_valid_mnemonic, setup_in_memory_wallet, ACTORS,
     add_voucher_to_wallet, MINUTO_STANDARD, SILVER_STANDARD,
@@ -437,6 +437,134 @@ fn api_wallet_signature_roundtrip_minuto_required() {
     assert_eq!(
         final_instance.voucher.guarantor_signatures[0].guarantor_id,
         bob_identity.user_id
+    );
+}
+
+/// Testet den vollständigen Bürgen-Workflow über die `AppService`-Fassade,
+/// insbesondere den Statusübergang von `Incomplete` zu `Active`.
+///
+/// ### Szenario:
+/// 1.  Ein Ersteller und zwei Bürgen werden als separate `AppService`-Instanzen initialisiert.
+/// 2.  Der Ersteller erstellt einen neuen Gutschein nach dem Minuto-Standard, der
+///     zwei Bürgen erfordert.
+/// 3.  **Assertion 1:** Der Gutschein hat initial den Status `Incomplete`.
+/// 4.  Der Ersteller fordert Signaturen von beiden Bürgen an und fügt diese nacheinander an.
+/// 5.  **Assertion 2:** Nach dem Anfügen der ersten Signatur ist der Status immer
+///     noch `Incomplete`, aber mit einer aktualisierten Begründung.
+/// 6.  **Assertion 3:** Nach dem Anfügen der zweiten (und letzten benötigten) Signatur
+///     wechselt der Status des Gutscheins zu `Active`.
+#[test]
+fn test_full_guarantor_workflow_via_app_service() {
+    // --- 1. Setup: Drei separate Benutzer simulieren ---
+    let dir_creator = tempdir().expect("Failed to create temp dir for creator");
+    let dir_g1 = tempdir().expect("Failed to create temp dir for guarantor1");
+    let dir_g2 = tempdir().expect("Failed to create temp dir for guarantor2");
+    let password = "password123";
+
+    let minuto_standard_toml =
+        generate_signed_standard_toml("voucher_standards/minuto_v1/standard.toml");
+
+    // Creator Service
+    let mut service_creator =
+        AppService::new(dir_creator.path()).expect("Failed to create creator service");
+    service_creator
+        .create_profile(&generate_valid_mnemonic(), Some("creator"), password)
+        .expect("Creator profile creation failed");
+    let creator_id = service_creator.get_user_id().unwrap();
+
+    // Guarantor 1 Service
+    let mut service_g1 = AppService::new(dir_g1.path()).expect("Failed to create g1 service");
+    service_g1
+        .create_profile(&generate_valid_mnemonic(), Some("g1"), password)
+        .expect("G1 profile creation failed");
+    let g1_id = service_g1.get_user_id().unwrap();
+
+    // Guarantor 2 Service
+    let mut service_g2 = AppService::new(dir_g2.path()).expect("Failed to create g2 service");
+    service_g2
+        .create_profile(&generate_valid_mnemonic(), Some("g2"), password)
+        .expect("G2 profile creation failed");
+    let g2_id = service_g2.get_user_id().unwrap();
+
+    // --- 2. Schritt 1: Erstellung des unvollständigen Gutscheins ---
+    service_creator
+        .create_new_voucher(
+            &minuto_standard_toml,
+            "en",
+            NewVoucherData {
+                creator: Creator {
+                    id: creator_id,
+                    ..Default::default()
+                },
+                nominal_value: NominalValue {
+                    amount: "60".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            password,
+        )
+        .expect("Voucher creation failed");
+
+    let summary = service_creator.get_voucher_summaries().unwrap().pop().unwrap();
+    let local_id = summary.local_instance_id;
+
+    // --- 3. Assertion 1: Status ist `Incomplete` ---
+    let details_before = service_creator
+        .get_voucher_details(&local_id)
+        .expect("Should find voucher details");
+    assert!(matches!(details_before.status, VoucherStatus::Incomplete { .. }));
+
+    // --- 4. Schritt 2: Simulieren des Signaturprozesses ---
+
+    // --- Signatur von Bürge 1 ---
+    let _request_bundle_1 = service_creator
+        .create_signing_request_bundle(&local_id, &g1_id)
+        .expect("Failed to create signing request for G1");
+    let signature_data_1 = DetachedSignature::Guarantor(GuarantorSignature {
+        voucher_id: details_before.voucher.voucher_id.clone(),
+        gender: "1".to_string(),
+        ..Default::default()
+    });
+    let response_bundle_1 = service_g1
+        .create_detached_signature_response_bundle(
+            &details_before.voucher,
+            signature_data_1,
+            &service_creator.get_user_id().unwrap(),
+        )
+        .expect("Failed to create signature response from G1");
+    service_creator
+        .process_and_attach_signature(&response_bundle_1, &minuto_standard_toml, password)
+        .expect("Failed to attach G1's signature");
+    let details_mid = service_creator.get_voucher_details(&local_id).unwrap();
+    assert!(matches!(details_mid.status, VoucherStatus::Incomplete { .. }));
+
+    // --- Signatur von Bürge 2 ---
+    let _request_bundle_2 = service_creator
+        .create_signing_request_bundle(&local_id, &g2_id)
+        .expect("Failed to create signing request for G2");
+    let signature_data_2 = DetachedSignature::Guarantor(GuarantorSignature {
+        voucher_id: details_mid.voucher.voucher_id.clone(),
+        gender: "2".to_string(),
+        ..Default::default()
+    });
+    let response_bundle_2 = service_g2
+        .create_detached_signature_response_bundle(
+            &details_mid.voucher,
+            signature_data_2,
+            &service_creator.get_user_id().unwrap(),
+        )
+        .expect("Failed to create signature response from G2");
+    service_creator
+        .process_and_attach_signature(&response_bundle_2, &minuto_standard_toml, password)
+        .expect("Failed to attach G2's signature");
+
+    // --- 5. Assertion 3: Überprüfung des finalen `Active`-Zustands ---
+    let details_after = service_creator.get_voucher_details(&local_id).unwrap();
+    assert_eq!(
+        details_after.status,
+        VoucherStatus::Active,
+        "Final voucher status should be Active"
     );
 }
 

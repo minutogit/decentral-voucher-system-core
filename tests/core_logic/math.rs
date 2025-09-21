@@ -18,8 +18,6 @@
 //! - **Vollständiger Transfer:** Korrekte Erstellung einer Transaktion ohne Restbetrag,
 //!   wenn das gesamte Guthaben überwiesen wird.
 
-#[path = "../test_utils.rs"]
-mod test_utils;
 
 use voucher_lib::{
     // Structs from specific modules
@@ -30,7 +28,7 @@ use voucher_lib::{
     NewVoucherData, VoucherCoreError,
 };
 use rust_decimal_macros::dec;
-use self::test_utils::{ACTORS, SILVER_STANDARD};
+use voucher_lib::test_utils::{ACTORS, SILVER_STANDARD};
 
 // --- TESTFÄLLE ---
 

@@ -3,9 +3,9 @@
 //! Enthält alle Tests zur Verifizierung der Gutschein-Standard-Definitionen (TOML),
 //! deren korrekte Integration in den Gutschein und Härtungstests.
 
-#[path = "../test_utils.rs"] mod test_utils;
 
-use test_utils::{generate_signed_standard_toml, setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, TEST_ISSUER, add_voucher_to_wallet, SILVER_STANDARD};
+
+use voucher_lib::test_utils::{generate_signed_standard_toml, setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, TEST_ISSUER, add_voucher_to_wallet, SILVER_STANDARD};
 use voucher_lib::error::StandardDefinitionError;
 use voucher_lib::models::voucher_standard_definition::LocalizedText;
 use voucher_lib::services::standard_manager::{get_localized_text, verify_and_parse_standard};
@@ -129,7 +129,7 @@ mod integration_with_voucher {
             validity_duration: Some("P1Y".to_string()),
             ..Default::default()
         };
-        let voucher_de = test_utils::create_voucher_for_manipulation(
+        let voucher_de = voucher_lib::test_utils::create_voucher_for_manipulation(
             new_voucher_data_de, &MINUTO_STANDARD.0, &MINUTO_STANDARD.1, &ACTORS.alice.signing_key, "de"
         );
 
@@ -139,7 +139,7 @@ mod integration_with_voucher {
             validity_duration: Some("P1Y".to_string()),
             ..Default::default()
         };
-        let voucher_fr = test_utils::create_voucher_for_manipulation(
+        let voucher_fr = voucher_lib::test_utils::create_voucher_for_manipulation(
             new_voucher_data_fr, &MINUTO_STANDARD.0, &MINUTO_STANDARD.1, &ACTORS.alice.signing_key, "fr"
         );
 
@@ -151,7 +151,7 @@ mod integration_with_voucher {
     fn test_create_transaction_when_standard_is_wrong_then_fails() {
         let identity = &ACTORS.alice;
         let mut wallet = setup_in_memory_wallet(identity);
-        add_voucher_to_wallet(&mut wallet, identity, "5", &test_utils::SILVER_STANDARD.0, false).unwrap();
+        add_voucher_to_wallet(&mut wallet, identity, "5", &voucher_lib::test_utils::SILVER_STANDARD.0, false).unwrap();
         let instance = wallet.voucher_store.vouchers.values().next().unwrap().clone();
         let silver_voucher = instance.voucher;
 
@@ -200,7 +200,7 @@ mod security_hardening {
 
     #[test]
     fn test_create_voucher_when_standard_template_is_incomplete_then_fails() {
-        let (incomplete_standard, hash) = test_utils::create_custom_standard(&MINUTO_STANDARD.0, |s| {
+        let (incomplete_standard, hash) = voucher_lib::test_utils::create_custom_standard(&MINUTO_STANDARD.0, |s| {
             s.template.fixed.nominal_value.unit = "".to_string();
         });
         let new_voucher_data = NewVoucherData {

@@ -240,93 +240,97 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 ├── README.md
 ├── sign_standards.sh
 ├── src
-│   ├── app_service
-│   │   └── mod.rs
-│   ├── archive
-│   │   ├── file_archive.rs
-│   │   └── mod.rs
-│   ├── bin
-│   │   └── voucher-cli.rs
-│   ├── error.rs
-│   ├── lib.rs
-│   ├── main.rs
-│   ├── models
-│   │   ├── conflict.rs
-│   │   ├── mod.rs
-│   │   ├── profile.rs
-│   │   ├── readme_de.md
-│   │   ├── secure_container.rs
-│   │   ├── signature.rs
-│   │   ├── voucher.rs
-│   │   └── voucher_standard_definition.rs
-│   ├── services
-│   │   ├── bundle_processor.rs
-│   │   ├── conflict_manager.rs
-│   │   ├── crypto_utils.rs
-│   │   ├── decimal_utils.rs
-│   │   ├── mod.rs
-│   │   ├── secure_container_manager.rs
-│   │   ├── signature_manager.rs
-│   │   ├── standard_manager.rs
-│   │   ├── utils.rs
-│   │   ├── voucher_manager.rs
-│   │   └── voucher_validation.rs
-│   ├── storage
-│   │   ├── file_storage.rs
-│   │   └── mod.rs
-│   └── wallet
-│       ├── conflict_handler.rs
-│       ├── mod.rs
-│       ├── queries.rs
-│       └── signature_handler.rs
+│   ├── app_service
+│   │   └── mod.rs
+│   ├── archive
+│   │   ├── file_archive.rs
+│   │   └── mod.rs
+│   ├── bin
+│   │   ├── validate-standard.rs
+│   │   └── voucher-cli.rs
+│   ├── error.rs
+│   ├── lib.rs
+│   ├── main.rs
+│   ├── models
+│   │   ├── conflict.rs
+│   │   ├── mod.rs
+│   │   ├── profile.rs
+│   │   ├── readme_de.md
+│   │   ├── secure_container.rs
+│   │   ├── signature.rs
+│   │   ├── voucher.rs
+│   │   └── voucher_standard_definition.rs
+│   ├── services
+│   │   ├── bundle_processor.rs
+│   │   ├── conflict_manager.rs
+│   │   ├── crypto_utils.rs
+│   │   ├── decimal_utils.rs
+│   │   ├── mod.rs
+│   │   ├── secure_container_manager.rs
+│   │   ├── signature_manager.rs
+│   │   ├── standard_manager.rs
+│   │   ├── utils.rs
+│   │   ├── voucher_manager.rs
+│   │   └── voucher_validation.rs
+│   ├── storage
+│   │   ├── file_storage.rs
+│   │   └── mod.rs
+│   ├── test_utils.rs
+│   └── wallet
+│       ├── conflict_handler.rs
+│       ├── instance.rs
+│       ├── mod.rs
+│       ├── queries.rs
+│       ├── signature_handler.rs
+│       └── tests.rs
 ├── tests
-│   ├── core_logic
-│   │   ├── lifecycle.rs
-│   │   ├── math.rs
-│   │   ├── mod.rs
-│   │   └── security.rs
-│   ├── core_logic_tests.rs
-│   ├── persistence
-│   │   ├── archive.rs
-│   │   ├── file_storage.rs
-│   │   └── mod.rs
-│   ├── persistence_tests.rs
-│   ├── services
-│   │   ├── crypto.rs
-│   │   ├── mod.rs
-│   │   └── utils.rs
-│   ├── services_tests.rs
-│   ├── test_data
-│   │   └── standards
-│   │       ├── standard_behavior_rules.toml
-│   │       ├── standard_conflicting_rules.toml
-│   │       ├── standard_content_rules.toml
-│   │       ├── standard_field_group_rules.toml
-│   │       ├── standard_no_split.toml
-│   │       ├── standard_path_not_found.toml
-│   │       ├── standard_required_signatures.toml
-│   │       ├── standard_strict_counts.toml
-│   │       └── standard_strict_sig_description.toml
-│   ├── test_utils.rs
-│   ├── validation
-│   │   ├── business_rules.rs
-│   │   ├── forward_compatibility.rs
-│   │   ├── mod.rs
-│   │   ├── standard_definition.rs
-│   │   └── unit_service.rs
-│   ├── validation_tests.rs
-│   ├── wallet_api
-│   │   ├── general_workflows.rs
-│   │   ├── mod.rs
-│   │   └── signature_workflows.rs
-│   └── wallet_api_tests.rs
+│   ├── core_logic
+│   │   ├── lifecycle.rs
+│   │   ├── math.rs
+│   │   ├── mod.rs
+│   │   └── security.rs
+│   ├── core_logic_tests.rs
+│   ├── persistence
+│   │   ├── archive.rs
+│   │   ├── file_storage.rs
+│   │   └── mod.rs
+│   ├── persistence_tests.rs
+│   ├── services
+│   │   ├── crypto.rs
+│   │   ├── mod.rs
+│   │   └── utils.rs
+│   ├── services_tests.rs
+│   ├── test_data
+│   │   └── standards
+│   │       ├── standard_behavior_rules.toml
+│   │       ├── standard_conflicting_rules.toml
+│   │       ├── standard_content_rules.toml
+│   │       ├── standard_field_group_rules.toml
+│   │       ├── standard_no_split.toml
+│   │       ├── standard_path_not_found.toml
+│   │       ├── standard_required_signatures.toml
+│   │       ├── standard_strict_counts.toml
+│   │       └── standard_strict_sig_description.toml
+│   ├── validation
+│   │   ├── business_rules.rs
+│   │   ├── forward_compatibility.rs
+│   │   ├── mod.rs
+│   │   ├── standard_definition.rs
+│   │   └── unit_service.rs
+│   ├── validation_tests.rs
+│   ├── wallet_api
+│   │   ├── general_workflows.rs
+│   │   ├── mod.rs
+│   │   └── signature_workflows.rs
+│   └── wallet_api_tests.rs
+├── validate_standards.sh
 └── voucher_standards
-    ├── minuto_v1
-    │   └── standard.toml
-    ├── readme_de.md
-    ├── silver_v1
-    │   └── standard.toml
-    └── standard_template.toml
+    ├── minuto_v1
+    │   └── standard.toml
+    ├── readme_de.md
+    ├── silver_v1
+    │   └── standard.toml
+    └── standard_template.toml
 ```
 
 ## 7\. Implementierte Kernfunktionen
@@ -406,6 +410,12 @@ Das `wallet`-Modul wurde refaktorisiert, um die Komplexität zu reduzieren und d
   - `pub fn scan_and_update_own_fingerprints(...)`: Scannt das Wallet und aktualisiert den Fingerprint-Store.
   - `pub fn check_for_double_spend(&self) -> DoubleSpendCheckResult`: Prüft auf Double-Spending-Konflikte.
   - `pub fn export_own_fingerprints(...)` & `import_foreign_fingerprints(...)`: Ermöglichen den Austausch von Fingerprints zwischen Wallets.
+- **Voucher Instance Management** (`instance.rs`)
+  - `pub struct VoucherInstance`: Repräsentiert eine Instanz eines Gutscheins mit einem bestimmten Status.
+  - `pub enum VoucherStatus`: Definiert den Status eines Gutscheins (z.B. `Incomplete`, `Active`, `Archived`, `Quarantined`).
+  - `pub fn calculate_local_instance_id(...)`: Berechnet eine deterministische ID für eine Gutscheininstanz.
+- **Tests** (`tests.rs`)
+  - Enthält umfassende Unit-Tests für die Wallet-Logik.
 
 ### `src/storage` Modul (`mod.rs`, `file_storage.rs`)
 

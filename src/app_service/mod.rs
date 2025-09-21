@@ -64,7 +64,6 @@ use crate::wallet::{ProcessBundleResult, VoucherDetails, VoucherSummary, Wallet}
 use bip39::Language;
 use std::collections::HashMap;
 use std::path::Path;
-use uuid::Uuid;
 
 /// Repräsentiert den Kernzustand der Anwendung.
 pub enum AppState {
@@ -339,8 +338,9 @@ impl AppService {
         let result = match self.determine_voucher_status(&new_voucher, &verified_standard) {
             Err(fatal_error_msg) => Err(format!("Internal logic error during voucher creation: {}. The voucher was not saved.", fatal_error_msg)),
             Ok(initial_status) => {
-                let local_id = Uuid::new_v4().to_string();
-                wallet.add_voucher_instance(local_id, new_voucher.clone(), initial_status);
+                // KORREKTUR: Die lokale ID muss deterministisch aus dem Gutschein-Zustand berechnet werden.
+                let local_id = Wallet::calculate_local_instance_id(&new_voucher, &identity.user_id).map_err(|e| e.to_string())?;
+                wallet.add_voucher_instance(local_id.clone(), new_voucher.clone(), initial_status);
                 wallet.save(&mut self.storage, &identity, password)
                     .map(|_| new_voucher)
                     .map_err(|e| e.to_string())
@@ -645,16 +645,15 @@ impl AppService {
             Err(e) => {
                 if let VoucherCoreError::Validation(validation_error) = e {
                     let reason = match validation_error {
-                        ValidationError::CountOutOfBounds { ref field, min, found, .. } if field == "guarantor_signatures" => {
-                            Some(ValidationFailureReason::GuarantorCountLow { required: min, current: found as u32 })
-                        }
-                        ValidationError::CountOutOfBounds { ref field, min, found, .. } if field == "guarantor_signatures" => Some(
+                        // KORREKTUR: `max` wird jetzt erfasst und übergeben. Duplizierter Arm wurde entfernt.
+                        ValidationError::CountOutOfBounds { ref field, min, max, found, .. } if field == "guarantor_signatures" => Some(
                             ValidationFailureReason::GuarantorCountLow {
                                 required: min,
+                                max,
                                 current: found as u32,
                             },
                         ),
-                        ValidationError::CountOutOfBounds { ref field, min, found, .. } if field == "additional_signatures" => Some(
+                        ValidationError::CountOutOfBounds { ref field, min,  found, .. } if field == "additional_signatures" => Some(
                             ValidationFailureReason::AdditionalSignatureCountLow {
                                 required: min,
                                 current: found as u32,

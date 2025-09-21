@@ -4,12 +4,10 @@
 //! wie Datumsberechnungen und die Generierung von lokalen Instanz-IDs.
 
 // Explizite Pfadangabe für das `test_utils`-Modul, um Unklarheiten zu vermeiden.
-#[path = "../test_utils.rs"]
-mod test_utils;
 
 // --- Tests from test_date_utils.rs ---
 
-use self::test_utils::{ACTORS, SILVER_STANDARD};
+use voucher_lib::test_utils::{ACTORS, SILVER_STANDARD};
 use chrono::{DateTime, Utc};
 use voucher_lib::{
     error::ValidationError,
@@ -347,7 +345,7 @@ fn test_local_id_for_non_owner() {
     let result = Wallet::calculate_local_instance_id(&voucher, &non_owner.user_id);
     assert!(result.is_err());
     assert!(
-        matches!(result.unwrap_err(), VoucherCoreError::Generic(msg) if msg.contains("never owned"))
+        matches!(result.unwrap_err(), VoucherCoreError::VoucherOwnershipNotFound(_))
     );
 }
 

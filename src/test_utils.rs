@@ -1,42 +1,45 @@
-//! # tests/test_utils.rs
+//! # src/test_utils.rs
 //!
-//! Hilfsfunktionen für die Integrationstests, um Boilerplate-Code zu reduzieren.
+//! Zentrale Hilfsfunktionen für alle Tests (intern und extern).
+
+// HINWEIS: Absoluter Pfad zu externen Crates für mehr Robustheit
 use lazy_static::lazy_static;
-use bip39::Language;
-use voucher_lib::models::{
-    conflict::{FingerprintStore, ProofStore}, profile::{BundleMetadataStore, UserProfile, VoucherStore},
-};
-use voucher_lib::{UserIdentity};
-use voucher_lib::models::signature::DetachedSignature;
-use voucher_lib::models::voucher::{Address, GuarantorSignature, Voucher};
-use voucher_lib::models::voucher::Collateral;
-use voucher_lib::models::voucher_standard_definition::{SignatureBlock, VoucherStandardDefinition};
-use voucher_lib::services::crypto_utils::{
-    self,
-    create_user_id, generate_ed25519_keypair_for_tests, sign_ed25519,
-};
-use ed25519_dalek::Signer;
-use voucher_lib::services::secure_container_manager;
-use voucher_lib::services::signature_manager;
-use voucher_lib::services::voucher_manager::{create_transaction, create_voucher, NewVoucherData};
-use voucher_lib::wallet::Wallet;
-use voucher_lib::{
-    models::voucher::{Creator, NominalValue, Transaction},
-    VoucherStatus,
-    VoucherCoreError,
-};
-use voucher_lib::services::crypto_utils::get_hash;
-use voucher_lib::services::utils::to_canonical_json;
 use toml;
+use bip39::Language;
+use ed25519_dalek::Signer;
 use std::path::PathBuf;
+
+// HINWEIS: Alle `voucher_lib` Imports wurden zu `crate` geändert.
+use crate::models::{
+    conflict::{FingerprintStore, ProofStore},
+    profile::{BundleMetadataStore, UserProfile, VoucherStore},
+    signature::DetachedSignature,
+    voucher::{
+        Address, Collateral, Creator, GuarantorSignature, NominalValue, Transaction, Voucher,
+    },
+    voucher_standard_definition::{SignatureBlock, VoucherStandardDefinition},
+};
+use crate::services::{
+    crypto_utils::{self, create_user_id, get_hash, generate_ed25519_keypair_for_tests, sign_ed25519},
+    secure_container_manager,
+    signature_manager,
+    utils::to_canonical_json,
+    voucher_manager::{create_transaction, create_voucher, NewVoucherData},
+};
+use crate::wallet::Wallet;
+use crate::{UserIdentity, VoucherCoreError, VoucherStatus, VoucherInstance};
+
 // --- Zentralisierte Akteure und Standards ---
 
 /// Eine private Hilfsfunktion, um eine deterministische UserIdentity aus einem Seed zu erstellen.
 fn identity_from_seed(seed: &str, prefix: &str) -> UserIdentity {
-    let (public_key, signing_key) =
-        generate_ed25519_keypair_for_tests(Some(seed));
+    let (public_key, signing_key) = generate_ed25519_keypair_for_tests(Some(seed));
     let user_id = create_user_id(&public_key, Some(prefix)).unwrap();
-    UserIdentity { signing_key, public_key, user_id }
+    UserIdentity {
+        signing_key,
+        public_key,
+        user_id,
+    }
 }
 
 /// Eine Struktur, die alle für Tests benötigten, einmalig erstellten Identitäten enthält.
@@ -83,30 +86,24 @@ lazy_static! {
     pub static ref TEST_ISSUER: UserIdentity = identity_from_seed("test-issuer-seed-123", "issuer");
 
     /// Lädt den Minuto-Standard und signiert ihn zur Laufzeit für die Tests.
-    /// Das Ergebnis ist immer ein valider Standard mit einer korrekten Signatur.
     pub static ref MINUTO_STANDARD: (VoucherStandardDefinition, String) = {
         let issuer = &TEST_ISSUER;
         let toml_str = include_str!("../voucher_standards/minuto_v1/standard.toml");
 
-        // 1. Parse die TOML in eine Struct, ignoriere die (ungültige) Signatur in der Datei.
         let mut standard: VoucherStandardDefinition = toml::from_str(toml_str)
             .expect("Failed to parse Minuto TOML template for tests");
 
-        // 2. Entferne die Signatur, erstelle den kanonischen Hash für die Signatur.
         standard.signature = None;
         let canonical_json_for_signing = to_canonical_json(&standard)
             .expect("Failed to create canonical JSON for Minuto standard");
         let hash_to_sign = get_hash(canonical_json_for_signing.as_bytes());
 
-        // 3. Erstelle die gültige Signatur mit dem Test-Issuer.
         let signature = sign_ed25519(&issuer.signing_key, hash_to_sign.as_bytes());
         let signature_block = SignatureBlock {
             issuer_id: issuer.user_id.clone(),
             signature: bs58::encode(signature.to_bytes()).into_string(),
         };
         standard.signature = Some(signature_block);
-
-        // 4. Der Konsistenz-Hash, der in Gutscheinen verwendet wird, ist der Hash, der signiert wurde.
         (standard, hash_to_sign)
     };
 
@@ -127,11 +124,10 @@ lazy_static! {
     };
 
     /// Lädt den `required_signatures`-Test-Standard und signiert ihn zur Laufzeit.
-    /// Verwendet `include_str!` für maximale Robustheit in der Testumgebung.
     pub static ref REQUIRED_SIG_STANDARD: (VoucherStandardDefinition, String) = {
         let issuer = &TEST_ISSUER;
-        // Der Pfad ist relativ zur aktuellen Datei (test_utils.rs)
-        let toml_str = include_str!("test_data/standards/standard_required_signatures.toml");
+        // HINWEIS: Pfad wurde angepasst, um von `src/` aus zu funktionieren.
+        let toml_str = include_str!("../tests/test_data/standards/standard_required_signatures.toml");
 
         let mut standard: VoucherStandardDefinition = toml::from_str(toml_str)
             .expect("Failed to parse Required Sig TOML template for tests");
@@ -152,23 +148,18 @@ lazy_static! {
 }
 
 #[allow(dead_code)]
-/// Generiert eine neue, valide 12-Wort BIP39 Mnemonic-Phrase für Tests.
 pub fn generate_valid_mnemonic() -> String {
     crypto_utils::generate_mnemonic(12, Language::English)
         .expect("Test mnemonic generation should not fail")
 }
 
-/// Liest eine Standard-TOML-Datei, ersetzt die Platzhalter-Signatur durch eine
-/// gültige, zur Laufzeit generierte Signatur und gibt den neuen Inhalt als String zurück.
-/// Dies stellt sicher, dass Tests, die rohe TOML-Strings benötigen, eine valide
-/// und verifizierbare Definition erhalten.
 #[allow(dead_code)]
 pub fn generate_signed_standard_toml(template_path: &str) -> String {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let mut absolute_path = PathBuf::from(manifest_dir);
     absolute_path.push(template_path);
 
-    let issuer = &TEST_ISSUER;
+    let issuer = &crate::test_utils::TEST_ISSUER;
     let toml_str = std::fs::read_to_string(&absolute_path)
         .unwrap_or_else(|e| panic!("Failed to read TOML template at '{:?}': {}", absolute_path, e));
 
@@ -190,8 +181,6 @@ pub fn generate_signed_standard_toml(template_path: &str) -> String {
     toml::to_string(&standard).expect("Failed to serialize standard back to TOML string")
 }
 
-/// Hilfsfunktion, um einen Standard zur Laufzeit anzupassen und neu zu signieren.
-/// Ist auf oberster Ebene definiert, damit alle Test-Module sie nutzen können.
 #[allow(dead_code)]
 pub fn create_custom_standard(
     base_standard: &VoucherStandardDefinition,
@@ -204,55 +193,46 @@ pub fn create_custom_standard(
     let canonical_json = to_canonical_json(&standard).unwrap();
     let hash = get_hash(canonical_json.as_bytes());
 
-    let signature = TEST_ISSUER.signing_key.sign(hash.as_bytes());
+    let signature = crate::test_utils::TEST_ISSUER.signing_key.sign(hash.as_bytes());
 
-    standard.signature = Some(voucher_lib::models::voucher_standard_definition::SignatureBlock {
-        issuer_id: TEST_ISSUER.user_id.clone(),
+    standard.signature = Some(crate::models::voucher_standard_definition::SignatureBlock {
+        issuer_id: crate::test_utils::TEST_ISSUER.user_id.clone(),
         signature: bs58::encode(signature.to_bytes()).into_string(),
     });
 
     (standard, hash)
 }
 
-/// Bereitet einen Gutschein mit einer validen ersten Transaktion (einem Split) vor.
 #[allow(dead_code)]
 pub fn setup_voucher_with_one_tx() -> (
     &'static VoucherStandardDefinition,
-    &'static String,
+    String,
     &'static UserIdentity,
     &'static UserIdentity,
     Voucher,
 ) {
-    let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
-    let creator = &ACTORS.alice;
-    let recipient = &ACTORS.bob;
+    let (standard, standard_hash) = (&crate::test_utils::SILVER_STANDARD.0, &crate::test_utils::SILVER_STANDARD.1);
+    let creator = &crate::test_utils::ACTORS.alice;
+    let recipient = &crate::test_utils::ACTORS.bob;
 
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator.user_id.clone(), ..Default::default() },
         nominal_value: NominalValue { amount: "100.0000".to_string(), ..Default::default() },
-        // HINWEIS: Auf P4Y erhöht, um konsistent zu sein und mögliche Fehler mit
-        // anspruchsvolleren Standards (z.B. Minuto) zu vermeiden.
         validity_duration: Some("P4Y".to_string()),
         ..Default::default()
     };
 
     let initial_voucher = create_voucher(voucher_data, standard, standard_hash, &creator.signing_key, "en").unwrap();
 
-    // Erstelle eine valide Split-Transaktion. Creator -> Recipient
-    // Creator hat danach 60.0000, Recipient hat 40.0000
     let voucher_after_tx1 = create_transaction(
         &initial_voucher, standard, &creator.user_id, &creator.signing_key,
         &recipient.user_id, "40.0000",
     )
-    .unwrap();
+        .unwrap();
 
-    (standard, standard_hash, creator, recipient, voucher_after_tx1)
+    (standard, standard_hash.to_string(), creator, recipient, voucher_after_tx1)
 }
-// --- Öffentliche Hilfsfunktionen für Integrationstests ---
 
-
-
-/// Erstellt ein frisches, leeres In-Memory-Wallet für einen gegebenen Akteur.
 #[allow(dead_code)]
 pub fn setup_in_memory_wallet(identity: &UserIdentity) -> Wallet {
     let profile = UserProfile {
@@ -267,13 +247,10 @@ pub fn setup_in_memory_wallet(identity: &UserIdentity) -> Wallet {
     }
 }
 
-/// Erstellt ein neues Test-Wallet aus einem deterministischen Seed.
 #[allow(dead_code)]
 pub fn create_test_wallet(
     seed_phrase_extra: &str,
 ) -> Result<(Wallet, UserIdentity), VoucherCoreError> {
-    // Verwende die dedizierte Test-Funktion, die kein valides Mnemonic-Format benötigt.
-    // Sie erzeugt deterministisch einen Schlüssel aus dem Seed-String.
     let (public_key, signing_key) =
         generate_ed25519_keypair_for_tests(Some(seed_phrase_extra));
     let user_id = create_user_id(&public_key, Some("test"))
@@ -298,7 +275,6 @@ pub fn create_test_wallet(
     Ok((wallet, identity))
 }
 
-/// Erstellt ein Test-Wallet und fügt sofort einen Gutschein mit dem angegebenen Betrag hinzu.
 #[allow(dead_code)]
 pub fn add_voucher_to_wallet(
     wallet: &mut Wallet,
@@ -307,7 +283,6 @@ pub fn add_voucher_to_wallet(
     standard: &VoucherStandardDefinition,
     with_valid_guarantors: bool,
 ) -> Result<String, VoucherCoreError> {
-    // Erstelle die Creator- und NominalValue-Strukturen, die für NewVoucherData benötigt werden.
     let creator_info = Creator {
         id: identity.user_id.clone(),
         first_name: "Test".to_string(),
@@ -324,34 +299,31 @@ pub fn add_voucher_to_wallet(
     let new_voucher_data = NewVoucherData {
         creator: creator_info,
         nominal_value: nominal_value_info,
-        // KORREKTUR: P1Y ist für Standards wie Minuto zu kurz. Erhöht auf P4Y,
-        // um `ValidityDurationTooShort`-Fehler in abhängigen Tests zu vermeiden.
         validity_duration: Some("P4Y".to_string()),
         ..Default::default()
     };
 
-    // Hash für den Aufruf von create_voucher neu berechnen.
     let mut standard_to_hash = standard.clone();
     standard_to_hash.signature = None;
     let standard_hash = get_hash(to_canonical_json(&standard_to_hash)?);
-    
+
     let mut voucher = create_voucher_for_manipulation(new_voucher_data, standard, &standard_hash, &identity.signing_key, "en");
 
     if with_valid_guarantors {
         let sig_data1 =
-            create_guarantor_signature_data(&ACTORS.guarantor1, "1", &voucher.voucher_id);
+            create_guarantor_signature_data(&crate::test_utils::ACTORS.guarantor1, "1", &voucher.voucher_id);
         let sig_data2 =
-            create_guarantor_signature_data(&ACTORS.guarantor2, "2", &voucher.voucher_id);
+            create_guarantor_signature_data(&crate::test_utils::ACTORS.guarantor2, "2", &voucher.voucher_id);
 
         let signed_sig1 = signature_manager::complete_and_sign_detached_signature(
             sig_data1,
             &voucher.voucher_id,
-            &ACTORS.guarantor1,
+            &crate::test_utils::ACTORS.guarantor1,
         )?;
         let signed_sig2 = signature_manager::complete_and_sign_detached_signature(
             sig_data2,
             &voucher.voucher_id,
-            &ACTORS.guarantor2,
+            &crate::test_utils::ACTORS.guarantor2,
         )?;
 
         if let DetachedSignature::Guarantor(s) = signed_sig1 {
@@ -364,13 +336,18 @@ pub fn add_voucher_to_wallet(
 
     let local_id = Wallet::calculate_local_instance_id(&voucher, &identity.user_id)?;
     wallet
-        .add_voucher_instance(local_id.clone(), voucher, VoucherStatus::Active);
+        .voucher_store
+        .vouchers
+        .insert(local_id.clone(), VoucherInstance {
+            voucher: voucher.clone(),
+            status: VoucherStatus::Active,
+            local_instance_id: local_id.clone(),
+        });
+
 
     Ok(local_id.clone())
 }
 
-/// Erstellt die Metadaten für eine Bürgen-Signatur.
-/// Die eigentliche Signatur wird erst von der zu testenden Funktion hinzugefügt.
 pub fn create_guarantor_signature_data(
     guarantor_identity: &UserIdentity,
     gender: &str,
@@ -396,14 +373,13 @@ pub fn create_guarantor_signature_data(
     DetachedSignature::Guarantor(data)
 }
 
-/// Erstellt die Metadaten für eine zusätzliche Signatur (AdditionalSignature).
 #[allow(dead_code)]
 pub fn create_additional_signature_data(
     signer_identity: &UserIdentity,
     voucher_id: &str,
     description: &str,
 ) -> DetachedSignature {
-    let data = voucher_lib::models::voucher::AdditionalSignature {
+    let data = crate::models::voucher::AdditionalSignature {
         voucher_id: voucher_id.to_string(),
         signature_id: String::new(),
         signer_id: signer_identity.user_id.clone(),
@@ -414,13 +390,12 @@ pub fn create_additional_signature_data(
     DetachedSignature::Additional(data)
 }
 
-/// Eine Helferfunktion, um einen SecureContainer für Testzwecke zu öffnen.
 #[allow(dead_code)]
 pub fn debug_open_container(
     container_bytes: &[u8],
     recipient_identity: &UserIdentity,
 ) -> Result<(Voucher, String), VoucherCoreError> {
-    let container: voucher_lib::models::secure_container::SecureContainer =
+    let container: crate::models::secure_container::SecureContainer =
         serde_json::from_slice(container_bytes)?;
     let (payload, _) =
         secure_container_manager::open_secure_container(&container, recipient_identity)?;
@@ -429,12 +404,9 @@ pub fn debug_open_container(
     Ok((voucher, sender_id))
 }
 
-/// Erstellt die Basisdaten für einen Minuto-Gutschein.
 #[allow(dead_code)]
 pub fn create_minuto_voucher_data(creator: Creator) -> NewVoucherData {
     NewVoucherData {
-        // Anstelle von `years_valid` wird nun die ISO 8601-Dauer verwendet.
-        // Wir verwenden P4Y, da dies die neue Mindestanforderung von P3Y erfüllt.
         validity_duration: Some("P4Y".to_string()),
         non_redeemable_test_voucher: true,
         nominal_value: NominalValue {
@@ -455,7 +427,6 @@ pub fn create_minuto_voucher_data(creator: Creator) -> NewVoucherData {
     }
 }
 
-/// Erstellt einen Gutschein ohne die finale Validierung, um Manipulationen zu ermöglichen.
 #[allow(dead_code)]
 pub fn create_voucher_for_manipulation(
     data: NewVoucherData,
@@ -464,28 +435,22 @@ pub fn create_voucher_for_manipulation(
     signing_key: &ed25519_dalek::SigningKey,
     lang_preference: &str,
 ) -> Voucher {
-    // KORREKTUR: Die Funktion muss die übergebene `validity_duration` berücksichtigen,
-    // anstatt einen hartcodierten Wert zu verwenden.
-    let creation_date_str = voucher_lib::services::utils::get_current_timestamp();
+    let creation_date_str = crate::services::utils::get_current_timestamp();
     let creation_dt = chrono::DateTime::parse_from_rfc3339(&creation_date_str).unwrap();
-    // KORREKTUR: Die Panic-Message wurde verbessert, um mehr Kontext zu liefern.
     let duration_str = data.validity_duration.as_deref().unwrap_or_else(|| {
         panic!(
             "Test voucher creation requires a validity_duration. Voucher details: creator='{}', amount='{}'",
             data.creator.id, data.nominal_value.amount
         )
     });
-    let mut valid_until_dt = voucher_lib::services::voucher_manager::add_iso8601_duration(creation_dt.into(), duration_str)
+    let mut valid_until_dt = crate::services::voucher_manager::add_iso8601_duration(creation_dt.into(), duration_str)
         .expect("Failed to calculate validity in test helper");
 
-    // KORREKTUR: Repliziere die Logik zum Aufrunden des Gültigkeitsdatums aus dem voucher_manager.
-    // Dies ist notwendig, damit Tests, die diese Logik prüfen, nicht fehlschlagen.
     if let Some(rule) = &standard.template.fixed.round_up_validity_to {
         if rule == "end_of_year" {
             use chrono::{Datelike, TimeZone};
             let rounded_date = chrono::NaiveDate::from_ymd_opt(valid_until_dt.year(), 12, 31).unwrap();
             let rounded_time = chrono::NaiveTime::from_hms_micro_opt(23, 59, 59, 999_999).unwrap();
-            // KORREKTUR: `from_utc` ist veraltet. Ersetzt durch die empfohlene Methode.
             valid_until_dt = chrono::Utc.from_utc_datetime(&rounded_date.and_time(rounded_time));
         }
     }
@@ -496,32 +461,29 @@ pub fn create_voucher_for_manipulation(
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce_bytes);
     let voucher_nonce = bs58::encode(nonce_bytes).into_string();
 
-    // Korrekte Logik zur Erstellung der Beschreibung (aus voucher_manager kopiert)
-    let description_template = voucher_lib::services::standard_manager::get_localized_text(
+    let description_template = crate::services::standard_manager::get_localized_text(
         &standard.template.fixed.description,
         lang_preference,
     ).unwrap_or("");
     let final_description = description_template.replace("{{amount}}", &data.nominal_value.amount);
 
-    // KORREKTUR: Die Logik aus `voucher_manager::create_voucher` muss hier repliziert werden,
-    // damit die Tests, die diese Hilfsfunktion nutzen, korrekte Gutscheine erstellen.
     let mut final_nominal_value = data.nominal_value;
     final_nominal_value.unit = standard.template.fixed.nominal_value.unit.clone();
     final_nominal_value.abbreviation = standard.metadata.abbreviation.clone();
 
     let final_collateral = if !standard.template.fixed.collateral.type_.is_empty() {
-        voucher_lib::models::voucher::Collateral {
+        crate::models::voucher::Collateral {
             type_: standard.template.fixed.collateral.type_.clone(),
             description: standard.template.fixed.collateral.description.clone(),
             redeem_condition: standard.template.fixed.collateral.redeem_condition.clone(),
             ..data.collateral
         }
     } else {
-        voucher_lib::models::voucher::Collateral::default()
+        crate::models::voucher::Collateral::default()
     };
 
     let mut voucher = Voucher {
-        voucher_standard: voucher_lib::models::voucher::VoucherStandard {
+        voucher_standard: crate::models::voucher::VoucherStandard {
             name: standard.metadata.name.clone(),
             uuid: standard.metadata.uuid.clone(),
             standard_definition_hash: standard_hash.to_string(),
@@ -537,8 +499,6 @@ pub fn create_voucher_for_manipulation(
 
     let mut voucher_to_hash = voucher.clone();
     voucher_to_hash.creator.signature = "".to_string(); voucher_to_hash.voucher_id = "".to_string();
-    // KORREKTUR: Laut Spezifikation müssen für die Signatur des Creator-Blocks
-    // alle Listen für Signaturen und Transaktionen geleert werden.
     voucher_to_hash.transactions.clear();
     voucher_to_hash.guarantor_signatures.clear();
     voucher_to_hash.additional_signatures.clear();
@@ -554,9 +514,6 @@ pub fn create_voucher_for_manipulation(
     voucher
 }
 
-/// **ZENTRALISIERTER HELFER**
-/// Erstellt eine konfigurierbare, gültige Bürgen-Signatur für einen gegebenen Gutschein.
-/// Wird für Tests benötigt, die spezifische Konstellationen (z.B. falsche Zeit) erfordern.
 #[allow(dead_code)]
 pub fn create_guarantor_signature_with_time(
     voucher_id: &str,
@@ -576,9 +533,6 @@ pub fn create_guarantor_signature_with_time(
         ..Default::default()
     };
 
-    // KORREKTUR: Die signature_id muss aus dem Hash eines Objekts berechnet werden,
-    // bei dem die Felder `signature_id` und `signature` geleert sind, um konsistent
-    // mit der Verifizierungslogik zu sein.
     let mut data_for_id_hash = signature_data.clone();
     data_for_id_hash.signature_id = "".to_string();
     data_for_id_hash.signature = "".to_string();
@@ -589,9 +543,6 @@ pub fn create_guarantor_signature_with_time(
     signature_data
 }
 
-/// **KOMPATIBILITÄTS-HELFER**
-/// Stellt die alte, einfache Signatur wieder her, die von den meisten Tests verwendet wird.
-/// Berechnet eine valide Standard-Signaturzeit (Erstellung + 1 Tag).
 #[allow(dead_code)]
 pub fn create_guarantor_signature(
     voucher: &Voucher,
@@ -610,24 +561,20 @@ pub fn create_guarantor_signature(
     )
 }
 
-/// Erstellt eine valide Signatur vom dedizierten männlichen Test-Bürgen.
 #[allow(dead_code)]
 pub fn create_male_guarantor_signature(voucher: &Voucher) -> GuarantorSignature {
     let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date).unwrap();
     let signature_time = (creation_dt + chrono::Duration::days(1)).to_rfc3339();
-    create_guarantor_signature_with_time(&voucher.voucher_id, &ACTORS.male_guarantor, "Martin", "1", &signature_time)
+    create_guarantor_signature_with_time(&voucher.voucher_id, &crate::test_utils::ACTORS.male_guarantor, "Martin", "1", &signature_time)
 }
 
-/// Erstellt eine valide Signatur vom dedizierten weiblichen Test-Bürgen.
 #[allow(dead_code)]
 pub fn create_female_guarantor_signature(voucher: &Voucher) -> GuarantorSignature {
     let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date).unwrap();
     let signature_time = (creation_dt + chrono::Duration::days(2)).to_rfc3339();
-    create_guarantor_signature_with_time(&voucher.voucher_id, &ACTORS.female_guarantor, "Frida", "2", &signature_time)
+    create_guarantor_signature_with_time(&voucher.voucher_id, &crate::test_utils::ACTORS.female_guarantor, "Frida", "2", &signature_time)
 }
 
-/// **ZENTRALISIERTER HELFER**
-/// Helper zum Neuberechnen von t_id und Signatur einer manipulierten Transaktion.
 #[allow(dead_code)]
 pub fn resign_transaction(
     mut tx: Transaction,
@@ -645,28 +592,23 @@ pub fn resign_transaction(
     tx.sender_signature = bs58::encode(
         crypto_utils::sign_ed25519(signer_key, signature_hash.as_bytes()).to_bytes(),
     )
-    .into_string();
+        .into_string();
     tx
 }
-
-// --- Bestehende interne Tests für die `utils`-Services ---
 
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, Datelike, Timelike, Utc};
     use regex::Regex;
-    use voucher_lib::services::utils::{get_current_timestamp, get_timestamp};
+    use crate::services::utils::{get_current_timestamp, get_timestamp};
 
     // Helper function to parse the timestamp string and check basic format
     fn parse_and_validate_format(timestamp_str: &str) -> Result<DateTime<Utc>, String> {
-        // Regex to validate the ISO 8601 format with microseconds and Z suffix
-        // Example: 2023-10-27T10:30:55.123456Z
         let re = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$").unwrap();
         if !re.is_match(timestamp_str) {
             return Err(format!("Timestamp '{}' does not match expected format YYYY-MM-DDTHH:MM:SS.ffffffZ", timestamp_str));
         }
 
-        // Try parsing the timestamp
         DateTime::parse_from_rfc3339(timestamp_str)
             .map(|dt| dt.with_timezone(&Utc))
             .map_err(|e| format!("Failed to parse timestamp '{}': {}", timestamp_str, e))
@@ -690,8 +632,6 @@ mod tests {
         let parsed_dt = parse_and_validate_format(&timestamp).expect("Timestamp should be valid");
 
         assert_eq!(parsed_dt.year(), expected_year, "Year should be incremented correctly");
-        // We can't easily assert the exact day/month/time due to potential leap year adjustments
-        // and the exact moment Utc::now() is called, but we check the year.
     }
 
     #[test]
@@ -709,7 +649,6 @@ mod tests {
         assert_eq!(parsed_dt.hour(), 23, "Hour should be 23");
         assert_eq!(parsed_dt.minute(), 59, "Minute should be 59");
         assert_eq!(parsed_dt.second(), 59, "Second should be 59");
-        // Check for 999_999 microseconds (which corresponds to 999_999_000 nanoseconds)
         assert_eq!(parsed_dt.nanosecond(), 999_999_000, "Nanoseconds should indicate the last microsecond");
     }
 
@@ -732,27 +671,17 @@ mod tests {
         assert_eq!(parsed_dt.nanosecond(), 999_999_000, "Nanoseconds should indicate the last microsecond");
     }
 
-    // --- Tests related to Leap Year Logic ---
-    // NOTE: Directly testing the internal leap year adjustment logic of `get_timestamp`
-    // is difficult because it always starts from `Utc::now()`. We cannot easily force
-    // it to start from Feb 29th without mocking the clock.
-    // However, we can test the `end_of_year` flag in a leap year context and trust
-    // that the underlying `chrono` library handles date calculations correctly,
-    // including the fallback logic implemented in `get_timestamp`.
-
     #[test]
     fn test_get_timestamp_end_of_leap_year() {
         let now = Utc::now();
         let mut years_to_add = 0;
-        // Find the next leap year relative to the current year
         loop {
             let target_year = now.year() + years_to_add;
             if chrono::NaiveDate::from_ymd_opt(target_year, 2, 29).is_some() {
-                break; // Found a leap year
+                break;
             }
             years_to_add += 1;
             if years_to_add > 4 {
-                // Safety break
                 panic!("Could not find a leap year within 4 years for testing");
             }
         }
@@ -766,31 +695,21 @@ mod tests {
         assert_eq!(parsed_dt.year(), leap_year, "Year should be the target leap year");
         assert_eq!(parsed_dt.month(), 12, "Month should be December");
         assert_eq!(parsed_dt.day(), 31, "Day should be 31st");
-        assert_eq!(parsed_dt.hour(), 23, "Hour should be 23");
-        assert_eq!(parsed_dt.minute(), 59, "Minute should be 59");
-        assert_eq!(parsed_dt.second(), 59, "Second should be 59");
-        assert_eq!(parsed_dt.nanosecond(), 999_999_000, "Nanoseconds should indicate the last microsecond");
     }
 
     #[test]
     fn test_get_timestamp_add_years_crossing_leap_day() {
-        // This test demonstrates adding years, but doesn't guarantee crossing Feb 29th
-        // in a specific way due to starting from Utc::now().
-        // It primarily verifies the year increment is correct, even if the target is a leap year.
         let now = Utc::now();
         let mut years_to_add = 0;
-        // Find the next leap year relative to the current year
         loop {
             let target_year = now.year() + years_to_add;
             if chrono::NaiveDate::from_ymd_opt(target_year, 2, 29).is_some() {
                 if years_to_add > 0 {
-                    // Ensure we actually add years
                     break;
                 }
             }
             years_to_add += 1;
             if years_to_add > 4 {
-                // Safety break
                 panic!("Could not find a future leap year within 4 years for testing");
             }
         }
@@ -802,6 +721,5 @@ mod tests {
         let parsed_dt = parse_and_validate_format(&timestamp).expect("Timestamp should be valid");
 
         assert_eq!(parsed_dt.year(), target_leap_year, "Year should be the target leap year");
-        // Further assertions on day/month are unreliable without mocking time.
     }
 }

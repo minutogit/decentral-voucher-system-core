@@ -49,3 +49,7 @@ pub use services::voucher_manager::{
     create_transaction, create_voucher, from_json, get_spendable_balance, to_json, NewVoucherData,
 };
 pub use services::voucher_validation::{validate_voucher_against_standard};
+
+// Macht das Test-Modul für alle Tests (intern und extern) verfügbar.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;

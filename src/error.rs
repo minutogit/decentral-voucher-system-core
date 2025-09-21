@@ -280,6 +280,8 @@ pub enum VoucherCoreError {
     VoucherNotFound(String),
     #[error("Action requires an active voucher, but its status is {0:?}.")]
     VoucherNotActive(VoucherStatus),
+    #[error("Ownership validation failed: {0}")]
+    VoucherOwnershipNotFound(String),
     #[error("Double spend attempt blocked: A transaction has already been issued from this voucher state.")]
     DoubleSpendAttemptBlocked,
     #[error("Base58 decode error: {0}")]
