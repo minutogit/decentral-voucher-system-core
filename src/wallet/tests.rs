@@ -1,6 +1,14 @@
 //! # src/wallet/tests.rs
 //! Enthält die Modul-Tests für die `Wallet`-Struktur. Diese Datei ist
 //! bewusst von `mod.rs` getrennt, um die Lesbarkeit zu verbessern.
+use crate::{
+    test_utils::{
+        self, add_voucher_to_wallet, create_voucher_for_manipulation, setup_in_memory_wallet,
+        ACTORS, MINUTO_STANDARD,
+    },
+    VoucherCoreError, VoucherStatus,
+};
+use chrono::{Duration, Utc};
 
 /// Bündelt die Tests zur Validierung der `local_instance_id`-Logik.
 mod local_instance_id_logic {
@@ -159,5 +167,114 @@ mod local_instance_id_logic {
             result.unwrap_err(),
             VoucherCoreError::VoucherOwnershipNotFound(_)
         ));
+    }
+}
+
+/// Bündelt Tests zur Überprüfung des korrekten Verhaltens von Gutscheinen
+/// in verschiedenen Zuständen (z.B. unter Quarantäne).
+mod instance_state_behavior {
+    use super::*;
+
+    /// **Test 1.2: Verhalten von Quarantined-Gutscheinen**
+    ///
+    /// Stellt sicher, dass Operationen, die einen aktiven Gutschein erfordern,
+    /// für einen unter Quarantäne gestellten Gutschein fehlschlagen.
+    ///
+    /// ### Szenario:
+    /// 1.  Ein Gutschein wird erstellt und manuell auf `Quarantined` gesetzt.
+    /// 2.  Ein Transfer-Versuch wird gestartet.
+    /// 3.  Ein Versuch, eine Signaturanfrage zu erstellen, wird gestartet.
+    ///
+    /// ### Erwartetes Ergebnis:
+    /// -   `create_transfer` schlägt mit `VoucherCoreError::VoucherNotActive` fehl.
+    /// -   `create_signing_request` schlägt mit `VoucherCoreError::VoucherNotReadyForSigning` fehl.
+    #[test]
+    fn test_quarantined_voucher_behavior() {
+        // --- Setup ---
+        let alice = &ACTORS.alice;
+        let mut wallet = setup_in_memory_wallet(alice);
+        let (standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+        let local_id = add_voucher_to_wallet(&mut wallet, alice, "100", standard, true).unwrap();
+
+        // Instanz manuell auf Quarantined setzen
+        let instance = wallet.voucher_store.vouchers.get_mut(&local_id).unwrap();
+        instance.status = VoucherStatus::Quarantined {
+            reason: "Test".to_string(),
+        };
+
+        // --- Aktion & Assertions ---
+
+        // 1. Test create_transfer
+        let transfer_result = wallet.create_transfer(
+            alice,
+            standard,
+            &local_id,
+            &ACTORS.bob.user_id,
+            "50",
+            None,
+            None,
+        );
+        assert!(
+            matches!(transfer_result, Err(VoucherCoreError::VoucherNotActive(VoucherStatus::Quarantined { .. }))),
+            "create_transfer should fail for a quarantined voucher"
+        );
+
+        // 2. Test create_signing_request
+        let signing_request_result = wallet.create_signing_request(
+            alice,
+            &local_id,
+            &ACTORS.guarantor1.user_id,
+            None,
+        );
+        assert!(
+            matches!(signing_request_result, Err(VoucherCoreError::VoucherNotReadyForSigning(VoucherStatus::Quarantined { .. }))),
+            "create_signing_request should fail for a quarantined voucher"
+        );
+    }
+}
+
+/// Bündelt Tests für Wartungsfunktionen wie die Speicherbereinigung.
+mod maintenance_logic {
+    use super::*;
+
+    /// **Test 3.1: Korrektes Löschen abgelaufener, archivierter Instanzen**
+    ///
+    /// Verifiziert, dass `cleanup_storage` nur die archivierten Instanzen entfernt,
+    /// deren Gültigkeit plus Gnadenfrist abgelaufen ist.
+    ///
+    /// ### Szenario:
+    /// 1.  Ein Wallet wird mit zwei archivierten Gutscheinen gefüllt:
+    ///     - Gutschein A: `valid_until` vor 3 Jahren.
+    ///     - Gutschein B: `valid_until` vor 6 Monaten.
+    /// 2.  Die Funktion `cleanup_storage` wird mit einer Gnadenfrist von 1 Jahr aufgerufen.
+    ///
+    /// ### Erwartetes Ergebnis:
+    /// -   Gutschein A wird entfernt, da `valid_until` + 1 Jahr < heute.
+    /// -   Gutschein B verbleibt im Speicher, da `valid_until` + 1 Jahr > heute.
+    #[test]
+    fn test_cleanup_of_expired_archived_instances() {
+        // --- Setup ---
+        let user = &ACTORS.test_user;
+        let mut wallet = setup_in_memory_wallet(user);
+        let (standard, hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
+
+        // Gutschein A (abgelaufen)
+        let mut voucher_a =
+            create_voucher_for_manipulation(Default::default(), standard, hash, &user.signing_key, "en");
+        voucher_a.valid_until = (Utc::now() - Duration::days(365 * 3)).to_rfc3339();
+        let id_a = wallet.add_voucher_instance_for_test(voucher_a, VoucherStatus::Archived);
+
+        // Gutschein B (noch in Gnadenfrist)
+        let mut voucher_b =
+            create_voucher_for_manipulation(Default::default(), standard, hash, &user.signing_key, "en");
+        voucher_b.valid_until = (Utc::now() - Duration::days(180)).to_rfc3339();
+        let id_b = wallet.add_voucher_instance_for_test(voucher_b, VoucherStatus::Archived);
+
+        // --- Aktion ---
+        wallet.cleanup_storage(1).unwrap(); // Gnadenfrist von 1 Jahr
+
+        // --- Assertions ---
+        assert!(!wallet.voucher_store.vouchers.contains_key(&id_a), "Expired voucher A should have been removed");
+        assert!(wallet.voucher_store.vouchers.contains_key(&id_b), "Voucher B within grace period should remain");
     }
 }

@@ -75,6 +75,21 @@ pub struct VoucherSummary {
     pub unit: String,
 }
 
+impl VoucherSummary {
+    /// Erstellt eine `VoucherSummary` für einen archivierten Gutschein.
+    /// Der Betrag wird hierbei korrekt auf 0 gesetzt.
+    fn archived_from_instance(instance: &VoucherInstance) -> Self {
+        Self {
+            local_instance_id: instance.local_instance_id.clone(),
+            status: instance.status.clone(),
+            valid_until: instance.voucher.valid_until.clone(),
+            description: instance.voucher.description.clone(),
+            current_amount: "0.0000".to_string(), // Saldo ist immer 0
+            unit: instance.voucher.nominal_value.abbreviation.clone(),
+        }
+    }
+}
+
 /// Eine detaillierte Ansicht eines Gutscheins inklusive seiner Transaktionshistorie.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoucherDetails {
@@ -259,23 +274,35 @@ impl Wallet {
                                     instance_mut.status = if tx.t_id == verdict.valid_transaction_id {
                                         VoucherStatus::Active
                                     } else {
-                                        VoucherStatus::Quarantined { reason: "L2 verdict".to_string() }
+                                        VoucherStatus::Quarantined {
+                                            reason: "L2 verdict".to_string(),
+                                        }
                                     };
                                 }
                             }
                         }
                     } else {
-                        // Offline "Der Früheste gewinnt"-Logik.
+                        // TODO (Layer 2): Dies ist der Fallback, wenn ein L2-Beweis erstellt wurde,
+                        // aber kein autoritatives Urteil vom Server enthält. Sobald Layer 2
+                        // implementiert ist, wird dieser Zweig seltener genutzt.
                         let mut winner_tx: Option<&crate::models::voucher::Transaction> = None;
                         let mut earliest_time = u128::MAX;
 
-                        for tx in &proof.conflicting_transactions {
+                        // 1. Sammle die Konflikt-Transaktionen aus dem Wallet
+                        let tx_ids: std::collections::HashSet<_> = fingerprints.iter().map(|fp| &fp.t_id).collect();
+                        let conflicting_txs: Vec<_> = self
+                            .voucher_store
+                            .vouchers
+                            .values()
+                            .flat_map(|inst| &inst.voucher.transactions)
+                            .filter(|tx| tx_ids.contains(&tx.t_id))
+                            .collect();
+
+                        // 2. Finde den Gewinner
+                        for tx in &conflicting_txs {
                             if let Some(fp) = fingerprints.iter().find(|f| f.t_id == tx.t_id) {
                                 if let Ok(decrypted_nanos) =
-                                    conflict_manager::decrypt_transaction_timestamp(
-                                        tx,
-                                        fp.encrypted_timestamp,
-                                    )
+                                    conflict_manager::decrypt_transaction_timestamp(tx, fp.encrypted_timestamp)
                                 {
                                     if decrypted_nanos < earliest_time {
                                         earliest_time = decrypted_nanos;
@@ -285,26 +312,27 @@ impl Wallet {
                             }
                         }
 
-                        if let Some(the_winner) = winner_tx {
-                            for tx in &proof.conflicting_transactions {
-                                let instance_id_opt = self.find_local_voucher_by_tx_id(&tx.t_id).map(|i| i.local_instance_id.clone());
-                                if let Some(instance_id) = instance_id_opt {
-                                    if let Some(instance_mut) = self.voucher_store.vouchers.get_mut(&instance_id) {
-                                        instance_mut.status = if tx.t_id == the_winner.t_id {
-                                            VoucherStatus::Active
-                                        } else {
-                                            VoucherStatus::Quarantined {
-                                                reason: "Lost offline race".to_string(),
-                                            }
-                                        }
-                                    }
+                        // 3. Schreib-Phase: Nachdem die unveränderlichen Referenzen in `conflicting_txs`
+                        // nicht mehr benötigt werden, iterieren wir nun veränderlich.
+                        if let Some(winner_id) = winner_tx.map(|tx| tx.t_id.clone()) {
+                            for instance in self.voucher_store.vouchers.values_mut() {
+                                if let Some(tx) = instance.voucher.transactions.iter().find(|tx| tx_ids.contains(&tx.t_id)) {
+                                    instance.status = if tx.t_id == winner_id {
+                                        VoucherStatus::Active
+                                    } else {
+                                        VoucherStatus::Quarantined { reason: "Lost offline race".to_string() }
+                                    };
                                 }
                             }
                         }
                     }
-
                     self.proof_store.proofs.insert(proof.proof_id.clone(), proof);
                 }
+            } else {
+                // KORREKTUR: Dieser `else`-Block fehlte. Er stellt sicher, dass die Offline-Logik auch
+                // dann greift, wenn kein Layer-2-Backend (`archive`) konfiguriert ist.
+                // Die Logik ist identisch zum korrigierten Fallback von oben.
+                resolve_conflict_offline(&mut self.voucher_store, fingerprints);
             }
         }
 
@@ -562,5 +590,45 @@ impl Wallet {
             .vouchers
             .values()
             .find(|instance| instance.voucher.transactions.iter().any(|tx| tx.t_id == tx_id) )
+    }
+}
+
+/// Gekapselte Offline-Konfliktlösung via "Earliest Wins"-Heuristik.
+fn resolve_conflict_offline(
+    voucher_store: &mut VoucherStore,
+    fingerprints: &[crate::models::conflict::TransactionFingerprint],
+) {
+    let tx_ids: std::collections::HashSet<_> = fingerprints.iter().map(|fp| &fp.t_id).collect();
+
+    // --- 1. Lese-Phase: Finde den Gewinner, ohne den Store zu verändern ---
+    let conflicting_txs: Vec<_> = voucher_store.vouchers.values().flat_map(|inst| &inst.voucher.transactions).filter(|tx| tx_ids.contains(&tx.t_id)).collect();
+
+    let mut winner_tx: Option<&crate::models::voucher::Transaction> = None;
+    let mut earliest_time = u128::MAX;
+
+    for tx in &conflicting_txs {
+        if let Some(fp) = fingerprints.iter().find(|f| f.t_id == tx.t_id) {
+            if let Ok(decrypted_nanos) = conflict_manager::decrypt_transaction_timestamp(tx, fp.encrypted_timestamp) {
+                if decrypted_nanos < earliest_time {
+                    earliest_time = decrypted_nanos;
+                    winner_tx = Some(tx);
+                }
+            }
+        }
+    }
+
+    // --- 2. Schreib-Phase: Aktualisiere den Status basierend auf der Gewinner-ID ---
+    // Die `conflicting_txs`-Liste ist nun nicht mehr im Scope, die unveränderliche Ausleihe ist beendet.
+    if let Some(winner_id) = winner_tx.map(|tx| tx.t_id.clone()) {
+        for instance in voucher_store.vouchers.values_mut() {
+            // Finde heraus, ob diese Instanz eine der Konflikt-Transaktionen enthält.
+            if let Some(tx) = instance.voucher.transactions.iter().find(|tx| tx_ids.contains(&tx.t_id)) {
+                instance.status = if tx.t_id == winner_id {
+                    VoucherStatus::Active
+                } else {
+                    VoucherStatus::Quarantined { reason: "Lost offline race".to_string() }
+                };
+            }
+        }
     }
 }

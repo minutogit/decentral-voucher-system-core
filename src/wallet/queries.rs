@@ -24,6 +24,12 @@ impl Wallet {
             .vouchers
             .iter()
             .map(|(local_id, instance)| {
+                // KORREKTUR: Ein archivierter Gutschein ist vollständig ausgegeben. Sein
+                // Saldo für den Besitzer ist immer 0, unabhängig vom Transaktionsbetrag.
+                if matches!(instance.status, VoucherStatus::Archived) {
+                    return VoucherSummary::archived_from_instance(instance);
+                }
+
                 // Der aktuelle Betrag steht in der letzten Transaktion.
                 // Bei einem Split ist es `sender_remaining_amount`, sonst `amount`.
                 let voucher = &instance.voucher;

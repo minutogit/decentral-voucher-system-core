@@ -15,11 +15,12 @@ use crate::models::{
     profile::{BundleMetadataStore, UserProfile, VoucherStore},
     signature::DetachedSignature,
     voucher::{
-        Address, Collateral, Creator, GuarantorSignature, NominalValue, Transaction, Voucher,
+        Address, Collateral, Creator, GuarantorSignature, NominalValue, Transaction,
     },
     voucher_standard_definition::{SignatureBlock, VoucherStandardDefinition},
 };
 use crate::services::{
+    bundle_processor,
     crypto_utils::{self, create_user_id, get_hash, generate_ed25519_keypair_for_tests, sign_ed25519},
     secure_container_manager,
     signature_manager,
@@ -27,7 +28,7 @@ use crate::services::{
     voucher_manager::{create_transaction, create_voucher, NewVoucherData},
 };
 use crate::wallet::Wallet;
-use crate::{UserIdentity, VoucherCoreError, VoucherStatus, VoucherInstance};
+use crate::{models::voucher::Voucher, UserIdentity, VoucherCoreError, VoucherInstance, VoucherStatus};
 
 // --- Zentralisierte Akteure und Standards ---
 
@@ -594,6 +595,22 @@ pub fn resign_transaction(
     )
         .into_string();
     tx
+}
+
+#[allow(dead_code)]
+pub fn create_test_bundle(
+    sender_identity: &UserIdentity,
+    vouchers: Vec<Voucher>,
+    recipient_id: &str,
+    message: Option<&str>,
+) -> Result<Vec<u8>, VoucherCoreError> {
+    let result = bundle_processor::create_and_encrypt_bundle(
+        sender_identity,
+        vouchers,
+        recipient_id,
+        message.map(|s| s.to_string()),
+    )?;
+    Ok(result.0)
 }
 
 #[cfg(test)]

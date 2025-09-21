@@ -673,20 +673,3 @@ fn api_wallet_rejects_invalid_bundle() {
     );
 }
 
-/// Testet die reaktive Double-Spend-Erkennung via "Earliest Wins"-Heuristik.
-///
-/// ### Szenario:
-/// 1.  Ein Wallet empfängt zwei widersprüchliche Gutschein-Versionen, die
-///     einen Double-Spend darstellen.
-/// 2.  Das Wallet wendet die "Earliest Wins"-Regel an.
-/// 3.  Der Zweig mit dem früheren Zeitstempel bleibt `Active`.
-/// 4.  Der Zweig mit dem späteren Zeitstempel wird auf `Quarantined` gesetzt.
-#[test]
-#[ignore] // TODO: Helfer zum Erzeugen von Konflikt-Bundles implementieren.
-fn api_wallet_reactive_double_spend_earliest_wins() {
-    // Dieser Test erfordert eine komplexe Vorbereitung, bei der zwei konkurrierende
-    // Transaktionszweige erstellt und in separate Bundles verpackt werden.
-    // Die Wallet-Methode `process_encrypted_transaction_bundle` muss dann so
-    // aufgerufen werden, dass der Konflikt erkannt und behandelt wird.
-    println!("TODO: Implement api_wallet_reactive_double_spend_earliest_wins");
-}
