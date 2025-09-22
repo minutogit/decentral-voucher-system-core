@@ -19,18 +19,19 @@ mod tests;
 use crate::archive::VoucherArchive;
 use crate::error::{ValidationError, VoucherCoreError};
 use crate::wallet::instance::{ValidationFailureReason, VoucherInstance, VoucherStatus};
-use crate::models::conflict::{FingerprintStore, ProofStore};
+use crate::models::conflict::{FingerprintStore, ProofStore, TransactionFingerprint};
 use crate::models::profile::{
     BundleMetadataStore, TransactionBundleHeader, TransactionDirection, UserIdentity, UserProfile, VoucherStore,
 };
 use crate::models::secure_container::{PayloadType, SecureContainer};
-use crate::models::voucher::Voucher;
+use crate::models::voucher::{Transaction, Voucher};
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
-use crate::services::crypto_utils::{create_user_id, get_hash};
+use crate::services::crypto_utils::{create_user_id, get_hash, get_pubkey_from_user_id, verify_ed25519};
 use crate::services::utils::to_canonical_json;
 use crate::services::{bundle_processor, conflict_manager, voucher_manager, voucher_validation};
 use crate::storage::{AuthMethod, Storage, StorageError};
 use chrono::{DateTime, Duration, Utc};
+use ed25519_dalek::Signature;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::services::voucher_manager::NewVoucherData;
@@ -88,6 +89,17 @@ impl VoucherSummary {
             unit: instance.voucher.nominal_value.abbreviation.clone(),
         }
     }
+}
+
+/// Eine zusammenfassende Ansicht eines Double-Spend-Beweises für Listen-Darstellungen.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProofOfDoubleSpendSummary {
+    pub proof_id: String,
+    pub offender_id: String,
+    pub fork_point_prev_hash: String,
+    pub report_timestamp: String,
+    pub is_resolved: bool,
+    pub has_l2_verdict: bool,
 }
 
 /// Eine detaillierte Ansicht eines Gutscheins inklusive seiner Transaktionshistorie.
@@ -257,16 +269,15 @@ impl Wallet {
         }
         let check_result = conflict_manager::check_for_double_spend(&self.fingerprint_store);
 
-        for (conflict_hash, fingerprints) in &check_result.verifiable_conflicts {
+        for (_conflict_hash, fingerprints) in &check_result.verifiable_conflicts {
             if let Some(archive_backend) = archive {
-                if let Some(proof) = conflict_manager::verify_conflict_and_create_proof(
-                    &self.voucher_store,
-                    identity,
-                    conflict_hash,
-                    fingerprints,
-                    archive_backend,
-                )? {
+                // Die Logik zum Verifizieren und Erstellen von Beweisen ist nun hier im Wallet.
+                let verified_proof = self.verify_and_create_proof(identity, fingerprints, archive_backend)?;
+
+                if let Some(proof) = verified_proof {
+                    // Der Beweis wurde erfolgreich erstellt und kann nun verwendet werden.
                     if let Some(verdict) = &proof.layer2_verdict {
+                        // Logik zur Verarbeitung eines L2-Urteils
                         for tx in &proof.conflicting_transactions {
                             let instance_id_opt = self.find_local_voucher_by_tx_id(&tx.t_id).map(|i| i.local_instance_id.clone());
                             if let Some(instance_id) = instance_id_opt {
@@ -282,56 +293,15 @@ impl Wallet {
                             }
                         }
                     } else {
-                        // TODO (Layer 2): Dies ist der Fallback, wenn ein L2-Beweis erstellt wurde,
-                        // aber kein autoritatives Urteil vom Server enthält. Sobald Layer 2
-                        // implementiert ist, wird dieser Zweig seltener genutzt.
-                        let mut winner_tx: Option<&crate::models::voucher::Transaction> = None;
-                        let mut earliest_time = u128::MAX;
-
-                        // 1. Sammle die Konflikt-Transaktionen aus dem Wallet
-                        let tx_ids: std::collections::HashSet<_> = fingerprints.iter().map(|fp| &fp.t_id).collect();
-                        let conflicting_txs: Vec<_> = self
-                            .voucher_store
-                            .vouchers
-                            .values()
-                            .flat_map(|inst| &inst.voucher.transactions)
-                            .filter(|tx| tx_ids.contains(&tx.t_id))
-                            .collect();
-
-                        // 2. Finde den Gewinner
-                        for tx in &conflicting_txs {
-                            if let Some(fp) = fingerprints.iter().find(|f| f.t_id == tx.t_id) {
-                                if let Ok(decrypted_nanos) =
-                                    conflict_manager::decrypt_transaction_timestamp(tx, fp.encrypted_timestamp)
-                                {
-                                    if decrypted_nanos < earliest_time {
-                                        earliest_time = decrypted_nanos;
-                                        winner_tx = Some(tx);
-                                    }
-                                }
-                            }
-                        }
-
-                        // 3. Schreib-Phase: Nachdem die unveränderlichen Referenzen in `conflicting_txs`
-                        // nicht mehr benötigt werden, iterieren wir nun veränderlich.
-                        if let Some(winner_id) = winner_tx.map(|tx| tx.t_id.clone()) {
-                            for instance in self.voucher_store.vouchers.values_mut() {
-                                if let Some(tx) = instance.voucher.transactions.iter().find(|tx| tx_ids.contains(&tx.t_id)) {
-                                    instance.status = if tx.t_id == winner_id {
-                                        VoucherStatus::Active
-                                    } else {
-                                        VoucherStatus::Quarantined { reason: "Lost offline race".to_string() }
-                                    };
-                                }
-                            }
-                        }
+                        // Offline-Konfliktlösung, wenn kein L2-Urteil vorliegt
+                        resolve_conflict_offline(&mut self.voucher_store, fingerprints);
                     }
+                    // WICHTIG: Den erstellten Beweis persistent speichern.
                     self.proof_store.proofs.insert(proof.proof_id.clone(), proof);
                 }
             } else {
                 // KORREKTUR: Dieser `else`-Block fehlte. Er stellt sicher, dass die Offline-Logik auch
                 // dann greift, wenn kein Layer-2-Backend (`archive`) konfiguriert ist.
-                // Die Logik ist identisch zum korrigierten Fallback von oben.
                 resolve_conflict_offline(&mut self.voucher_store, fingerprints);
             }
         }
@@ -340,6 +310,70 @@ impl Wallet {
             header,
             check_result,
         })
+    }
+
+    /// Verifiziert einen Konflikt und erstellt einen Beweis. Interne Methode.
+    fn verify_and_create_proof(
+        &self,
+        identity: &UserIdentity,
+        fingerprints: &[TransactionFingerprint],
+        archive: &dyn VoucherArchive,
+    ) -> Result<Option<crate::models::conflict::ProofOfDoubleSpend>, VoucherCoreError> {
+        let mut conflicting_transactions = Vec::new();
+
+        // 1. Finde die vollständigen Transaktionen zu den Fingerprints.
+        for fp in fingerprints {
+            if let Some(tx) = self.find_transaction_in_stores(&fp.t_id, archive)? {
+                conflicting_transactions.push(tx);
+            }
+        }
+
+        if conflicting_transactions.len() < 2 {
+            return Ok(None);
+        }
+
+        // 2. Extrahiere Kerndaten und verifiziere Signaturen.
+        let offender_id = conflicting_transactions[0].sender_id.clone();
+        let fork_point_prev_hash = conflicting_transactions[0].prev_hash.clone();
+        let offender_pubkey = get_pubkey_from_user_id(&offender_id)?;
+
+        let mut verified_tx_count = 0;
+        for tx in &conflicting_transactions {
+            if tx.sender_id != offender_id || tx.prev_hash != fork_point_prev_hash {
+                return Ok(None);
+            }
+
+            let signature_payload = serde_json::json!({
+                "prev_hash": &tx.prev_hash, "sender_id": &tx.sender_id, "t_id": &tx.t_id
+            });
+            let signature_payload_hash = get_hash(to_canonical_json(&signature_payload)?);
+            let signature_bytes = bs58::decode(&tx.sender_signature).into_vec()?;
+            let signature = Signature::from_slice(&signature_bytes)?;
+
+            if verify_ed25519(&offender_pubkey, signature_payload_hash.as_bytes(), &signature) {
+                verified_tx_count += 1;
+            }
+        }
+
+        // 3. Wenn mindestens zwei Signaturen gültig sind, ist der Betrug bewiesen.
+        if verified_tx_count < 2 {
+            return Ok(None);
+        }
+
+        let voucher = self.find_voucher_for_transaction(&conflicting_transactions[0].t_id, archive)?
+            .ok_or_else(|| VoucherCoreError::VoucherNotFound("for proof creation".to_string()))?;
+        let voucher_valid_until = voucher.valid_until.clone();
+
+        // 4. Rufe den Service auf, um das Beweis-Objekt zu erstellen.
+        let proof = conflict_manager::create_proof_of_double_spend(
+            offender_id,
+            fork_point_prev_hash,
+            conflicting_transactions,
+            voucher_valid_until,
+            identity,
+        )?;
+
+        Ok(Some(proof))
     }
 
     pub fn add_voucher_instance(
@@ -415,7 +449,7 @@ impl Wallet {
             .ok_or(VoucherCoreError::VoucherNotFound(
                 local_instance_id.to_string(),
             ))?;
-        
+
         if !matches!(instance.status, VoucherStatus::Active) {
             return Err(VoucherCoreError::VoucherNotActive(instance.status.clone()));
         }
@@ -461,10 +495,10 @@ impl Wallet {
                     // Es ist ein voller Transfer, die Kopie des Senders wird archiviert.
                     (VoucherStatus::Archived, &identity.user_id)
                 };
-            
+
             // 3. Ein neuer Zustand bekommt IMMER eine neue lokale ID.
             let new_local_id = Self::calculate_local_instance_id(&new_voucher_state, owner_id)?;
-            
+
             // 4. Füge die neue Instanz mit der NEUEN ID und dem korrekten Status hinzu.
             self.add_voucher_instance(
                 new_local_id,
@@ -582,6 +616,43 @@ impl Wallet {
             }
             true
         });
+    }
+
+    /// Sucht eine Transaktion anhand ihrer ID (`t_id`) zuerst im aktiven
+    /// `voucher_store` und dann im `VoucherArchive`.
+    fn find_transaction_in_stores(
+        &self,
+        t_id: &str,
+        archive: &dyn VoucherArchive,
+    ) -> Result<Option<Transaction>, VoucherCoreError> {
+        // Zuerst im aktiven Store suchen
+        for instance in self.voucher_store.vouchers.values() {
+            if let Some(tx) = instance.voucher.transactions.iter().find(|t| t.t_id == t_id) {
+                return Ok(Some(tx.clone()));
+            }
+        }
+
+        // Danach im Archiv suchen
+        let result = archive.find_transaction_by_id(t_id)?;
+        Ok(result.map(|(_, tx)| tx))
+    }
+
+    /// Sucht einen Gutschein anhand einer enthaltenen Transaktions-ID (`t_id`).
+    /// Durchsucht zuerst den aktiven `voucher_store` und dann das `VoucherArchive`.
+    fn find_voucher_for_transaction(
+        &self,
+        t_id: &str,
+        archive: &dyn VoucherArchive,
+    ) -> Result<Option<Voucher>, VoucherCoreError> {
+        // Zuerst im aktiven Store suchen
+        for instance in self.voucher_store.vouchers.values() {
+            if instance.voucher.transactions.iter().any(|t| t.t_id == t_id) {
+                return Ok(Some(instance.voucher.clone()));
+            }
+        }
+
+        // Danach im Archiv suchen
+        Ok(archive.find_voucher_by_tx_id(t_id)?)
     }
 
     /// Findet die lokale ID und den Status eines Gutscheins anhand einer enthaltenen Transaktions-ID.

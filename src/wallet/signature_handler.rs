@@ -40,6 +40,13 @@ impl Wallet {
                 local_instance_id.to_string(),
             ))?;
 
+        // BUGFIX: Füge die fehlende Status-Prüfung hinzu. Eine Signaturanfrage ist
+        // nur für aktive oder unvollständige Gutscheine sinnvoll.
+        if !matches!(instance.status, VoucherStatus::Active | VoucherStatus::Incomplete { .. }) {
+            return Err(VoucherCoreError::VoucherNotActive(
+                instance.status.clone(),
+            ));
+        }
         let payload = to_canonical_json(&instance.voucher)?;
 
         let container = crate::services::secure_container_manager::create_secure_container(

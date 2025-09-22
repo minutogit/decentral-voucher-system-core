@@ -5,16 +5,14 @@
 //! Datenstrukturen des Wallets, ist aber von der `Wallet`-Fassade entkoppelt.
 
 use std::collections::HashMap;
-use ed25519_dalek::Signature;
 
-use crate::archive::VoucherArchive;
 use crate::error::VoucherCoreError;
 use crate::models::conflict::{
-    FingerprintStore, ProofOfDoubleSpend, TransactionFingerprint,
+    FingerprintStore, ProofOfDoubleSpend, ResolutionEndorsement, TransactionFingerprint,
 };
 use crate::models::profile::{UserIdentity, VoucherStore};
 use crate::models::voucher::{Transaction, Voucher};
-use crate::services::crypto_utils::{get_hash, get_pubkey_from_user_id, sign_ed25519, verify_ed25519};
+use crate::services::crypto_utils::{get_hash, sign_ed25519};
 use crate::services::utils::{get_current_timestamp, to_canonical_json};
 use crate::wallet::DoubleSpendCheckResult;
 use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat};
@@ -110,93 +108,32 @@ pub fn check_for_double_spend(fingerprint_store: &FingerprintStore) -> DoubleSpe
     result
 }
 
-/// Verifiziert einen Double-Spend-Konflikt kryptographisch und erstellt bei Erfolg einen
-/// fälschungssicheren, portablen Beweis (`ProofOfDoubleSpend`).
+/// Erstellt einen fälschungssicheren, portablen Beweis (`ProofOfDoubleSpend`).
 ///
-/// Diese Funktion ist der Kern der Betrugsaufdeckung. Sie führt folgende Schritte aus:
-/// 1. Sucht die vollständigen Transaktionsobjekte, die zu den widersprüchlichen
-///    Fingerprints gehören, sowohl im aktiven `VoucherStore` als auch im `VoucherArchive`.
-/// 2. Rekonstruiert für jede gefundene Transaktion die Nachricht, die signiert wurde.
-/// 3. Verifiziert die `sender_signature` jeder Transaktion gegen den Public Key des Senders.
-/// 4. Wenn mindestens zwei gültig signierte, aber widersprüchliche Transaktionen gefunden
-///    wurden, ist der Betrug bewiesen.
-/// 5. Erstellt, signiert und gibt das `ProofOfDoubleSpend`-Objekt zurück.
-/// 6. Setzt als letzte Konsequenz alle lokalen Gutschein-Instanzen, die von diesem Betrug
-///    betroffen sind, unter Quarantäne.
+/// Diese Funktion ist rein für die Erstellung des Beweis-Objekts zuständig.
+/// Sie erhält alle notwendigen, bereits validierten Daten und signiert sie.
+/// Die deterministische `proof_id` wird hier generiert.
 ///
 /// # Arguments
-/// * `voucher_store` - Der veränderbare Gutscheinspeicher des Wallets.
-/// * `identity` - Die Identität des Wallet-Besitzers, der den Beweis erstellt (Reporter).
-/// * `conflict_hash` - Der `prvhash_senderid_hash`, der den Konflikt markiert.
-/// * `fingerprints` - Die Liste der widersprüchlichen Fingerprints.
-/// * `archive` - Eine Referenz auf das `VoucherArchive` für die Suche nach alten Transaktionen.
+/// * `offender_id` - Die ID des Verursachers.
+/// * `fork_point_prev_hash` - Der `prev_hash`, an dem die Transaktionen abzweigen.
+/// * `conflicting_transactions` - Die bereits verifizierten, widersprüchlichen Transaktionen.
+/// * `voucher_valid_until` - Das Gültigkeitsdatum des betroffenen Gutscheins.
+/// * `reporter_identity` - Die Identität des Wallet-Besitzers, der den Beweis erstellt.
 ///
 /// # Returns
-/// Ein `Result`, das bei Erfolg ein `Option<ProofOfDoubleSpend>` enthält.
-/// - `Some(proof)`: Der Betrug wurde bewiesen.
-/// - `None`: Es konnte kein Beweis erbracht werden (z.B. weil Transaktionen nicht
-///   gefunden wurden oder Signaturen ungültig waren).
-pub fn verify_conflict_and_create_proof(
-    voucher_store: &VoucherStore,
-    identity: &UserIdentity,
-    _conflict_hash: &str,
-    fingerprints: &[TransactionFingerprint],
-    archive: &dyn VoucherArchive,
-) -> Result<Option<ProofOfDoubleSpend>, VoucherCoreError> {
-    let mut conflicting_transactions = Vec::new();
-
-    // 1. Finde die vollständigen Transaktionen zu den Fingerprints.
-    for fp in fingerprints {
-        if let Some(tx) = find_transaction_in_stores(voucher_store, &fp.t_id, archive)? {
-            conflicting_transactions.push(tx);
-        }
-    }
-
-    // Wir brauchen mindestens zwei Transaktionen, um einen Beweis zu führen.
-    if conflicting_transactions.len() < 2 {
-        return Ok(None);
-    }
-
-    // 2. Extrahiere Kerndaten und verifiziere Signaturen.
-    let offender_id = conflicting_transactions[0].sender_id.clone();
-    let fork_point_prev_hash = conflicting_transactions[0].prev_hash.clone();
-    let offender_pubkey = get_pubkey_from_user_id(&offender_id)?;
-
-    let mut verified_tx_count = 0;
-    for tx in &conflicting_transactions {
-        // Sicherheitsprüfung: Alle müssen vom selben Sender und prev_hash stammen.
-        if tx.sender_id != offender_id || tx.prev_hash != fork_point_prev_hash {
-            return Ok(None); // Daten sind inkonsistent, kein gültiger Beweis.
-        }
-
-        let signature_payload = serde_json::json!({
-            "prev_hash": &tx.prev_hash, "sender_id": &tx.sender_id,
-            "t_id": &tx.t_id
-        });
-        let signature_payload_hash = get_hash(to_canonical_json(&signature_payload)?);
-        let signature_bytes = bs58::decode(&tx.sender_signature).into_vec()?;
-        let signature = Signature::from_slice(&signature_bytes)?;
-
-        if verify_ed25519(&offender_pubkey, signature_payload_hash.as_bytes(), &signature) {
-            verified_tx_count += 1;
-        }
-    }
-
-    // 3. Wenn mindestens zwei Signaturen gültig sind, ist der Betrug bewiesen.
-    if verified_tx_count < 2 {
-        return Ok(None);
-    }
-
-    // Finde den zugehörigen Gutschein, um `valid_until` zu bekommen.
-    let voucher = find_voucher_for_transaction(voucher_store, &conflicting_transactions[0].t_id, archive)?
-        .ok_or_else(|| {
-            VoucherCoreError::VoucherNotFound("for proof creation".to_string())
-        })?;
-    let voucher_valid_until = voucher.valid_until.clone();
-
-    // 4. Beweis-Objekt erstellen und signieren.
+/// Ein `Result`, das bei Erfolg das erstellte `ProofOfDoubleSpend`-Objekt enthält.
+pub fn create_proof_of_double_spend(
+    offender_id: String,
+    fork_point_prev_hash: String,
+    conflicting_transactions: Vec<Transaction>,
+    voucher_valid_until: String,
+    reporter_identity: &UserIdentity,
+) -> Result<ProofOfDoubleSpend, VoucherCoreError> {
+    // 1. Beweis-Objekt erstellen und signieren.
     let proof_id = get_hash(format!("{}{}", offender_id, fork_point_prev_hash));
-    let reporter_signature = sign_ed25519(&identity.signing_key, proof_id.as_bytes());
+    let reporter_signature_bytes = sign_ed25519(&reporter_identity.signing_key, proof_id.as_bytes());
+    let reporter_signature = bs58::encode(reporter_signature_bytes.to_bytes()).into_string();
 
     let proof = ProofOfDoubleSpend {
         proof_id,
@@ -204,51 +141,55 @@ pub fn verify_conflict_and_create_proof(
         fork_point_prev_hash,
         conflicting_transactions,
         voucher_valid_until,
-        reporter_id: identity.user_id.clone(),
+        reporter_id: reporter_identity.user_id.clone(),
         report_timestamp: get_current_timestamp(),
-        reporter_signature: bs58::encode(reporter_signature.to_bytes()).into_string(),
+        reporter_signature,
         resolutions: None,
         layer2_verdict: None,
     };
 
-    Ok(Some(proof))
+    Ok(proof)
 }
 
-/// Sucht eine Transaktion anhand ihrer ID (`t_id`) zuerst im aktiven
-/// `voucher_store` und dann im `VoucherArchive`.
-fn find_transaction_in_stores(
-    voucher_store: &VoucherStore,
-    t_id: &str,
-    archive: &dyn VoucherArchive,
-) -> Result<Option<Transaction>, VoucherCoreError> {
-    // Zuerst im aktiven Store suchen
-    for instance in voucher_store.vouchers.values() {
-        if let Some(tx) = instance.voucher.transactions.iter().find(|t| t.t_id == t_id) {
-            return Ok(Some(tx.clone()));
-        }
-    }
+/// Erstellt und signiert eine Beilegungserklärung (`ResolutionEndorsement`) für einen
+/// bestehenden Konfliktbeweis.
+///
+/// # Arguments
+/// * `proof_id` - Die ID des `ProofOfDoubleSpend`, der beigelegt wird.
+/// * `victim_identity` - Die Identität des Opfers, das die Beilegung bestätigt.
+/// * `notes` - Eine optionale, menschenlesbare Notiz.
+///
+/// # Returns
+/// Ein `Result`, das die signierte `ResolutionEndorsement` enthält.
+pub fn create_and_sign_resolution_endorsement(
+    proof_id: &str,
+    victim_identity: &UserIdentity,
+    notes: Option<String>,
+) -> Result<ResolutionEndorsement, VoucherCoreError> {
+    let resolution_timestamp = get_current_timestamp();
 
-    // Danach im Archiv suchen
-    let result = archive.find_transaction_by_id(t_id)?;
-    Ok(result.map(|(_, tx)| tx))
-}
+    // 1. Temporäres Objekt für Hashing erstellen (ohne ID und Signatur)
+    let endorsement_data = serde_json::json!({
+        "proof_id": proof_id,
+        "victim_id": victim_identity.user_id,
+        "resolution_timestamp": resolution_timestamp,
+        "notes": notes
+    });
 
-/// Sucht einen Gutschein anhand einer enthaltenen Transaktions-ID (`t_id`).
-/// Durchsucht zuerst den aktiven `voucher_store` und dann das `VoucherArchive`.
-fn find_voucher_for_transaction(
-    voucher_store: &VoucherStore,
-    t_id: &str,
-    archive: &dyn VoucherArchive,
-) -> Result<Option<Voucher>, VoucherCoreError> {
-    // Zuerst im aktiven Store suchen
-    for instance in voucher_store.vouchers.values() {
-        if instance.voucher.transactions.iter().any(|t| t.t_id == t_id) {
-            return Ok(Some(instance.voucher.clone()));
-        }
-    }
+    // 2. ID und Signatur erzeugen
+    let endorsement_id = get_hash(to_canonical_json(&endorsement_data)?);
+    let signature_bytes = sign_ed25519(&victim_identity.signing_key, endorsement_id.as_bytes());
+    let victim_signature = bs58::encode(signature_bytes.to_bytes()).into_string();
 
-    // Danach im Archiv suchen
-    Ok(archive.find_voucher_by_tx_id(t_id)?)
+    // 3. Finales Objekt zusammenbauen
+    Ok(ResolutionEndorsement {
+        endorsement_id,
+        proof_id: proof_id.to_string(),
+        victim_id: victim_identity.user_id.clone(),
+        resolution_timestamp,
+        notes,
+        victim_signature,
+    })
 }
 
 /// Entfernt alle abgelaufenen Fingerprints aus dem Speicher.

@@ -71,7 +71,7 @@ pub fn to_json(voucher: &Voucher) -> Result<String, VoucherCoreError> {
 }
 
 /// Eine Hilfsstruktur, die alle notwendigen Daten zur Erstellung eines neuen Gutscheins bündelt.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct NewVoucherData {
     pub validity_duration: Option<String>,
     pub non_redeemable_test_voucher: bool,

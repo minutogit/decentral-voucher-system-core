@@ -3,7 +3,7 @@
 //! bewusst von `mod.rs` getrennt, um die Lesbarkeit zu verbessern.
 use crate::{
     test_utils::{
-        self, add_voucher_to_wallet, create_voucher_for_manipulation, setup_in_memory_wallet,
+        add_voucher_to_wallet, create_voucher_for_manipulation, setup_in_memory_wallet,
         ACTORS, MINUTO_STANDARD,
     },
     VoucherCoreError, VoucherStatus,
@@ -224,10 +224,9 @@ mod instance_state_behavior {
             alice,
             &local_id,
             &ACTORS.guarantor1.user_id,
-            None,
         );
         assert!(
-            matches!(signing_request_result, Err(VoucherCoreError::VoucherNotReadyForSigning(VoucherStatus::Quarantined { .. }))),
+            matches!(signing_request_result, Err(VoucherCoreError::VoucherNotActive(VoucherStatus::Quarantined { .. }))),
             "create_signing_request should fail for a quarantined voucher"
         );
     }
@@ -236,6 +235,8 @@ mod instance_state_behavior {
 /// Bündelt Tests für Wartungsfunktionen wie die Speicherbereinigung.
 mod maintenance_logic {
     use super::*;
+    use crate::wallet::Wallet;
+    use crate::models::voucher::Creator;
 
     /// **Test 3.1: Korrektes Löschen abgelaufener, archivierter Instanzen**
     ///
@@ -258,20 +259,33 @@ mod maintenance_logic {
         let mut wallet = setup_in_memory_wallet(user);
         let (standard, hash) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
 
+        // Fix: Erstelle eine gültige Datenvorlage, die von der Hilfsfunktion akzeptiert wird.
+        let voucher_data = crate::services::voucher_manager::NewVoucherData {
+            validity_duration: Some("P1Y".to_string()),
+            // FIX: Setze den Creator explizit, damit die Ownership-Prüfung erfolgreich ist.
+            creator: Creator {
+                id: user.user_id.clone(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
         // Gutschein A (abgelaufen)
         let mut voucher_a =
-            create_voucher_for_manipulation(Default::default(), standard, hash, &user.signing_key, "en");
+            create_voucher_for_manipulation(voucher_data.clone(), standard, hash, &user.signing_key, "en");
         voucher_a.valid_until = (Utc::now() - Duration::days(365 * 3)).to_rfc3339();
-        let id_a = wallet.add_voucher_instance_for_test(voucher_a, VoucherStatus::Archived);
+        let id_a = Wallet::calculate_local_instance_id(&voucher_a, &user.user_id).unwrap();
+        wallet.add_voucher_instance(id_a.clone(), voucher_a, VoucherStatus::Archived);
 
         // Gutschein B (noch in Gnadenfrist)
         let mut voucher_b =
-            create_voucher_for_manipulation(Default::default(), standard, hash, &user.signing_key, "en");
+            create_voucher_for_manipulation(voucher_data, standard, hash, &user.signing_key, "en");
         voucher_b.valid_until = (Utc::now() - Duration::days(180)).to_rfc3339();
-        let id_b = wallet.add_voucher_instance_for_test(voucher_b, VoucherStatus::Archived);
+        let id_b = Wallet::calculate_local_instance_id(&voucher_b, &user.user_id).unwrap();
+        wallet.add_voucher_instance(id_b.clone(), voucher_b, VoucherStatus::Archived);
 
         // --- Aktion ---
-        wallet.cleanup_storage(1).unwrap(); // Gnadenfrist von 1 Jahr
+        wallet.cleanup_storage(1); // Gnadenfrist von 1 Jahr
 
         // --- Assertions ---
         assert!(!wallet.voucher_store.vouchers.contains_key(&id_a), "Expired voucher A should have been removed");

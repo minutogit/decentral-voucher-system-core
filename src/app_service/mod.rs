@@ -52,6 +52,7 @@
 
 use crate::archive::VoucherArchive;
 use crate::error::{ValidationError, VoucherCoreError};
+use crate::models::conflict::{ProofOfDoubleSpend, ResolutionEndorsement};
 use crate::models::profile::UserIdentity;
 use crate::models::signature::DetachedSignature;
 use crate::models::voucher::Voucher;
@@ -60,7 +61,7 @@ use crate::services::bundle_processor;
 use crate::services::voucher_manager::NewVoucherData;
 use crate::storage::{file_storage::FileStorage, AuthMethod, Storage};
 use crate::wallet::instance::{ValidationFailureReason, VoucherStatus};
-use crate::wallet::{ProcessBundleResult, VoucherDetails, VoucherSummary, Wallet};
+use crate::wallet::{ProcessBundleResult, ProofOfDoubleSpendSummary, VoucherDetails, VoucherSummary, Wallet};
 use bip39::Language;
 use std::collections::HashMap;
 use std::path::Path;
@@ -286,6 +287,51 @@ impl AppService {
         Ok(self.get_wallet()?.get_user_id().to_string())
     }
 
+    // --- Konflikt-Management ---
+
+    /// Gibt eine Liste von Zusammenfassungen aller bekannten Double-Spend-Konflikte zurück.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt (`Locked`) ist.
+    pub fn list_conflicts(&self) -> Result<Vec<ProofOfDoubleSpendSummary>, String> {
+        Ok(self.get_wallet()?.list_conflicts())
+    }
+
+    /// Ruft einen vollständigen `ProofOfDoubleSpend` anhand seiner ID ab.
+    ///
+    /// Ideal, um die Details eines Konflikts anzuzeigen oder ihn für den
+    /// manuellen Austausch zu exportieren.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt ist oder kein Beweis mit dieser ID existiert.
+    pub fn get_proof_of_double_spend(&self, proof_id: &str) -> Result<ProofOfDoubleSpend, String> {
+        self.get_wallet()?
+            .get_proof_of_double_spend(proof_id)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Erstellt eine signierte Beilegungserklärung (`ResolutionEndorsement`) für einen Konflikt.
+    ///
+    /// Diese Operation verändert den Wallet-Zustand nicht. Sie erzeugt ein
+    /// signiertes Objekt, das an andere Parteien gesendet werden kann, um zu
+    /// signalisieren, dass der Konflikt aus Sicht des Wallet-Inhabers (des Opfers)
+    /// gelöst wurde.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt ist oder der referenzierte Beweis nicht existiert.
+    pub fn create_resolution_endorsement(
+        &self,
+        proof_id: &str,
+        notes: Option<String>,
+    ) -> Result<ResolutionEndorsement, String> {
+        match &self.state {
+            AppState::Unlocked { wallet, identity } => wallet
+                .create_resolution_endorsement(identity, proof_id, notes)
+                .map_err(|e| e.to_string()),
+            AppState::Locked => Err("Wallet is locked.".to_string()),
+        }
+    }
+
     // --- Aktionen (Commands) ---
 
     /// Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand.
@@ -450,6 +496,42 @@ impl AppService {
                             Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
                         }
                     }
+                }
+            }
+            AppState::Locked => (Err("Wallet is locked.".to_string()), AppState::Locked),
+        };
+        self.state = new_state;
+        result
+    }
+
+    /// Importiert eine Beilegungserklärung und fügt sie dem entsprechenden Konfliktbeweis hinzu.
+    ///
+    /// Diese Operation verändert den Wallet-Zustand und speichert ihn bei Erfolg automatisch.
+    ///
+    /// # Arguments
+    /// * `endorsement` - Die empfangene `ResolutionEndorsement`.
+    /// * `password` - Das Passwort, um den aktualisierten Wallet-Zustand zu speichern.
+    ///
+    /// # Errors
+    /// Schlägt fehl, wenn das Wallet gesperrt ist, der zugehörige Beweis nicht
+    /// gefunden wird oder der Speicherzugriff misslingt.
+    pub fn import_resolution_endorsement(
+        &mut self,
+        endorsement: ResolutionEndorsement,
+        password: &str,
+    ) -> Result<(), String> {
+        let current_state = std::mem::replace(&mut self.state, AppState::Locked);
+        let (result, new_state) = match current_state {
+            AppState::Unlocked { mut wallet, identity } => {
+                match wallet.add_resolution_endorsement(endorsement) {
+                    Ok(_) => {
+                        if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
+                            (Err(e.to_string()), AppState::Unlocked { wallet, identity })
+                        } else {
+                            (Ok(()), AppState::Unlocked { wallet, identity })
+                        }
+                    }
+                    Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
                 }
             }
             AppState::Locked => (Err("Wallet is locked.".to_string()), AppState::Locked),
