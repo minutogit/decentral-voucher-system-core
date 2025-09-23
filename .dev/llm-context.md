@@ -241,7 +241,13 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 ├── sign_standards.sh
 ├── src
 │   ├── app_service
-│   │   └── mod.rs
+│   │   ├── command_handler.rs
+│   │   ├── conflict_handler.rs
+│   │   ├── data_encryption.rs
+│   │   ├── lifecycle.rs
+│   │   ├── mod.rs
+│   │   ├── queries.rs
+│   │   └── signature_handler.rs
 │   ├── archive
 │   │   ├── file_archive.rs
 │   │   └── mod.rs
@@ -321,7 +327,8 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   ├── wallet_api
 │   │   ├── general_workflows.rs
 │   │   ├── mod.rs
-│   │   └── signature_workflows.rs
+│   │   ├── signature_workflows.rs
+│   │   └── state_management.rs
 │   └── wallet_api_tests.rs
 ├── validate_standards.sh
 └── voucher_standards
