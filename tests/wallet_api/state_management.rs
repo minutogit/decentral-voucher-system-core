@@ -3,16 +3,17 @@
 //! Enthält Integrationstests für komplexes State-Management und die
 //! Handhabung von Konflikten wie Double-Spending.
 
-use voucher_lib::test_utils::{
-    create_test_bundle, generate_signed_standard_toml, generate_valid_mnemonic, resign_transaction,
-    ACTORS, SILVER_STANDARD,
-};
-use voucher_lib::models::voucher::Transaction;
-use voucher_lib::services::utils;
 use voucher_lib::{
     app_service::AppService,
-    models::voucher::{Creator, NominalValue},
+    models::{
+        conflict::{ProofOfDoubleSpend, ResolutionEndorsement},
+        voucher::{Creator, NominalValue},
+    },
     services::{crypto_utils, voucher_manager::NewVoucherData},
+    test_utils::{
+        create_test_bundle, generate_signed_standard_toml, generate_valid_mnemonic,
+        resign_transaction, ACTORS, SILVER_STANDARD,
+    },
     VoucherStatus,
 };
 
@@ -20,6 +21,148 @@ use chrono::DateTime;
 use chrono::{Duration, Utc};
 use std::collections::HashMap;
 use tempfile::tempdir;
+use voucher_lib::{models::voucher::Transaction, services::utils};
+
+/// Lokale Test-Hilfsfunktion, um einen mock `ProofOfDoubleSpend` zu erzeugen.
+fn create_mock_proof_of_double_spend(
+    offender_id: &str,
+    victim_id: &str,
+    resolutions: Option<Vec<ResolutionEndorsement>>,
+    verdict: Option<voucher_lib::models::conflict::Layer2Verdict>,
+) -> ProofOfDoubleSpend {
+    // FIX: Struct-Literal komplett überarbeitet, um den korrekten Feldern aus der
+    // Compiler-Fehlermeldung zu entsprechen.
+    ProofOfDoubleSpend {
+        proof_id: crypto_utils::get_hash(offender_id), // Dummy-ID für den Test
+        offender_id: offender_id.to_string(),
+        // FIX: Dies ist ein Vec<Transaction>, kein eigener Struct.
+        conflicting_transactions: vec![Transaction::default(), Transaction::default()],
+        // FIX: `reporter_id` ist keine Option und wird hier gesetzt.
+        reporter_id: victim_id.to_string(),
+        resolutions,
+        layer2_verdict: verdict,
+        fork_point_prev_hash: "dummy_hash".to_string(),
+        // FIX: Fehlendes Pflichtfeld hinzugefügt.
+        voucher_valid_until: (Utc::now() + Duration::days(365)).to_rfc3339(),
+        report_timestamp: Utc::now().to_rfc3339(),
+        reporter_signature: "dummy_sig".to_string(),
+    }
+}
+
+/// Test 5.1: Testet den vollständigen "Happy Path" der Konfliktlösung über den AppService.
+///
+/// ### Szenario:
+/// 1.  Zwei `AppService`-Instanzen (`reporter`, `victim`) werden initialisiert und eingeloggt.
+/// 2.  Dem `reporter`-Wallet wird manuell ein `ProofOfDoubleSpend` hinzugefügt.
+/// 3.  Der `reporter` listet den Konflikt und verifiziert, dass er ungelöst ist.
+/// 4.  Das `victim` erstellt eine signierte `ResolutionEndorsement`.
+/// 5.  Der `reporter` importiert diese Beilegung erfolgreich.
+/// 6.  Eine *dritte* `AppService`-Instanz wird mit den Daten des Reporters erstellt,
+///     um zu prüfen, ob die Änderung korrekt auf die Festplatte geschrieben wurde.
+///     Nach dem Login wird der Konflikt als gelöst (`is_resolved: true`) angezeigt.
+#[test]
+fn api_app_service_full_conflict_resolution_workflow() {
+    // --- 1. Setup ---
+    let dir_reporter = tempdir().unwrap();
+    let dir_victim = tempdir().unwrap();
+    let password = "conflict-password";
+
+    // Reporter-Service
+    let mut service_reporter = AppService::new(dir_reporter.path()).unwrap();
+    service_reporter
+        .create_profile(&generate_valid_mnemonic(), Some("reporter"), password)
+        .unwrap();
+    // FIX: Unbenutzte Variable markieren
+    let _id_reporter = service_reporter.get_user_id().unwrap();
+
+    // Victim-Service
+    let mut service_victim = AppService::new(dir_victim.path()).unwrap();
+    service_victim
+        .create_profile(&generate_valid_mnemonic(), Some("victim"), password)
+        .unwrap();
+    let id_victim = service_victim.get_user_id().unwrap();
+
+    // --- 2. Beweis im Reporter-Wallet anlegen ---
+    let proof = create_mock_proof_of_double_spend("offender-xyz", &id_victim, None, None);
+    let proof_id = proof.proof_id.clone();
+
+    // Test-interne Hilfsfunktion, um den Beweis direkt in den Store zu legen.
+    let (wallet, _identity) = service_reporter.get_unlocked_mut_for_test();
+    wallet.proof_store.proofs.insert(proof.proof_id.clone(), proof);
+    // Der manuelle `save`-Aufruf hier ist nicht nötig und führt zu Borrowing-Fehlern.
+    // Der Zustand wird in-memory modifiziert, was für die nächsten Schritte ausreicht.
+    // Der `import_resolution_endorsement`-Aufruf speichert den Zustand später korrekt.
+
+    // --- 3. Aktion 1 (Reporter): Konflikt als ungelöst listen ---
+    let conflicts_before = service_reporter.list_conflicts().unwrap();
+    assert_eq!(conflicts_before.len(), 1);
+    assert_eq!(conflicts_before[0].is_resolved, false);
+
+    // --- 4. Aktion 2 (Opfer): Beilegung erstellen ---
+    // Das Opfer muss den Beweis auch kennen, um ihn zu unterzeichnen.
+    let (wallet_victim, _identity_victim) = service_victim.get_unlocked_mut_for_test();
+    let proof_for_victim = create_mock_proof_of_double_spend("offender-xyz", &id_victim, None, None);
+    wallet_victim
+        .proof_store.proofs
+        .insert(proof_for_victim.proof_id.clone(), proof_for_victim);
+
+    let endorsement = service_victim
+        .create_resolution_endorsement(&proof_id, Some("We settled this.".to_string()))
+        .unwrap();
+
+    // --- 5. Aktion 3 (Reporter): Beilegung importieren ---
+    service_reporter
+        .import_resolution_endorsement(endorsement, password)
+        .unwrap();
+
+    // --- 6. Aktion 4 (Finale Prüfung): Persistenz verifizieren ---
+    let mut service_checker = AppService::new(dir_reporter.path()).unwrap();
+    service_checker.login(password).unwrap();
+    let conflicts_after = service_checker.list_conflicts().unwrap();
+    assert_eq!(conflicts_after.len(), 1);
+    assert_eq!(conflicts_after[0].proof_id, proof_id);
+    assert_eq!(
+        conflicts_after[0].is_resolved, true,
+        "Conflict should be resolved after importing the endorsement and reloading from disk"
+    );
+}
+
+/// Test 5.2: Stellt sicher, dass alle Konflikt-API-Methoden fehlschlagen,
+/// wenn das Wallet gesperrt ist.
+#[test]
+fn api_app_service_conflict_api_fails_when_locked() {
+    // Arrange: Erstelle einen AppService, der aber nicht eingeloggt ist (Zustand: Locked).
+    let dir = tempdir().unwrap();
+    // FIX: `service` muss mutable sein, da `import_resolution_endorsement` `&mut self` erfordert.
+    let mut service = AppService::new(dir.path()).unwrap();
+    let fake_proof_id = "proof-123";
+
+    // Act & Assert: Jeder Aufruf muss mit "Wallet is locked" fehlschlagen.
+    let res_list = service.list_conflicts();
+    assert!(res_list.is_err());
+    assert!(res_list.unwrap_err().contains("Wallet is locked"));
+
+    let res_get = service.get_proof_of_double_spend(fake_proof_id);
+    assert!(res_get.is_err());
+    assert!(res_get.unwrap_err().contains("Wallet is locked"));
+
+    let res_create = service.create_resolution_endorsement(fake_proof_id, None);
+    assert!(res_create.is_err());
+    assert!(res_create.unwrap_err().contains("Wallet is locked"));
+
+    // FIX: Struct-Literal verwenden, da `::default` nicht existiert.
+    let dummy_endorsement = ResolutionEndorsement {
+        endorsement_id: "".to_string(),
+        proof_id: "".to_string(),
+        victim_id: "".to_string(),
+        victim_signature: "".to_string(),
+        resolution_timestamp: Utc::now().to_rfc3339(),
+        notes: None,
+    };
+    let res_import = service.import_resolution_endorsement(dummy_endorsement, "pwd");
+    assert!(res_import.is_err());
+    assert!(res_import.unwrap_err().contains("Wallet is locked"));
+}
 
 /// Test 1.1: Testet die reaktive Double-Spend-Erkennung via "Earliest Wins"-Heuristik.
 ///

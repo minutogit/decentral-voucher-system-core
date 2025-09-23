@@ -1,15 +1,22 @@
 //! # src/wallet/tests.rs
 //! Enthält die Modul-Tests für die `Wallet`-Struktur. Diese Datei ist
 //! bewusst von `mod.rs` getrennt, um die Lesbarkeit zu verbessern.
+
+// FIX: Externe Crates müssen ohne `crate::` importiert werden.
+use bs58;
+use chrono::{Duration, Utc};
+use ed25519_dalek::{Signature, Verifier};
+
+// FIX: Interne Module werden mit `crate::` importiert.
 use crate::{
+    models::conflict::{Layer2Verdict, ProofOfDoubleSpend, ResolutionEndorsement},
+    services::crypto_utils,
     test_utils::{
-        add_voucher_to_wallet, create_voucher_for_manipulation, setup_in_memory_wallet,
-        ACTORS, MINUTO_STANDARD,
+        add_voucher_to_wallet, create_voucher_for_manipulation, setup_in_memory_wallet, ACTORS,
+        MINUTO_STANDARD,
     },
     VoucherCoreError, VoucherStatus,
 };
-use chrono::{Duration, Utc};
-
 /// Bündelt die Tests zur Validierung der `local_instance_id`-Logik.
 mod local_instance_id_logic {
     // Importiert die benötigten Typen vom Crate-Anfang. Das ist robuster.
@@ -292,3 +299,314 @@ mod maintenance_logic {
         assert!(wallet.voucher_store.vouchers.contains_key(&id_b), "Voucher B within grace period should remain");
     }
 }
+
+/// Bündelt die Tests für das Konflikt-Management API.
+mod conflict_management_api {
+    // Importiert die notwendigen Typen und Helfer aus dem übergeordneten Modul.
+    use super::*;
+    use crate::models::voucher::Transaction;
+
+    /// Lokale Test-Hilfsfunktion, um einen realistischen mock `ProofOfDoubleSpend` zu erzeugen.
+    fn create_mock_proof_of_double_spend(
+        offender_id: &str,
+        _victim_id: &str, // FIX: Als unbenutzt markieren, da `ACTORS.victim` verwendet wird.
+        resolutions: Option<Vec<ResolutionEndorsement>>,
+        verdict: Option<Layer2Verdict>,
+    ) -> ProofOfDoubleSpend {
+        // FIX: Komplette Neufassung, um der exakten Struktur aus `conflict.rs` zu entsprechen
+        // und `test_utils` für Signaturen/Hashes wiederzuverwenden.
+        let reporter = &ACTORS.victim; // Nehmen wir an, das Opfer ist der Melder.
+        let fork_point_prev_hash = "fork_hash_123".to_string();
+        let proof_id = crypto_utils::get_hash(format!("{}{}", offender_id, fork_point_prev_hash));
+        let signature =
+            crypto_utils::sign_ed25519(&reporter.signing_key, proof_id.as_bytes());
+
+        ProofOfDoubleSpend {
+            proof_id,
+            offender_id: offender_id.to_string(),
+            fork_point_prev_hash,
+            conflicting_transactions: vec![Transaction::default(), Transaction::default()],
+            voucher_valid_until: (Utc::now() + Duration::days(90)).to_rfc3339(),
+            reporter_id: reporter.user_id.clone(),
+            report_timestamp: Utc::now().to_rfc3339(),
+            reporter_signature: bs58::encode(signature.to_bytes()).into_string(),
+            resolutions,
+            layer2_verdict: verdict,
+        }
+    }
+    // === Tests für `Wallet::list_conflicts` ===
+
+    /// **Test 1.1: Leerer Zustand**
+    /// Überprüft, ob `list_conflicts` einen leeren Vektor zurückgibt,
+    /// wenn der `proof_store` des Wallets leer ist.
+    #[test]
+    fn test_list_conflicts_empty_state() {
+        // FIX: `setup_in_memory_wallet` benötigt eine Identität und gibt nur das Wallet zurück.
+        let identity = &ACTORS.test_user;
+        let wallet = setup_in_memory_wallet(identity);
+
+        // Act: Rufe die Funktion auf.
+        let conflicts = wallet.list_conflicts();
+
+        // Assert: Das Ergebnis sollte ein leerer Vektor sein.
+        assert!(conflicts.is_empty());
+    }
+
+    /// **Test 1.2: Ein ungelöster Konflikt**
+    /// Stellt sicher, dass ein einzelner, ungelöster Konflikt korrekt
+    /// als Zusammenfassung mit den richtigen Status-Flags zurückgegeben wird.
+    #[test]
+    fn test_list_conflicts_with_one_unresolved_conflict() {
+        // FIX: Korrekter Aufruf von setup_in_memory_wallet
+        let identity = &ACTORS.test_user;
+        let mut wallet = setup_in_memory_wallet(identity);
+        let proof = create_mock_proof_of_double_spend("offender-id", "victim-id", None, None);
+        // FIX: `insert` wird auf dem `proofs` Feld aufgerufen, nicht auf `ProofStore` selbst.
+        wallet.proof_store.proofs.insert(proof.proof_id.clone(), proof.clone());
+
+        // Act: Rufe die Funktion auf.
+        let conflicts = wallet.list_conflicts();
+
+        // Assert: Es sollte genau eine Zusammenfassung zurückgegeben werden.
+        assert_eq!(conflicts.len(), 1);
+        let summary = &conflicts[0];
+
+        // Überprüfe die Inhalte der Zusammenfassung.
+        assert_eq!(summary.proof_id, proof.proof_id);
+        assert_eq!(summary.offender_id, proof.offender_id);
+        assert_eq!(summary.is_resolved, false);
+        assert_eq!(summary.has_l2_verdict, false);
+    }
+
+    /// **Test 1.3: Ein beigelegter Konflikt**
+    /// Überprüft, ob ein Konflikt, der eine `ResolutionEndorsement` enthält,
+    /// korrekt mit `is_resolved: true` markiert wird.
+    #[test]
+    fn test_list_conflicts_with_one_resolved_conflict() {
+        // FIX: Korrekter Aufruf von setup_in_memory_wallet
+        let identity = &ACTORS.test_user;
+        let mut wallet = setup_in_memory_wallet(identity);
+        // FIX: `resolution_timestamp` ist ein Pflichtfeld.
+        let endorsement = ResolutionEndorsement {
+            endorsement_id: "endorsement-1".to_string(),
+            proof_id: "proof-1".to_string(),
+            victim_id: "victim-id".to_string(),
+            victim_signature: "sig".to_string(),
+            resolution_timestamp: Utc::now().to_rfc3339(),
+            notes: None,
+        };
+        let proof = create_mock_proof_of_double_spend(
+            "offender-id", "victim-id", Some(vec![endorsement]), None,
+        );
+        wallet.proof_store.proofs.insert(proof.proof_id.clone(), proof);
+
+        // Act: Rufe die Funktion auf.
+        let conflicts = wallet.list_conflicts();
+
+        // Assert: Die Zusammenfassung sollte den korrekten Status anzeigen.
+        assert_eq!(conflicts.len(), 1);
+        let summary = &conflicts[0];
+        assert_eq!(summary.is_resolved, true);
+        assert_eq!(summary.has_l2_verdict, false);
+    }
+
+    /// **Test 1.4: Konflikt mit L2-Urteil**
+    /// Überprüft, ob ein Konflikt, der ein `Layer2Verdict` enthält,
+    /// korrekt mit `has_l2_verdict: true` markiert wird.
+    #[test]
+    fn test_list_conflicts_with_l2_verdict() {
+        // FIX: Korrekter Aufruf von setup_in_memory_wallet
+        let identity = &ACTORS.test_user;
+        let mut wallet = setup_in_memory_wallet(identity);
+        // FIX: Felder von `Layer2Verdict` waren veraltet.
+        let verdict = Layer2Verdict {
+            verdict_timestamp: Utc::now().to_rfc3339(),
+            valid_transaction_id: "tx-a".to_string(),
+            server_id: "server-id".to_string(),
+            server_signature: "sig".to_string(),
+        };
+        let proof =
+            create_mock_proof_of_double_spend("offender-id", "victim-id", None, Some(verdict));
+        wallet.proof_store.proofs.insert(proof.proof_id.clone(), proof);
+
+        // Act: Rufe die Funktion auf.
+        let conflicts = wallet.list_conflicts();
+
+        // Assert: Die Zusammenfassung sollte den korrekten Status anzeigen.
+        assert_eq!(conflicts.len(), 1);
+        let summary = &conflicts[0];
+        assert_eq!(summary.has_l2_verdict, true);
+    }
+
+    // === Tests für `Wallet::get_proof_of_double_spend` ===
+
+    /// **Test 2.1: Erfolgreicher Abruf**
+    /// Stellt sicher, dass ein existierender Beweis korrekt anhand seiner ID
+    /// abgerufen werden kann.
+    #[test]
+    fn test_get_proof_of_double_spend_success() {
+        // FIX: Korrekter Aufruf von setup_in_memory_wallet
+        let identity = &ACTORS.test_user;
+        let mut wallet = setup_in_memory_wallet(identity);
+        let proof = create_mock_proof_of_double_spend("offender", "victim", None, None);
+        wallet.proof_store.proofs.insert(proof.proof_id.clone(), proof.clone());
+
+        // Act: Rufe den Beweis mit der korrekten ID ab.
+        let result = wallet.get_proof_of_double_spend(&proof.proof_id);
+
+        // Assert: Das Ergebnis muss `Ok` sein und der Beweis muss identisch sein.
+        assert!(result.is_ok());
+        // FIX: `ProofOfDoubleSpend` hat kein `PartialEq`. Vergleiche stattdessen Schlüsselfelder.
+        assert_eq!(result.unwrap().proof_id, proof.proof_id);
+    }
+
+    /// **Test 2.2: Fehler bei nicht gefundener ID**
+    /// Überprüft, ob die Funktion ein `Err` zurückgibt, wenn eine
+    /// unbekannte `proof_id` angefragt wird.
+    #[test]
+    fn test_get_proof_of_double_spend_not_found() {
+        // FIX: Korrekter Aufruf von setup_in_memory_wallet
+        let identity = &ACTORS.test_user;
+        let wallet = setup_in_memory_wallet(identity);
+
+        // Act: Versuche, einen nicht existierenden Beweis abzurufen.
+        let result = wallet.get_proof_of_double_spend("non-existent-id");
+
+        // Assert: Das Ergebnis muss ein Fehler sein.
+        assert!(result.is_err());
+        // Optional: Überprüfe die spezifische Fehlermeldung.
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Proof with ID 'non-existent-id' not found"));
+    }
+
+    // === Tests für `Wallet::create_resolution_endorsement` ===
+
+    /// **Test 3.1: Erfolgreiche Erstellung und Signaturvalidierung**
+    /// Stellt sicher, dass eine Beilegungserklärung korrekt erstellt und
+    /// digital signiert wird.
+    #[test]
+    fn test_create_resolution_endorsement_success_and_validation() {
+        // FIX: Korrekter Aufruf von setup_in_memory_wallet
+        let victim_identity = &ACTORS.victim;
+        let mut wallet_with_proof = setup_in_memory_wallet(victim_identity);
+        let proof =
+            create_mock_proof_of_double_spend("offender-id", &victim_identity.user_id, None, None);
+        wallet_with_proof
+            .proof_store.proofs
+            .insert(proof.proof_id.clone(), proof.clone());
+
+        // Act: Das Opfer erstellt die Beilegungserklärung.
+        let result = wallet_with_proof.create_resolution_endorsement(
+            &victim_identity,
+            &proof.proof_id,
+            Some("Resolved amicably".to_string()),
+        );
+
+        // Assert: Die Erstellung war erfolgreich.
+        assert!(result.is_ok());
+        let endorsement = result.unwrap();
+
+        // Überprüfe die Metadaten.
+        assert_eq!(endorsement.proof_id, proof.proof_id);
+        assert_eq!(endorsement.victim_id, victim_identity.user_id);
+        assert_eq!(endorsement.notes, Some("Resolved amicably".to_string()));
+
+        // Validiere die Signatur.
+        // FIX: Korrekte Signatur-Verifizierung mit `ed25519_dalek`
+        let public_key = crypto_utils::get_pubkey_from_user_id(&victim_identity.user_id).unwrap();
+        // FIX: Die Bibliothek erwartet ein `[u8; 64]` Array, kein `Vec<u8>`.
+        // Wir müssen den Vektor in ein Array konvertieren.
+        let signature_bytes: [u8; 64] = bs58::decode(&endorsement.victim_signature)
+            .into_vec()
+            .expect("Failed to decode signature")
+            .try_into()
+            .expect("Decoded signature must be 64 bytes long");
+        // FIX: `Signature::from_bytes` gibt keinen `Result`, daher kein `.unwrap()` nötig.
+        let signature = Signature::from_bytes(&signature_bytes);
+
+        let result = public_key.verify(endorsement.endorsement_id.as_bytes(), &signature);
+        assert!(result.is_ok(), "Signature verification failed");
+    }
+
+    /// **Test 3.2: Fehler, wenn der Beweis nicht existiert**
+    /// Stellt sicher, dass die Funktion fehlschlägt, wenn die `proof_id`
+    /// nicht im Wallet vorhanden ist.
+    #[test]
+    fn test_create_resolution_endorsement_proof_not_found() {
+        // Arrange: Erstelle ein leeres Wallet.
+        let identity = &ACTORS.test_user;
+        let wallet = setup_in_memory_wallet(identity);
+
+        // Act: Versuche, eine Beilegung für einen nicht existierenden Beweis zu erstellen.
+        let result =
+            wallet.create_resolution_endorsement(identity, "non-existent-id", None);
+
+        // Assert: Das Ergebnis muss ein Fehler sein.
+        assert!(result.is_err());
+    }
+
+    // === Tests für `Wallet::add_resolution_endorsement` ===
+
+    /// **Test 4.1: Erfolgreiches Hinzufügen**
+    /// Überprüft, ob eine gültige, externe Beilegungserklärung erfolgreich
+    /// zum entsprechenden Beweis im Wallet hinzugefügt wird.
+    #[test]
+    fn test_add_resolution_endorsement_success() {
+        // Arrange: Zwei Wallets, eines für den Reporter, eines für das Opfer.
+        let reporter_identity = &ACTORS.test_user;
+        let mut reporter_wallet = setup_in_memory_wallet(reporter_identity);
+        let victim_identity = &ACTORS.victim;
+        let mut victim_wallet = setup_in_memory_wallet(victim_identity);
+
+        // Der Reporter und das Opfer haben beide den Beweis.
+        let proof = create_mock_proof_of_double_spend("offender-id", &victim_identity.user_id, None, None);
+        reporter_wallet.proof_store.proofs.insert(proof.proof_id.clone(), proof.clone());
+        victim_wallet.proof_store.proofs.insert(proof.proof_id.clone(), proof.clone());
+
+        // Das Opfer erstellt die Beilegung.
+        let endorsement = victim_wallet
+            .create_resolution_endorsement(&victim_identity, &proof.proof_id, None)
+            .unwrap();
+
+        // Act: Der Reporter fügt die empfangene Beilegung hinzu.
+        let result = reporter_wallet.add_resolution_endorsement(endorsement.clone());
+
+        // Assert: Der Vorgang war erfolgreich und der Beweis wurde aktualisiert.
+        assert!(result.is_ok());
+        let updated_proof = reporter_wallet.get_proof_of_double_spend(&proof.proof_id).unwrap();
+        let resolutions = updated_proof.resolutions.unwrap();
+        assert_eq!(resolutions.len(), 1);
+        assert_eq!(resolutions[0].endorsement_id, endorsement.endorsement_id);
+    }
+
+    /// **Test 4.2: Duplikate werden verhindert (Idempotenz)**
+    /// Stellt sicher, dass das mehrfache Hinzufügen derselben Beilegung
+    /// nicht zu Duplikaten im `resolutions`-Vektor führt.
+    #[test]
+    fn test_add_resolution_endorsement_is_idempotent() {
+        // Arrange: Gleiches Setup wie in 4.1.
+        let (mut reporter_wallet, _victim_wallet, _victim_identity, proof, endorsement) = {
+            let reporter_identity = &ACTORS.test_user;
+            let mut reporter_wallet = setup_in_memory_wallet(reporter_identity);
+            let victim_identity = &ACTORS.victim;
+            let mut victim_wallet = setup_in_memory_wallet(victim_identity);
+            let proof = create_mock_proof_of_double_spend("offender-id", &victim_identity.user_id, None, None);
+            reporter_wallet.proof_store.proofs.insert(proof.proof_id.clone(), proof.clone());
+            victim_wallet.proof_store.proofs.insert(proof.proof_id.clone(), proof.clone());
+            let endorsement = victim_wallet.create_resolution_endorsement(&victim_identity, &proof.proof_id, None).unwrap();
+            (reporter_wallet, victim_wallet, victim_identity, proof, endorsement)
+        };
+
+        // Act: Füge dieselbe Beilegung ZWEIMAL hinzu.
+        assert!(reporter_wallet.add_resolution_endorsement(endorsement.clone()).is_ok());
+        assert!(reporter_wallet.add_resolution_endorsement(endorsement.clone()).is_ok());
+
+        // Assert: Der Vektor enthält die Beilegung aber nur EINMAL.
+        let updated_proof = reporter_wallet.get_proof_of_double_spend(&proof.proof_id).unwrap();
+        let resolutions = updated_proof.resolutions.unwrap();
+        assert_eq!(resolutions.len(), 1, "Endorsement was added more than once");
+    }
+}
+
