@@ -626,9 +626,9 @@ fn get_file_key(
             )
                 .map_err(|_| StorageError::AuthenticationFailed)
         }
-        AuthMethod::Mnemonic(mnemonic) => {
+        AuthMethod::Mnemonic(mnemonic, passphrase) => {
             let (_, signing_key) =
-                crypto_utils::derive_ed25519_keypair(mnemonic, None)
+                crypto_utils::derive_ed25519_keypair(mnemonic, *passphrase)
                     .map_err(|e| StorageError::Generic(format!("Key derivation from mnemonic failed: {}", e)))?;
             let mnemonic_key =
                 derive_key_from_signing_key(&signing_key, &container.mnemonic_kdf_salt)?;

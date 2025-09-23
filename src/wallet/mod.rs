@@ -114,10 +114,11 @@ impl Wallet {
     /// Erstellt ein brandneues, leeres Wallet aus einer Mnemonic-Phrase.
     pub fn new_from_mnemonic(
         mnemonic_phrase: &str,
+        passphrase: Option<&str>,
         user_prefix: Option<&str>,
     ) -> Result<(Self, UserIdentity), VoucherCoreError> {
         let (public_key, signing_key) =
-            crate::services::crypto_utils::derive_ed25519_keypair(mnemonic_phrase, None)?;
+            crate::services::crypto_utils::derive_ed25519_keypair(mnemonic_phrase, passphrase)?;
         let user_id = create_user_id(&public_key, user_prefix)
             .map_err(|e| VoucherCoreError::Crypto(e.to_string()))?;
 

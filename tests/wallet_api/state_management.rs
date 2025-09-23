@@ -70,7 +70,7 @@ fn api_app_service_full_conflict_resolution_workflow() {
     // Reporter-Service
     let mut service_reporter = AppService::new(dir_reporter.path()).unwrap();
     service_reporter
-        .create_profile(&generate_valid_mnemonic(), Some("reporter"), password)
+        .create_profile(&generate_valid_mnemonic(), None, Some("reporter"), password)
         .unwrap();
     // FIX: Unbenutzte Variable markieren
     let _id_reporter = service_reporter.get_user_id().unwrap();
@@ -78,7 +78,7 @@ fn api_app_service_full_conflict_resolution_workflow() {
     // Victim-Service
     let mut service_victim = AppService::new(dir_victim.path()).unwrap();
     service_victim
-        .create_profile(&generate_valid_mnemonic(), Some("victim"), password)
+        .create_profile(&generate_valid_mnemonic(), None, Some("victim"), password)
         .unwrap();
     let id_victim = service_victim.get_user_id().unwrap();
 
@@ -190,7 +190,7 @@ fn api_wallet_reactive_double_spend_earliest_wins() {
     // Manually derive Alice's identity to sign conflicting transactions outside the AppService flow
     let m_alice =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    service_alice.create_profile(&m_alice, Some("alice"), "pwd").unwrap();
+    service_alice.create_profile(&m_alice, None, Some("alice"), "pwd").unwrap();
     let (pk_alice, sk_alice) = crypto_utils::derive_ed25519_keypair(m_alice, None).unwrap();
     let id_alice = service_alice.get_user_id().unwrap();
     let identity_alice = voucher_lib::UserIdentity {
@@ -202,7 +202,7 @@ fn api_wallet_reactive_double_spend_earliest_wins() {
     let dir_david = tempdir().unwrap();
     let mut service_david = AppService::new(dir_david.path()).unwrap();
     let m_david = generate_valid_mnemonic();
-    service_david.create_profile(&m_david, Some("david"), "pwd").unwrap();
+    service_david.create_profile(&m_david, None, Some("david"), "pwd").unwrap();
     let id_david = service_david.get_user_id().unwrap();
 
     // KORREKTUR: Die Transaktionen müssen an David gehen, damit sein Wallet sie verarbeiten kann.
@@ -359,7 +359,7 @@ fn api_wallet_save_and_load_fidelity() {
     // --- 2. Wallet A in komplexen Zustand versetzen ---
     {
         let mut service_a = AppService::new(dir.path()).unwrap();
-        service_a.create_profile(&mnemonic, Some("fidelity-test"), password).unwrap();
+        service_a.create_profile(&mnemonic, None, Some("fidelity-test"), password).unwrap();
         let id_a = service_a.get_user_id().unwrap();
 
         // Aktive Gutscheine erstellen
@@ -397,7 +397,7 @@ fn api_wallet_save_and_load_fidelity() {
         // Bundle-Metadaten durch Empfang erzeugen
         let transfer_back_bundle = {
             let mut service_bob = AppService::new(tempdir().unwrap().path()).unwrap();
-            service_bob.create_profile(&generate_valid_mnemonic(), Some("bob"), "pwd").unwrap();
+            service_bob.create_profile(&generate_valid_mnemonic(), None, Some("bob"), "pwd").unwrap();
             let id_bob = service_bob.get_user_id().unwrap();
             service_bob
                 .create_new_voucher(

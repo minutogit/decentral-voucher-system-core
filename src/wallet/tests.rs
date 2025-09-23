@@ -79,7 +79,7 @@ mod local_instance_id_logic {
         )
             .unwrap();
         let final_tx = voucher_after_tx2.transactions.last().unwrap();
- 
+
         // --- Aktion ---
         let charlie_local_id =
             Wallet::calculate_local_instance_id(&voucher_after_tx2, &charlie.user_id).unwrap();
@@ -107,7 +107,7 @@ mod local_instance_id_logic {
         )
             .unwrap();
         let final_tx = voucher_after_tx2.transactions.last().unwrap();
- 
+
         // --- Aktion ---
         let alice_final_local_id =
             Wallet::calculate_local_instance_id(&voucher_after_tx2, &alice.user_id).unwrap();
@@ -610,3 +610,42 @@ mod conflict_management_api {
     }
 }
 
+// --- NEUER TEST-BLOCK ---
+/// Bündelt Tests zur Validierung der Schlüsselableitungslogik.
+mod key_derivation_logic {
+    use crate::wallet::Wallet;
+
+    /// **Test: Passphrase beeinflusst Schlüsselableitung**
+    ///
+    /// Stellt sicher, dass die Bereitstellung einer BIP39-Passphrase zu einem
+    /// völlig anderen Schlüsselpaar (und damit einer anderen User-ID) führt
+    /// als die Ableitung nur aus der Mnemonic. Dies bestätigt, dass die
+    /// Passphrase korrekt in den Ableitungsprozess einbezogen wird.
+    #[test]
+    fn test_passphrase_alters_key_derivation() {
+        let mnemonic =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let passphrase = "my-secret-passphrase";
+
+        // Ableitung OHNE Passphrase
+        let (wallet_no_pass, identity_no_pass) =
+            Wallet::new_from_mnemonic(mnemonic, None, Some("test")).unwrap();
+
+        // Ableitung MIT Passphrase
+        let (wallet_with_pass, identity_with_pass) =
+            Wallet::new_from_mnemonic(mnemonic, Some(passphrase), Some("test")).unwrap();
+
+        // Die resultierenden User-IDs MÜSSEN unterschiedlich sein.
+        assert_ne!(
+            wallet_no_pass.profile.user_id,
+            wallet_with_pass.profile.user_id,
+            "User IDs should be different when a passphrase is used."
+        );
+
+        // Zur Sicherheit auch die Public Keys der Identitäten vergleichen.
+        assert_ne!(
+            identity_no_pass.public_key, identity_with_pass.public_key,
+            "Public keys should be different when a passphrase is used."
+        );
+    }
+}

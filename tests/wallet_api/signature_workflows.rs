@@ -318,12 +318,12 @@ fn api_app_service_full_signature_workflow() {
 
     let mut service_creator = AppService::new(dir_creator.path()).unwrap();
     service_creator
-        .create_profile(&generate_valid_mnemonic(), Some("creator"), password)
+        .create_profile(&generate_valid_mnemonic(), None, Some("creator"), password)
         .unwrap();
 
     let mut service_guarantor = AppService::new(dir_guarantor.path()).unwrap();
     service_guarantor
-        .create_profile(&generate_valid_mnemonic(), Some("guarantor"), password)
+        .create_profile(&generate_valid_mnemonic(), None, Some("guarantor"), password)
         .unwrap();
     let id_guarantor = service_guarantor.get_user_id().unwrap();
 
@@ -468,21 +468,21 @@ fn test_full_guarantor_workflow_via_app_service() {
     let mut service_creator =
         AppService::new(dir_creator.path()).expect("Failed to create creator service");
     service_creator
-        .create_profile(&generate_valid_mnemonic(), Some("creator"), password)
+        .create_profile(&generate_valid_mnemonic(), None, Some("creator"), password)
         .expect("Creator profile creation failed");
     let creator_id = service_creator.get_user_id().unwrap();
 
     // Guarantor 1 Service
     let mut service_g1 = AppService::new(dir_g1.path()).expect("Failed to create g1 service");
     service_g1
-        .create_profile(&generate_valid_mnemonic(), Some("g1"), password)
+        .create_profile(&generate_valid_mnemonic(), None, Some("g1"), password)
         .expect("G1 profile creation failed");
     let g1_id = service_g1.get_user_id().unwrap();
 
     // Guarantor 2 Service
     let mut service_g2 = AppService::new(dir_g2.path()).expect("Failed to create g2 service");
     service_g2
-        .create_profile(&generate_valid_mnemonic(), Some("g2"), password)
+        .create_profile(&generate_valid_mnemonic(), None, Some("g2"), password)
         .expect("G2 profile creation failed");
     let g2_id = service_g2.get_user_id().unwrap();
 

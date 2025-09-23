@@ -32,7 +32,7 @@ pub enum AuthMethod<'a> {
     /// Authentifizierung mittels eines Passworts.
     Password(&'a str),
     /// Authentifizierung mittels einer Mnemonic-Phrase (für die Wiederherstellung).
-    Mnemonic(&'a str),
+    Mnemonic(&'a str, Option<&'a str>),
     /// Authentifizierung mittels der kryptographischen Identität (für die Wiederherstellung).
     RecoveryIdentity(&'a UserIdentity),
 }

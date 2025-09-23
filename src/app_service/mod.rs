@@ -32,7 +32,7 @@
 //! // 2. Neues Profil erstellen (dies entsperrt das Wallet)
 //! // In einer echten Anwendung wird die Mnemonic sicher generiert und gespeichert.
 //! let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-//! app.create_profile(&mnemonic, Some("user"), "sicheres-passwort-123")
+//! app.create_profile(&mnemonic, None, Some("user"), "sicheres-passwort-123")
 //!    .expect("Profil konnte nicht erstellt werden.");
 //!
 //! // 3. Eine Aktion ausführen (z.B. Guthaben prüfen)

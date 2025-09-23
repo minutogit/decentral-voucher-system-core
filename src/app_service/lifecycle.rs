@@ -74,10 +74,11 @@ impl AppService {
     pub fn create_profile(
         &mut self,
         mnemonic: &str,
+        passphrase: Option<&str>,
         user_prefix: Option<&str>,
         password: &str,
     ) -> Result<(), String> {
-        let (wallet, identity) = Wallet::new_from_mnemonic(mnemonic, user_prefix)
+        let (wallet, identity) = Wallet::new_from_mnemonic(mnemonic, passphrase, user_prefix)
             .map_err(|e| format!("Failed to create new wallet: {}", e))?;
 
         wallet
@@ -124,11 +125,13 @@ impl AppService {
     pub fn recover_wallet_and_set_new_password(
         &mut self,
         mnemonic: &str,
+        passphrase: Option<&str>,
         new_password: &str,
     ) -> Result<(), String> {
         // 1. Lade das Wallet mit der Mnemonic-Phrase (öffnet das "zweite Schloss").
-        let (wallet, identity) = Wallet::load(&self.storage, &AuthMethod::Mnemonic(mnemonic))
-            .map_err(|e| format!("Recovery failed (check mnemonic phrase): {}", e))?;
+        let auth_method = AuthMethod::Mnemonic(mnemonic, passphrase);
+        let (wallet, identity) = Wallet::load(&self.storage, &auth_method)
+            .map_err(|e| format!("Recovery failed (check mnemonic phrase and passphrase): {}", e))?;
 
         // 2. Setze das Passwort zurück, indem das Mnemonic-Schloss geöffnet und das Passwort-Schloss neu geschrieben wird.
         Wallet::reset_password(&mut self.storage, &identity, new_password)

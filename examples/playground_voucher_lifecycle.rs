@@ -42,11 +42,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut service_charlie = AppService::new(dir_charlie.path())?;
 
     // Erstelle Profile für alle Teilnehmer
-    service_creator.create_profile(&AppService::generate_mnemonic(12)?, Some("creator"), password)?;
-    service_g1.create_profile(&AppService::generate_mnemonic(12)?, Some("g1"), password)?;
-    service_g2.create_profile(&AppService::generate_mnemonic(12)?, Some("g2"), password)?;
-    service_recipient.create_profile(&AppService::generate_mnemonic(12)?, Some("rcp"), password)?;
-    service_charlie.create_profile(&AppService::generate_mnemonic(12)?, Some("charlie"), password)?;
+    service_creator.create_profile(&AppService::generate_mnemonic(12)?, None, Some("creator"), password)?;
+    service_g1.create_profile(&AppService::generate_mnemonic(12)?, None, Some("g1"), password)?;
+    service_g2.create_profile(&AppService::generate_mnemonic(12)?, None, Some("g2"), password)?;
+    service_recipient.create_profile(&AppService::generate_mnemonic(12)?, None, Some("rcp"), password)?;
+    service_charlie.create_profile(&AppService::generate_mnemonic(12)?, None, Some("charlie"), password)?;
 
     let creator_id = service_creator.get_user_id()?;
     let g1_id = service_g1.get_user_id()?;

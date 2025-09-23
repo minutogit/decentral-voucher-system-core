@@ -58,10 +58,10 @@ fn api_app_service_full_lifecycle() {
 
     // --- 2. Profile erstellen ---
     service_alice
-        .create_profile(&mnemonic_alice, Some("alice"), password)
+        .create_profile(&mnemonic_alice, None, Some("alice"), password)
         .expect("Alice profile creation failed");
     service_bob
-        .create_profile(&mnemonic_bob, Some("bob"), password)
+        .create_profile(&mnemonic_bob, None, Some("bob"), password)
         .expect("Bob profile creation failed");
 
     let id_alice = service_alice.get_user_id().unwrap();
@@ -129,6 +129,52 @@ fn api_app_service_full_lifecycle() {
     assert_eq!(balance_bob.get(silver_abbreviation).unwrap(), "100.0000");
 }
 
+/// Testet den `AppService` Lebenszyklus, wenn eine BIP39-Passphrase verwendet wird.
+///
+/// ### Szenario:
+/// 1.  Ein Profil wird mit Mnemonic UND Passphrase erstellt.
+/// 2.  Die resultierende User-ID wird gespeichert.
+/// 3.  Ein Wiederherstellungsversuch NUR mit der Mnemonic (ohne Passphrase) schlägt fehl,
+///     da die abgeleiteten Schlüssel nicht übereinstimmen.
+#[test]
+fn api_app_service_lifecycle_with_passphrase() {
+    // --- 1. Setup ---
+    let dir = tempdir().expect("Failed to create temp dir");
+    let mut service = AppService::new(dir.path()).expect("Failed to create service");
+    let mnemonic =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let passphrase = "my-secret-passphrase";
+    let password = "password123";
+
+    // --- 2. Profil mit Passphrase erstellen ---
+    service
+        .create_profile(&mnemonic, Some(passphrase), Some("test-user"), password)
+        .expect("Profile creation with passphrase failed");
+    let original_user_id = service.get_user_id().unwrap();
+    assert!(original_user_id.starts_with("test-user@did:key:z"));
+    service.logout();
+
+    // --- 3. Wiederherstellung ohne Passphrase (muss fehlschlagen) ---
+    // Die existierende Wiederherstellungsfunktion nutzt nur die Mnemonic.
+    // Dies leitet eine andere Identität ab, was zu einem Ladefehler führen muss.
+    let recovery_result =
+        service.recover_wallet_and_set_new_password(&mnemonic, None, "any-new-password");
+
+    assert!(
+        recovery_result.is_err(),
+        "Recovery with mnemonic only (when passphrase was used for creation) should fail."
+    );
+    assert!(recovery_result
+        .unwrap_err()
+        .to_lowercase()
+        .contains("recovery failed"));
+
+    assert!(
+        service.get_user_id().is_err(),
+        "Service should remain locked after failed recovery"
+    );
+}
+
 /// Testet die statischen Mnemonic-Hilfsfunktionen des `AppService`.
 ///
 /// ### Szenario:
@@ -185,18 +231,15 @@ fn api_app_service_password_recovery() {
     let new_password = "password-ABC";
 
     service
-        .create_profile(&mnemonic, Some("recovery-test"), initial_password)
+        .create_profile(&mnemonic, None, Some("recovery-test"), initial_password)
         .expect("Profile creation failed");
     service.logout();
 
     let wrong_mnemonic =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
-    assert!(
-        service
-            .recover_wallet_and_set_new_password(&wrong_mnemonic, new_password)
-            .is_err(),
-        "Recovery with wrong mnemonic should fail"
-    );
+    assert!(service
+        .recover_wallet_and_set_new_password(&wrong_mnemonic, None, new_password)
+        .is_err());
     assert!(
         service.get_user_id().is_err(),
         "Service should remain locked after failed recovery"
@@ -204,7 +247,7 @@ fn api_app_service_password_recovery() {
 
     assert!(
         service
-            .recover_wallet_and_set_new_password(&mnemonic, new_password)
+            .recover_wallet_and_set_new_password(&mnemonic, None, new_password)
             .is_ok(),
         "Recovery with correct mnemonic should succeed"
     );
@@ -224,6 +267,52 @@ fn api_app_service_password_recovery() {
     );
 }
 
+/// Testet die Passwort-Wiederherstellung explizit für ein Wallet, das mit einer Passphrase erstellt wurde.
+///
+/// ### Szenario:
+/// 1.  Ein Profil wird mit Mnemonic, Passphrase und Passwort erstellt.
+/// 2.  Ein Wiederherstellungsversuch mit der korrekten Mnemonic, aber OHNE Passphrase, schlägt fehl.
+/// 3.  Ein Wiederherstellungsversuch mit der korrekten Mnemonic UND der korrekten Passphrase ist erfolgreich.
+/// 4.  Der Login mit dem neu gesetzten Passwort funktioniert.
+#[test]
+fn api_app_service_password_recovery_with_passphrase() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let mut service = AppService::new(dir.path()).expect("Failed to create service");
+    let mnemonic =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let passphrase = "my-secret-passphrase";
+    let initial_password = "password-123";
+    let new_password = "password-ABC";
+
+    // 1. Profil mit Passphrase erstellen
+    service
+        .create_profile(
+            &mnemonic,
+            Some(passphrase),
+            Some("recovery-test"),
+            initial_password,
+        )
+        .expect("Profile creation with passphrase failed");
+    service.logout();
+
+    // 2. Wiederherstellung OHNE Passphrase (muss fehlschlagen)
+    let recovery_fail =
+        service.recover_wallet_and_set_new_password(&mnemonic, None, new_password);
+    assert!(
+        recovery_fail.is_err(),
+        "Recovery without the correct passphrase should fail"
+    );
+
+    // 3. Wiederherstellung MIT korrekter Passphrase (muss erfolgreich sein)
+    service
+        .recover_wallet_and_set_new_password(&mnemonic, Some(passphrase), new_password)
+        .expect("Recovery with correct passphrase should succeed");
+
+    // 4. Verifizierung
+    service.logout();
+    service.login(new_password).expect("Login with new password should succeed");
+}
+
 // --- 2. Wallet Workflows ---
 
 /// Testet den grundlegenden Lebenszyklus des Wallets: Erstellen, Speichern, Laden.
@@ -240,7 +329,7 @@ fn api_wallet_lifecycle() {
     let valid_mnemonic =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     let (wallet_a, identity_a) =
-        Wallet::new_from_mnemonic(valid_mnemonic, Some("test")).expect("Wallet creation failed");
+        Wallet::new_from_mnemonic(valid_mnemonic, None, Some("test")).expect("Wallet creation failed");
     let original_user_id = wallet_a.profile.user_id.clone();
 
     wallet_a
@@ -672,4 +761,3 @@ fn api_wallet_rejects_invalid_bundle() {
         "Bob's wallet should remain empty"
     );
 }
-
