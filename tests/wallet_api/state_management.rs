@@ -276,24 +276,24 @@ fn api_wallet_reactive_double_spend_earliest_wins() {
     service_david
         .receive_bundle(&bundle_charlie, &standards_map, None, "pwd")
         .unwrap();
-    let summaries_before = service_david.get_voucher_summaries().unwrap();
+    let summaries_before = service_david.get_voucher_summaries(None, None).unwrap();
     assert_eq!(summaries_before.len(), 1);
     assert_eq!(summaries_before[0].status, VoucherStatus::Active);
     let charlie_instance_id = summaries_before[0].local_instance_id.clone();
 
     // --- 5. David empfängt das frühere Bundle (Bob), was den Konflikt auslöst ---
     println!("\n[Debug] Wallet-Zustand VOR dem zweiten Empfang (Konflikt-Auslöser):");
-    dbg!(service_david.get_voucher_summaries().unwrap());
+    dbg!(service_david.get_voucher_summaries(None, None).unwrap());
     service_david
         .receive_bundle(&bundle_bob, &standards_map, None, "pwd")
         .unwrap();
 
     println!("\n[Debug] Wallet-Zustand NACH dem zweiten Empfang:");
-    let summaries_after = service_david.get_voucher_summaries().unwrap();
+    let summaries_after = service_david.get_voucher_summaries(None, None).unwrap();
     dbg!(&summaries_after);
 
     // --- 6. Assertions ---
-    let summaries_after = service_david.get_voucher_summaries().unwrap();
+    let summaries_after = service_david.get_voucher_summaries(None, None).unwrap();
     assert_eq!(summaries_after.len(), 2, "Wallet should now contain two instances");
 
     let summary_charlie = service_david
@@ -385,7 +385,7 @@ fn api_wallet_save_and_load_fidelity() {
 
         // --- Schritt A: Teiltransfer (Split) ---
         // Wir senden 3 von 10 Unzen. Die 10-Unzen-Instanz wird durch eine 7-Unzen-Instanz ersetzt.
-        let summary = service_a.get_voucher_summaries().unwrap();
+        let summary = service_a.get_voucher_summaries(None, None).unwrap();
         let silver_voucher_id_10oz = summary
             .iter()
             .find(|s| s.current_amount == "10.0000" && s.status == VoucherStatus::Active)
@@ -411,14 +411,14 @@ fn api_wallet_save_and_load_fidelity() {
                     "pwd",
                 )
                 .unwrap();
-            let local_id = service_bob.get_voucher_summaries().unwrap()[0].local_instance_id.clone();
+            let local_id = service_bob.get_voucher_summaries(None, None).unwrap()[0].local_instance_id.clone();
             service_bob.create_transfer_bundle(silver_standard, &local_id, &id_a, "1", None, None, "pwd").unwrap()
         };
         service_a.receive_bundle(&transfer_back_bundle, &standards_map, None, password).unwrap();
 
         // --- Schritt B: Vollständiger Transfer ---
         // Nun senden wir die verbleibenden 7 Unzen, um die Archivierungslogik zu testen.
-        let summary_before_full_transfer = service_a.get_voucher_summaries().unwrap();
+        let summary_before_full_transfer = service_a.get_voucher_summaries(None, None).unwrap();
         let silver_voucher_id_7oz = summary_before_full_transfer
             .iter()
             .find(|s| s.current_amount == "7.0000" && s.status == VoucherStatus::Active)
@@ -438,7 +438,7 @@ fn api_wallet_save_and_load_fidelity() {
     service_b.login(password).expect("Login for service_b should succeed");
 
     // --- 4. Assertions ---
-    let summaries = service_b.get_voucher_summaries().unwrap();
+    let summaries = service_b.get_voucher_summaries(None, None).unwrap();
 
     println!("\n[Debug] Finale Gutschein-Zusammenfassungen vor der Längen-Assertion:");
     dbg!(&summaries);

@@ -97,7 +97,7 @@ fn api_app_service_full_lifecycle() {
             password,
         )
         .expect("Voucher creation failed");
-    let summaries_alice = service_alice.get_voucher_summaries().unwrap();
+    let summaries_alice = service_alice.get_voucher_summaries(None, None).unwrap();
     let local_id_alice = summaries_alice[0].local_instance_id.clone();
 
     // --- 5. Alice sendet den Gutschein an Bob ---
@@ -376,7 +376,7 @@ fn api_wallet_transfer_full_amount() {
         .unwrap();
 
     let summary = alice_wallet
-        .list_vouchers()
+        .list_vouchers(None, None)
         .into_iter()
         .find(|s| s.status == VoucherStatus::Archived)
         .unwrap();
@@ -386,7 +386,7 @@ fn api_wallet_transfer_full_amount() {
         .process_encrypted_transaction_bundle(bob_identity, &bundle_bytes, None)
         .unwrap();
 
-    let summary = bob_wallet.list_vouchers().pop().unwrap();
+    let summary = bob_wallet.list_vouchers(None, None).pop().unwrap();
     assert_eq!(summary.current_amount, "100");
     assert_eq!(summary.status, VoucherStatus::Active);
 }
@@ -423,7 +423,7 @@ fn api_wallet_transfer_split_amount() {
         .unwrap();
 
     let active_summary = alice_wallet
-        .list_vouchers()
+        .list_vouchers(None, None)
         .into_iter()
         .find(|s| s.status == VoucherStatus::Active)
         .unwrap();
@@ -432,7 +432,7 @@ fn api_wallet_transfer_split_amount() {
     bob_wallet
         .process_encrypted_transaction_bundle(bob_identity, &bundle_bytes, None)
         .unwrap();
-    let bob_summary = bob_wallet.list_vouchers().pop().unwrap();
+    let bob_summary = bob_wallet.list_vouchers(None, None).pop().unwrap();
     assert_eq!(bob_summary.current_amount, "30");
 }
 
@@ -604,7 +604,7 @@ fn api_wallet_create_voucher_and_get_id() {
         .unwrap();
 
     let summary = wallet
-        .list_vouchers()
+        .list_vouchers(None, None)
         .pop()
         .expect("Wallet should contain one voucher");
     assert_eq!(summary.current_amount, "500.0000");
@@ -760,4 +760,71 @@ fn api_wallet_rejects_invalid_bundle() {
         bob_wallet.voucher_store.vouchers.is_empty(),
         "Bob's wallet should remain empty"
     );
+}
+
+/// Testet, dass get_voucher_details die korrekten Details eines Gutscheins zurückgibt.
+///
+/// ### Szenario:
+/// 1.  Es wird ein AppService erstellt und ein Profil angelegt.
+/// 2.  Ein Gutschein wird erstellt.
+/// 3.  Die lokale ID des Gutscheins wird über get_voucher_summaries ermittelt.
+/// 4.  get_voucher_details wird aufgerufen, um die vollständigen Details zu erhalten.
+/// 5.  Es wird verifiziert, dass die zurückgegebenen Details korrekt sind:
+///     - Der Status ist 'Active'
+///     - Der Gutscheininhalt stimmt mit den Erwartungen überein
+///     - Der Nominalwert ist korrekt
+///     - Die Transaktionen sind vorhanden
+#[test]
+fn api_app_service_get_voucher_details_returns_correct_data() {
+    let silver_standard_toml =
+        generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
+    let dir_alice = tempdir().expect("Failed to create temp dir for Alice");
+    let password = "password123";
+    let mut service_alice =
+        AppService::new(dir_alice.path()).expect("Failed to create service for Alice");
+
+    // 1. Profile erstellen
+    service_alice
+        .create_profile(&generate_valid_mnemonic(), None, Some("alice"), password)
+        .expect("Alice profile creation failed");
+
+    let id_alice = service_alice.get_user_id().unwrap();
+
+    // 2. Alice erstellt einen Gutschein
+    let created_voucher = service_alice
+        .create_new_voucher(
+            &silver_standard_toml,
+            "en",
+            NewVoucherData {
+                nominal_value: NominalValue {
+                    amount: "100".to_string(),
+                    ..Default::default()
+                },
+                creator: Creator {
+                    id: id_alice.clone(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            password,
+        )
+        .expect("Voucher creation failed");
+
+    // 3. Die lokale ID des Gutscheins ermitteln
+    let summaries_alice = service_alice.get_voucher_summaries(None, None).unwrap();
+    assert_eq!(summaries_alice.len(), 1, "Should have one voucher");
+    let local_id = &summaries_alice[0].local_instance_id;
+
+    // 4. Details des Gutscheins abrufen
+    let details = service_alice
+        .get_voucher_details(local_id)
+        .expect("Should be able to get voucher details");
+
+    // 5. Überprüfen, dass die Details korrekt sind
+    assert_eq!(details.status, VoucherStatus::Active, "Voucher should be active");
+    assert_eq!(details.voucher.voucher_id, created_voucher.voucher_id, "Voucher ID should match");
+    assert_eq!(details.voucher.nominal_value.amount, "100", "Nominal value should match");
+    assert_eq!(details.voucher.creator.id, id_alice, "Creator ID should match");
+    assert!(!details.voucher.transactions.is_empty(), "Voucher should have at least one transaction");
+    assert_eq!(details.voucher.transactions[0].t_type, "init", "First transaction should be init");
 }

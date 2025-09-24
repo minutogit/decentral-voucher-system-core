@@ -66,8 +66,8 @@ pub mod command_handler;
 pub mod conflict_handler;
 pub mod data_encryption;
 pub mod lifecycle;
-pub mod queries;
-pub mod signature_handler;
+pub mod app_queries;
+pub mod app_signature_handler;
 
 /// Repräsentiert den Kernzustand der Anwendung.
 pub enum AppState {

@@ -66,29 +66,46 @@ pub struct DoubleSpendCheckResult {
 }
 
 /// Eine zusammenfassende Ansicht eines Gutscheins für Listen-Darstellungen.
+///
+/// Diese Struktur wird von der Funktion `AppService::get_voucher_summaries`
+/// zurückgegeben und dient dazu, eine übersichtliche Darstellung der
+/// Gutschein-Daten zu liefern, ohne das gesamte, komplexe `Voucher`-Objekt
+/// übertragen zu müssen.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoucherSummary {
+    /// Die eindeutige, lokale ID der Gutschein-Instanz im Wallet.
     pub local_instance_id: String,
+    /// Der aktuelle Status des Gutscheins (z.B. `Active`, `Archived`).
     pub status: VoucherStatus,
+    /// Die eindeutige ID des Erstellers (oft ein Public Key).
+    pub creator_id: String,
+    /// Das Gültigkeitsdatum des Gutscheins im ISO 8601-Format.
     pub valid_until: String,
+    /// Eine allgemeine, menschenlesbare Beschreibung des Gutscheins.
     pub description: String,
+    /// Der aktuelle, verfügbare Betrag des Gutscheins als String.
     pub current_amount: String,
+    /// Die Einheit des Gutscheinwerts (z.B. "m" für Minuten).
     pub unit: String,
-}
-
-impl VoucherSummary {
-    /// Erstellt eine `VoucherSummary` für einen archivierten Gutschein.
-    /// Der Betrag wird hierbei korrekt auf 0 gesetzt.
-    fn archived_from_instance(instance: &VoucherInstance) -> Self {
-        Self {
-            local_instance_id: instance.local_instance_id.clone(),
-            status: instance.status.clone(),
-            valid_until: instance.voucher.valid_until.clone(),
-            description: instance.voucher.description.clone(),
-            current_amount: "0.0000".to_string(), // Saldo ist immer 0
-            unit: instance.voucher.nominal_value.abbreviation.clone(),
-        }
-    }
+    /// Der Name des Standards, zu dem dieser Gutschein gehört (z.B. "Minuto-Gutschein").
+    pub voucher_standard_name: String,
+    /// Die eindeutige Kennung (UUID) des Standards, zu dem dieser Gutschein gehört.
+    pub voucher_standard_uuid: String,
+    /// Die Anzahl der Transaktionen, exklusive der initialen `init`-Transaktion.
+    pub transaction_count: u32,
+    /// Die Anzahl der vorhandenen Bürgen-Signaturen.
+    pub guarantor_signatures_count: u32,
+    /// Die Anzahl der vorhandenen zusätzlichen, optionalen Signaturen.
+    pub additional_signatures_count: u32,
+    /// Ein Flag, das anzeigt, ob der Gutschein besichert ist.
+    pub has_collateral: bool,
+    /// Der Vorname des ursprünglichen Erstellers.
+    pub creator_first_name: String,
+    /// Der Nachname des ursprünglichen Erstellers.
+    pub creator_last_name: String,
+    pub creator_coordinates: String,
+    /// Eine Markierung, ob es sich um einen nicht einlösbaren Testgutschein handelt.
+    pub non_redeemable_test_voucher: bool,
 }
 
 /// Eine zusammenfassende Ansicht eines Double-Spend-Beweises für Listen-Darstellungen.
@@ -106,6 +123,7 @@ pub struct ProofOfDoubleSpendSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoucherDetails {
     pub local_instance_id: String,
+    /// Der aktuelle Status des Gutscheins (z.B. `Active`, `Archived`).
     pub status: VoucherStatus,
     pub voucher: Voucher,
 }

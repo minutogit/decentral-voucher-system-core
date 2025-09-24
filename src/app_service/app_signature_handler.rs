@@ -1,4 +1,4 @@
-//! # src/app_service/signature_handler.rs
+//! # src/app_service/app_signature_handler.rs
 //!
 //! Enthält alle `AppService`-Funktionen, die sich auf den Signatur-Workflow beziehen,
 //! wie das Anfordern, Erstellen und Anhängen von losgelösten Signaturen.

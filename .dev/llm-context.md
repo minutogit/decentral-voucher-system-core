@@ -246,8 +246,8 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   │   ├── data_encryption.rs
 │   │   ├── lifecycle.rs
 │   │   ├── mod.rs
-│   │   ├── queries.rs
-│   │   └── signature_handler.rs
+│   │   ├── app_queries.rs
+│   │   └── app_signature_handler.rs
 │   ├── archive
 │   │   ├── file_archive.rs
 │   │   └── mod.rs

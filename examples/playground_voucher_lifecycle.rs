@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let created_voucher = service_creator.create_new_voucher(&standard_toml, "de", voucher_data, password)?;
 
-    let summary = service_creator.get_voucher_summaries()?.pop().unwrap();
+    let summary = service_creator.get_voucher_summaries(None, None)?.pop().unwrap();
     let local_id = summary.local_instance_id;
     println!("✅ Gutschein '{}' erstellt. Status: {:?}", created_voucher.voucher_id, summary.status);
     assert!(matches!(summary.status, VoucherStatus::Incomplete {..}));
@@ -146,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- SCHRITT 7: Empfänger sendet 10 Minuto an einen neuen Teilnehmer (Charlie) ---");
 
     // Finde die local_id des Gutscheins im Wallet des ersten Empfängers
-    let recipient_summary = service_recipient.get_voucher_summaries()?.pop().unwrap();
+    let recipient_summary = service_recipient.get_voucher_summaries(None, None)?.pop().unwrap();
     let recipient_local_id = recipient_summary.local_instance_id;
 
     // Der erste Empfänger erstellt jetzt das Transfer-Bundle für Charlie
@@ -174,7 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 8. Finale Rohdaten-Ausgabe ---
     println!("\n--- SCHRITT 8: Finale Rohdaten-Ausgabe des Gutscheins bei Charlie ---");
-    let charlie_summary = service_charlie.get_voucher_summaries()?.pop().unwrap();
+    let charlie_summary = service_charlie.get_voucher_summaries(None, None)?.pop().unwrap();
     let charlie_voucher_details = service_charlie.get_voucher_details(&charlie_summary.local_instance_id)?;
     println!("{}", serde_json::to_string_pretty(&charlie_voucher_details.voucher)?);
 

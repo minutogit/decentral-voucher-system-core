@@ -345,7 +345,7 @@ fn api_app_service_full_signature_workflow() {
             password,
         )
         .unwrap();
-    let local_id = service_creator.get_voucher_summaries().unwrap()[0]
+    let local_id = service_creator.get_voucher_summaries(None, None).unwrap()[0]
         .local_instance_id
         .clone();
 
@@ -506,7 +506,7 @@ fn test_full_guarantor_workflow_via_app_service() {
         )
         .expect("Voucher creation failed");
 
-    let summary = service_creator.get_voucher_summaries().unwrap().pop().unwrap();
+    let summary = service_creator.get_voucher_summaries(None, None).unwrap().pop().unwrap();
     let local_id = summary.local_instance_id;
 
     // --- 3. Assertion 1: Status ist `Incomplete` ---

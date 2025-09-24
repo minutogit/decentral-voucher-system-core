@@ -1,6 +1,7 @@
-//! # src/app_service/queries.rs
+//! # src/app_service/app_queries.rs
 //!
 //! Enthält alle reinen Lese-Operationen (Queries) des `AppService`.
+use crate::wallet::instance::VoucherStatus;
 
 use super::{AppState, AppService};
 use crate::wallet::{VoucherDetails, VoucherSummary, Wallet};
@@ -22,14 +23,30 @@ impl AppService {
     }
 
     /// Gibt eine Liste von Zusammenfassungen aller Gutscheine im Wallet zurück.
+    /// Die Liste kann optional nach Gutschein-Standards (UUIDs) und/oder Status gefiltert werden.
+    ///
+    /// # Arguments
+    /// * `voucher_standard_uuid_filter` - Ein optionaler Slice (`&[String]`) von UUIDs. Nur Gutscheine,
+    ///                                    deren Standard-UUID in diesem Slice enthalten ist, werden zurückgegeben.
+    ///                                    Wenn `None` oder ein leerer Slice übergeben wird, werden alle Standards berücksichtigt.
+    /// * `status_filter`                - Ein optionaler Slice (`&[VoucherStatus]`) von Status-Enums. Nur Gutscheine,
+    ///                                    die einen dieser Status-Werte haben, werden zurückgegeben.
+    ///                                    Wenn `None` oder ein leerer Slice übergeben wird, werden alle Status berücksichtigt.
     ///
     /// # Returns
-    /// Ein `Vec<VoucherSummary>` mit den wichtigsten Daten jedes Gutscheins.
+    /// Ein `Vec<VoucherSummary>` mit den wichtigsten Daten jedes Gutscheins, basierend auf den Filtern.
+    ///
     ///
     /// # Errors
     /// Schlägt fehl, wenn das Wallet gesperrt (`Locked`) ist.
-    pub fn get_voucher_summaries(&self) -> Result<Vec<VoucherSummary>, String> {
-        Ok(self.get_wallet()?.list_vouchers())
+    pub fn get_voucher_summaries(
+        &self,
+        voucher_standard_uuid_filter: Option<&[String]>,
+        status_filter: Option<&[VoucherStatus]>,
+    ) -> Result<Vec<VoucherSummary>, String> {
+        Ok(self
+            .get_wallet()?
+            .list_vouchers(voucher_standard_uuid_filter, status_filter))
     }
 
     /// Aggregiert die Guthaben aller aktiven Gutscheine, gruppiert nach Währung.
