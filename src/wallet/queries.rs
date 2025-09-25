@@ -3,7 +3,7 @@
 //! Enthält die Implementierung der `Wallet`-Methoden, die als "View-Models"
 //! dienen. Sie bereiten Daten für die Anzeige in Client-Anwendungen auf.
 
-use super::{VoucherDetails, VoucherSummary, Wallet};
+use super::{AggregatedBalance, VoucherDetails, VoucherSummary, Wallet};
 use crate::error::VoucherCoreError;
 use crate::wallet::instance::VoucherStatus;
 use rust_decimal::Decimal;
@@ -128,40 +128,68 @@ impl Wallet {
     /// auf den Gesamtbetrag abbildet.
     ///
     /// # Returns
-    /// Eine `HashMap<String, String>`, die die Gesamtsummen pro Währung enthält.
-    pub fn get_total_balance_by_currency(&self) -> HashMap<String, String> {
-        let mut balances: HashMap<String, Decimal> = HashMap::new();
+    /// Ein `Vec<AggregatedBalance>`, der die Gesamtsummen pro Gutschein-Standard und Währung enthält.
+    pub fn get_total_balance_by_currency(&self) -> Vec<AggregatedBalance> {
+        // Key: (standard_uuid, unit_abbreviation)
+        // Value: (total_amount, standard_name, unit_abbreviation)
+        let mut balances: HashMap<(String, String), (Decimal, String, String)> = HashMap::new();
 
         for instance in self.voucher_store.vouchers.values() {
             if matches!(instance.status, VoucherStatus::Active) {
+                let voucher = &instance.voucher;
                 let amount_str = instance
                     .voucher
                     .transactions
                     .last()
                     .map(|tx| {
-                        if tx.sender_id == self.profile.user_id
-                            && tx.sender_remaining_amount.is_some()
-                        {
+                        // Wenn wir der Sender sind und ein Restbetrag existiert (Split-Transaktion),
+                        // ist dies unser aktuelles Guthaben.
+                        if tx.sender_id == self.profile.user_id && tx.sender_remaining_amount.is_some() {
                             tx.sender_remaining_amount
                                 .clone()
                                 .unwrap_or_else(|| "0".to_string())
                         } else {
+                            // Ansonsten ist es der volle Transaktionsbetrag.
                             tx.amount.clone()
                         }
                     })
                     .unwrap_or_else(|| "0".to_string());
 
                 if let Ok(amount) = Decimal::from_str(&amount_str) {
-                    *balances
-                        .entry(instance.voucher.nominal_value.abbreviation.clone())
-                        .or_insert_with(Decimal::zero) += amount;
+                    // Überspringe Gutscheine mit einem Guthaben von Null.
+                    if amount.is_zero() {
+                        continue;
+                    }
+
+                    let key = (
+                        voucher.voucher_standard.uuid.clone(),
+                        voucher.nominal_value.abbreviation.clone(),
+                    );
+
+                    let entry = balances.entry(key)
+                        .or_insert_with(|| {
+                            (
+                                Decimal::zero(),
+                                voucher.voucher_standard.name.clone(),
+                                voucher.nominal_value.abbreviation.clone(),
+                            )
+                        });
+                    // Addiere den Betrag zum ersten Element des Tupels (dem Decimal-Wert).
+                    entry.0 += amount;
                 }
             }
         }
 
         balances
             .into_iter()
-            .map(|(unit, total)| (unit, total.to_string()))
+            .map(
+                |((standard_uuid, _), (total, standard_name, unit))| AggregatedBalance {
+                    standard_uuid,
+                    standard_name,
+                    unit,
+                    total_amount: total.to_string(),
+                },
+            )
             .collect()
     }
 

@@ -65,6 +65,20 @@ pub struct DoubleSpendCheckResult {
     pub unverifiable_warnings: HashMap<String, Vec<crate::models::conflict::TransactionFingerprint>>,
 }
 
+/// Repräsentiert ein aggregiertes Guthaben für einen bestimmten Gutschein-Standard und eine Währungseinheit.
+/// Wird verwendet, um eine zusammenfassende Dashboard-Ansicht der Guthaben zu erstellen.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AggregatedBalance {
+    /// Der Name des Gutschein-Standards (z.B. "Minuto-Gutschein").
+    pub standard_name: String,
+    /// Die eindeutige UUID des Gutschein-Standards.
+    pub standard_uuid: String,
+    /// Die Währungseinheit des Guthabens (z.B. "Min", "€").
+    pub unit: String,
+    /// Der als String formatierte Gesamtbetrag.
+    pub total_amount: String,
+}
+
 /// Eine zusammenfassende Ansicht eines Gutscheins für Listen-Darstellungen.
 ///
 /// Diese Struktur wird von der Funktion `AppService::get_voucher_summaries`

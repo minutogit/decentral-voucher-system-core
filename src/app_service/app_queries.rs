@@ -1,11 +1,9 @@
 //! # src/app_service/app_queries.rs
 //!
 //! Enthält alle reinen Lese-Operationen (Queries) des `AppService`.
-use crate::wallet::instance::VoucherStatus;
-
+use crate::wallet::{instance::VoucherStatus, AggregatedBalance};
 use super::{AppState, AppService};
 use crate::wallet::{VoucherDetails, VoucherSummary, Wallet};
-use std::collections::HashMap;
 
 impl AppService {
     // --- Datenabfragen (Queries) ---
@@ -56,7 +54,7 @@ impl AppService {
     ///
     /// # Errors
     /// Schlägt fehl, wenn das Wallet gesperrt (`Locked`) ist.
-    pub fn get_total_balance_by_currency(&self) -> Result<HashMap<String, String>, String> {
+    pub fn get_total_balance_by_currency(&self) -> Result<Vec<AggregatedBalance>, String> {
         Ok(self.get_wallet()?.get_total_balance_by_currency())
     }
 

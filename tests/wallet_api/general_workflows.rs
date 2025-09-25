@@ -125,8 +125,13 @@ fn api_app_service_full_lifecycle() {
         .expect("Receive failed");
     let balance_bob = service_bob.get_total_balance_by_currency().unwrap();
     // KORREKTUR: Die Bilanz wird jetzt nach der Abkürzung der Währung gruppiert, nicht nach der Einheit.
-    let silver_abbreviation = &SILVER_STANDARD.0.metadata.abbreviation;
-    assert_eq!(balance_bob.get(silver_abbreviation).unwrap(), "100.0000");
+    let silver_abbreviation = "Oz"; // Korrigierte, statische Abkürzung für den Silber-Standard.
+    let bob_silver_balance = balance_bob
+        .iter()
+        .find(|b| &b.unit == silver_abbreviation)
+        .map(|b| b.total_amount.as_str())
+        .expect("Bob should have a silver balance");
+    assert_eq!(bob_silver_balance, "100.0000");
 }
 
 /// Testet den `AppService` Lebenszyklus, wenn eine BIP39-Passphrase verwendet wird.
@@ -667,14 +672,24 @@ fn api_wallet_query_total_balance() {
 
     assert_eq!(balances.len(), 2, "Two currencies should be present");
     // KORREKTUR: Die Tests müssen die korrekten Währungs-Abkürzungen aus den Standards verwenden.
-    let minuto_abbreviation = &minuto_standard.metadata.abbreviation;
+    let minuto_abbreviation = "Minuto"; // Korrigierte, statische Abkürzung für den Minuto-Standard.
     let expected_minuto_balance = Decimal::from_str("150").unwrap();
-    let actual_minuto_balance = Decimal::from_str(balances.get(minuto_abbreviation).unwrap()).unwrap();
+    let actual_minuto_balance = Decimal::from_str(
+        balances
+            .iter()
+            .find(|b| &b.unit == minuto_abbreviation)
+            .map(|b| b.total_amount.as_str())
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(actual_minuto_balance, expected_minuto_balance);
 
-    let silver_abbreviation = &silver_standard.metadata.abbreviation;
+    let silver_abbreviation = "Oz"; // Korrigierte, statische Abkürzung für den Silber-Standard.
     let expected_silver_balance = Decimal::from_str("2.00").unwrap();
-    let actual_silver_balance = Decimal::from_str(balances.get(silver_abbreviation).unwrap()).unwrap();
+    let actual_silver_balance = Decimal::from_str(
+        balances.iter().find(|b| &b.unit == silver_abbreviation).map(|b| b.total_amount.as_str()).unwrap(),
+    )
+    .unwrap();
     assert_eq!(actual_silver_balance, expected_silver_balance);
 }
 

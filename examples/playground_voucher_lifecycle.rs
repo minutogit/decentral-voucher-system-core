@@ -139,8 +139,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   -> Kontostand Ersteller: {:?}", balance_creator);
     println!("   -> Kontostand Empfänger: {:?}", balance_recipient);
 
-    assert_eq!(balance_creator.get("Minuto").unwrap(), "35");
-    assert_eq!(balance_recipient.get("Minuto").unwrap(), "25");
+    // KORREKTUR: Suchen Sie den Saldo im Vec<AggregatedBalance> anhand der Einheit.
+    let creator_balance_str = balance_creator
+        .iter()
+        .find(|b| b.unit == "Min")
+        .map(|b| b.total_amount.as_str())
+        .unwrap_or("0");
+    let recipient_balance_str = balance_recipient
+        .iter()
+        .find(|b| b.unit == "Min")
+        .map(|b| b.total_amount.as_str())
+        .unwrap_or("0");
+    assert_eq!(creator_balance_str, "35");
+    assert_eq!(recipient_balance_str, "25");
 
     // --- (NEU) SCHRITT 7: Zweiter Transfer in der Kette ---
     println!("\n--- SCHRITT 7: Empfänger sendet 10 Minuto an einen neuen Teilnehmer (Charlie) ---");
@@ -168,9 +179,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let balance_charlie = service_charlie.get_total_balance_by_currency()?;
     println!("   -> Kontostand Empfänger (jetzt Sender): {:?}", balance_recipient_after_send);
     println!("   -> Kontostand Charlie (neuer Empfänger): {:?}", balance_charlie);
-    // Nach einem vollen Transfer hat der Sender keinen aktiven Gutschein dieser Währung mehr.
-    assert!(balance_recipient_after_send.get("Minuto").is_none());
-    assert_eq!(balance_charlie.get("Minuto").unwrap(), "25");
+
+    // KORREKTUR: Suchen Sie den Saldo im Vec<AggregatedBalance> anhand der Einheit.
+    let recipient_has_balance = balance_recipient_after_send.iter().any(|b| b.unit == "Min");
+    let charlie_balance_str = balance_charlie
+        .iter()
+        .find(|b| b.unit == "Min")
+        .map(|b| b.total_amount.as_str())
+        .unwrap_or("0");
+    assert!(!recipient_has_balance, "Nach einem vollen Transfer sollte der Sender keinen Minuto-Saldo mehr haben.");
+    assert_eq!(charlie_balance_str, "25");
 
     // --- 8. Finale Rohdaten-Ausgabe ---
     println!("\n--- SCHRITT 8: Finale Rohdaten-Ausgabe des Gutscheins bei Charlie ---");

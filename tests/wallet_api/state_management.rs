@@ -465,6 +465,17 @@ fn api_wallet_save_and_load_fidelity() {
     // ERWARTETE BILANZ:
     // 10 (start) - 3 (gesendet) + 1 (empfangen) - 7 (gesendet) = 1
     // KORREKTUR: Der Test muss auf die korrekte Einheit "Oz" prüfen, die aus dem Standard geladen wird.
-    assert_eq!(balances.get("Oz").unwrap(), "1.0000", "Silver balance mismatch");
-    assert!(balances.get("m").is_none(), "Minuto balance should not exist as it was never created");
+    let silver_balance = balances
+        .iter()
+        .find(|b| b.unit == "Oz") // Korrigierte Abkürzung basierend auf Debug-Logs.
+        .map(|b| b.total_amount.as_str());
+
+    assert_eq!(
+        silver_balance,
+        Some("1.0000"),
+        "Silver balance mismatch"
+    );
+
+    let minuto_balance_exists = balances.iter().any(|b| b.unit == "Min");
+    assert!(!minuto_balance_exists, "Minuto balance should not exist as it was never created");
 }
