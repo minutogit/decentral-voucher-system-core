@@ -7,6 +7,7 @@ use super::{AuthMethod, Storage, StorageError};
 use crate::models::conflict::{FingerprintStore, ProofStore};
 use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
 use crate::services::crypto_utils;
+use base64::{engine::general_purpose, Engine as _};
 use argon2::Argon2;
 use ed25519_dalek::SigningKey;
 use rand_core::{OsRng, RngCore};
@@ -23,13 +24,39 @@ const BUNDLE_META_FILE_NAME: &str = "bundles.meta.enc";
 const FINGERPRINT_STORE_FILE_NAME: &str = "fingerprints.enc";
 const PROOF_STORE_FILE_NAME: &str = "proofs.enc";
 
+/// Privates Modul zur Kapselung der Serde-Logik für Base64-Kodierung.
+mod base64_serde {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+
+    /// Serialisiert einen `Vec<u8>` als Base64-String.
+    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&general_purpose::STANDARD.encode(bytes))
+    }
+
+    /// Deserialisiert einen Base64-String in einen `Vec<u8>`.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        general_purpose::STANDARD.decode(s).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Container für das verschlüsselte Nutzerprofil, inklusive Key-Wrapping-Informationen.
 #[derive(Serialize, Deserialize)]
 struct ProfileStorageContainer {
     password_kdf_salt: [u8; SALT_SIZE],
+    #[serde(with = "base64_serde")]
     password_wrapped_key_with_nonce: Vec<u8>,
     mnemonic_kdf_salt: [u8; SALT_SIZE],
+    #[serde(with = "base64_serde")]
     mnemonic_wrapped_key_with_nonce: Vec<u8>,
+    #[serde(with = "base64_serde")]
     encrypted_profile_payload: Vec<u8>,
 }
 
@@ -43,24 +70,28 @@ struct ProfilePayload {
 /// Container für den verschlüsselten Gutschein-Store.
 #[derive(Serialize, Deserialize)]
 struct VoucherStorageContainer {
+    #[serde(with = "base64_serde")]
     encrypted_store_payload: Vec<u8>,
 }
 
 /// Container für die verschlüsselten Bundle-Metadaten.
 #[derive(Serialize, Deserialize)]
 struct BundleMetadataContainer {
+    #[serde(with = "base64_serde")]
     encrypted_store_payload: Vec<u8>,
 }
 
 /// Container für den verschlüsselten Fingerprint-Store.
 #[derive(Serialize, Deserialize)]
 struct FingerprintStorageContainer {
+    #[serde(with = "base64_serde")]
     encrypted_store_payload: Vec<u8>,
 }
 
 /// Container für den verschlüsselten Proof-Store.
 #[derive(Serialize, Deserialize)]
 struct ProofStorageContainer {
+    #[serde(with = "base64_serde")]
     encrypted_store_payload: Vec<u8>,
 }
 
