@@ -38,6 +38,7 @@ use crate::services::voucher_manager::NewVoucherData;
 
 /// Die zentrale Verwaltungsstruktur für ein Nutzer-Wallet.
 /// Hält den In-Memory-Zustand und interagiert mit dem Speichersystem.
+#[derive(Clone)]
 pub struct Wallet {
     /// Die öffentlichen Profildaten und die Transaktionshistorie.
     pub profile: UserProfile,

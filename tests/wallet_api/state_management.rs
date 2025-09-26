@@ -5,10 +5,7 @@
 
 use voucher_lib::{
     app_service::AppService,
-    models::{
-        conflict::{ProofOfDoubleSpend, ResolutionEndorsement},
-        voucher::{Creator, NominalValue},
-    },
+    models::{conflict::{ProofOfDoubleSpend, ResolutionEndorsement}, voucher::{Creator, NominalValue}},
     services::{crypto_utils, voucher_manager::NewVoucherData},
     test_utils::{
         create_test_bundle, generate_signed_standard_toml, generate_valid_mnemonic,
@@ -478,4 +475,122 @@ fn api_wallet_save_and_load_fidelity() {
 
     let minuto_balance_exists = balances.iter().any(|b| b.unit == "Min");
     assert!(!minuto_balance_exists, "Minuto balance should not exist as it was never created");
+}
+
+
+/// Test 6.1: Verifiziert, dass `create_new_voucher` exakt eine Instanz hinzufügt.
+///
+/// ### Szenario:
+/// 1.  Ein neues, leeres Wallet wird erstellt.
+/// 2.  Der Zustand wird überprüft, um sicherzustellen, dass es leer ist (Assertion Zero).
+/// 3.  `create_new_voucher` wird genau einmal aufgerufen.
+/// 4.  Der Zustand wird erneut überprüft.
+///
+/// ### Erwartetes Ergebnis:
+/// -   Nach dem Aufruf darf sich nur exakt ein Gutschein im Wallet befinden.
+/// -   Dieser Test hätte den "Double-Add"-Bug direkt aufgedeckt.
+#[test]
+fn test_create_voucher_adds_exactly_one_instance() {
+    // 1. ARRANGE: Testumgebung und Anfangszustand herstellen
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let mut app_service = AppService::new(temp_dir.path()).expect("Failed to init AppService");
+
+    let mnemonic = AppService::generate_mnemonic(12).unwrap();
+    let password = "test_password_123";
+
+    app_service
+        .create_profile(&mnemonic, None, Some("test"), password)
+        .expect("Failed to create profile");
+    let user_id = app_service.get_user_id().unwrap();
+
+    // Assertion Zero: Sicherstellen, dass das Wallet initial leer ist.
+    let initial_summaries = app_service.get_voucher_summaries(None, None).unwrap();
+    assert_eq!(initial_summaries.len(), 0, "Wallet should be empty at the beginning");
+
+    // KORREKTUR: Umstellung auf den bewährten und vollständigen Silber-Standard.
+    let standard_toml = generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
+
+    // KORREKTUR: NewVoucherData um die obligatorische `validity_duration` ergänzt.
+    let voucher_data = NewVoucherData {
+        creator: Creator { id: user_id, ..Default::default() },
+        nominal_value: NominalValue { amount: "100".to_string(), ..Default::default() },
+        // Die 'description' kommt aus dem Standard, nicht aus NewVoucherData.
+        validity_duration: Some("P1Y".to_string()), // Gültigkeit von 1 Jahr hinzufügen
+        ..Default::default()
+    };
+
+    // 2. ACT: Die Ziel-Funktion ausführen
+    let created_voucher = app_service
+        .create_new_voucher(&standard_toml, "de", voucher_data.clone(), password)
+        .expect("Voucher creation failed");
+
+    // 3. ASSERT: Das Ergebnis und den neuen Zustand überprüfen
+    let final_summaries = app_service.get_voucher_summaries(None, None).unwrap();
+
+    // DIE KERN-ASSERTION, die den Bug findet:
+    assert_eq!(final_summaries.len(), 1, "There should be exactly one voucher in the wallet after creation");
+
+    // Zusätzliche Prüfung der Datenintegrität
+    let summary = &final_summaries[0];
+    assert_eq!(summary.current_amount, "100.0000"); // Betrag wird kanonisiert
+
+    // KORREKTUR: Die erwartete Beschreibung muss nun zum Silber-Standard passen.
+    let expected_description = "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von 100 Unzen Silber.";
+    assert_eq!(created_voucher.description, expected_description, "The description from the silver standard template was not applied correctly.");
+}
+
+
+/// Test 6.2: Stellt sicher, dass `create_new_voucher` transaktional ist.
+///
+/// ### Szenario:
+/// 1.  Ein leeres Wallet wird erstellt.
+/// 2.  Es wird versucht, einen Gutschein mit einem **falschen Passwort** zu erstellen.
+///     - Die Operation muss fehlschlagen.
+///     - Das Wallet muss danach immer noch leer sein.
+/// 3.  Anschließend wird ein Gutschein mit dem **richtigen Passwort** erstellt.
+///
+/// ### Erwartetes Ergebnis:
+/// -   Nach allen Operationen darf sich nur **ein einziger** Gutschein im Wallet befinden.
+/// -   Dieser Test findet den Fehler, bei dem ein fehlgeschlagener Speicherversuch
+///     den In-Memory-Zustand "schmutzig" hinterlässt.
+#[test]
+fn test_create_voucher_is_transactional_on_save_failure() {
+    // 1. ARRANGE
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let mut app_service = AppService::new(temp_dir.path()).expect("Failed to init AppService");
+
+    let mnemonic = AppService::generate_mnemonic(12).unwrap();
+    let correct_password = "correct_password";
+    let wrong_password = "wrong_password";
+
+    app_service
+        .create_profile(&mnemonic, None, Some("test"), correct_password)
+        .expect("Failed to create profile");
+    let user_id = app_service.get_user_id().unwrap();
+
+    let standard_toml = generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
+    let voucher_data = NewVoucherData {
+        creator: Creator { id: user_id, ..Default::default() },
+        nominal_value: NominalValue { amount: "50".to_string(), ..Default::default() },
+        validity_duration: Some("P1Y".to_string()),
+        ..Default::default()
+    };
+
+    // 2. ACT 1: Versuche, mit falschem Passwort zu erstellen
+    let creation_result_fail = app_service
+        .create_new_voucher(&standard_toml, "de", voucher_data.clone(), wrong_password);
+
+    // 3. ASSERT 1: Operation ist fehlgeschlagen und Wallet ist immer noch leer
+    assert!(creation_result_fail.is_err(), "Creation with wrong password should fail");
+    let summaries_after_fail = app_service.get_voucher_summaries(None, None).unwrap();
+    assert_eq!(summaries_after_fail.len(), 0, "Wallet should still be empty after a failed save");
+
+    // 4. ACT 2: Erstelle einen Gutschein mit dem korrekten Passwort
+    app_service
+        .create_new_voucher(&standard_toml, "de", voucher_data.clone(), correct_password)
+        .expect("Voucher creation with correct password should succeed");
+
+    // 5. ASSERT 2 (FINAL): Es befindet sich nur EIN Gutschein im Wallet
+    let final_summaries = app_service.get_voucher_summaries(None, None).unwrap();
+    assert_eq!(final_summaries.len(), 1, "There should be exactly one voucher in the wallet after one failed and one successful creation");
 }

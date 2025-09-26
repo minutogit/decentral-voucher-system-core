@@ -34,46 +34,59 @@ impl AppService {
         data: NewVoucherData,
         password: &str,
     ) -> Result<Voucher, String> {
-        let (mut wallet, identity) = match std::mem::replace(&mut self.state, AppState::Locked) {
-            AppState::Unlocked { wallet, identity } => (wallet, identity),
-            AppState::Locked => return Err("Wallet is locked.".to_string()),
-        };
+        let current_state = std::mem::replace(&mut self.state, AppState::Locked);
 
-        let (verified_standard, standard_hash) =
-            match crate::services::standard_manager::verify_and_parse_standard(standard_toml_content) {
-                Ok(res) => res,
-                Err(e) => {
-                    self.state = AppState::Unlocked { wallet, identity };
-                    return Err(e.to_string());
+        let (result, new_state) = match current_state {
+            AppState::Unlocked { wallet, identity } => {
+                match crate::services::standard_manager::verify_and_parse_standard(
+                    standard_toml_content,
+                ) {
+                    Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
+                    Ok((verified_standard, standard_hash)) => {
+                        match crate::services::voucher_manager::create_voucher(
+                            data,
+                            &verified_standard,
+                            &standard_hash,
+                            &identity.signing_key,
+                            lang_preference,
+                        ) {
+                            Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
+                            Ok(new_voucher) => {
+                                match self.determine_voucher_status(&new_voucher, &verified_standard)
+                                {
+                                    Err(e) => (Err(e), AppState::Unlocked { wallet, identity }),
+                                    Ok(initial_status) => {
+                                        // TRANSANKTIONALER ANSATZ:
+                                        // 1. Erstelle eine temporäre Kopie des Wallets für die Änderungen.
+                                        let mut temp_wallet = wallet.clone();
+                                        let local_id = crate::wallet::Wallet::calculate_local_instance_id(&new_voucher, &identity.user_id).unwrap();
+                                        temp_wallet.add_voucher_instance(local_id, new_voucher.clone(), initial_status);
+
+                                        // 2. Versuche, die Kopie zu speichern. Dies ist der "Commit"-Punkt.
+                                        match temp_wallet.save(&mut self.storage, &identity, password) {
+                                            Ok(_) => (
+                                                // 3a. Erfolg: Gib die modifizierte Kopie als neuen Zustand zurück.
+                                                Ok(new_voucher),
+                                                AppState::Unlocked { wallet: temp_wallet, identity },
+                                            ),
+                                            Err(e) => (
+                                                // 3b. Fehler: Verwirf die Kopie und gib den originalen,
+                                                // unberührten Zustand zurück.
+                                                Err(e.to_string()),
+                                                AppState::Unlocked { wallet, identity },
+                                            ),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-            };
-
-        let new_voucher = match crate::services::voucher_manager::create_voucher(
-            data,
-            &verified_standard,
-            &standard_hash,
-            &identity.signing_key,
-            lang_preference,
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                self.state = AppState::Unlocked { wallet, identity };
-                return Err(e.to_string());
             }
+            AppState::Locked => (Err("Wallet is locked.".to_string()), current_state),
         };
 
-        let result = match self.determine_voucher_status(&new_voucher, &verified_standard) {
-            Err(fatal_error_msg) => Err(format!("Internal logic error during voucher creation: {}. The voucher was not saved.", fatal_error_msg)),
-            Ok(initial_status) => {
-                // KORREKTUR: Die lokale ID muss deterministisch aus dem Gutschein-Zustand berechnet werden.
-                let local_id = crate::wallet::Wallet::calculate_local_instance_id(&new_voucher, &identity.user_id).map_err(|e| e.to_string())?;
-                wallet.add_voucher_instance(local_id.clone(), new_voucher.clone(), initial_status);
-                wallet.save(&mut self.storage, &identity, password)
-                    .map(|_| new_voucher)
-                    .map_err(|e| e.to_string())
-            }
-        };
-        self.state = AppState::Unlocked { wallet, identity };
+        self.state = new_state;
         result
     }
 
