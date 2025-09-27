@@ -318,6 +318,108 @@ fn api_wallet_reactive_double_spend_earliest_wins() {
     );
 }
 
+/// Test 1.2: Testet die Konflikterkennung bei exakt identischen Zeitstempeln.
+///
+/// ### Szenario:
+/// Wie bei `earliest_wins`, aber die Zeitstempel der konkurrierenden Transaktionen
+/// sind identisch.
+///
+/// ### Erwartetes Ergebnis:
+/// Das System muss ein deterministisches Tie-Breaking-Verfahren anwenden und darf
+/// nicht in einen inkonsistenten Zustand geraten. Es wird ein Gewinner gekürt,
+/// und der andere Gutschein landet in Quarantäne.
+#[test]
+fn api_wallet_reactive_double_spend_identical_timestamps() {
+    // --- 1. Setup (identisch zu earliest_wins) ---
+    let dir_alice = tempdir().unwrap();
+    let mut service_alice = AppService::new(dir_alice.path()).unwrap();
+    let m_alice =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    service_alice.create_profile(&m_alice, None, Some("alice"), "pwd").unwrap();
+    let (pk_alice, sk_alice) = crypto_utils::derive_ed25519_keypair(m_alice, None).unwrap();
+    let id_alice = service_alice.get_user_id().unwrap();
+    let identity_alice = voucher_lib::UserIdentity {
+        signing_key: sk_alice,
+        public_key: pk_alice,
+        user_id: id_alice.clone(),
+    };
+
+    let dir_david = tempdir().unwrap();
+    let mut service_david = AppService::new(dir_david.path()).unwrap();
+    service_david.create_profile(&generate_valid_mnemonic(), None, Some("david"), "pwd").unwrap();
+    let id_david = service_david.get_user_id().unwrap();
+
+    let silver_standard_toml =
+        generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
+    let (standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+    let mut standards_map = HashMap::new();
+    standards_map.insert(standard.metadata.uuid.clone(), silver_standard_toml.clone());
+
+    let voucher_v1 = service_alice
+        .create_new_voucher(
+            &silver_standard_toml,
+            "en",
+            NewVoucherData {
+                nominal_value: NominalValue { amount: "100".to_string(), ..Default::default() },
+                creator: Creator { id: id_alice.clone(), ..Default::default() },
+                ..Default::default()
+            },
+            "pwd",
+        )
+        .unwrap();
+
+    // --- 2. Erzeuge konkurrierende Transaktionen mit IDENTISCHEM Zeitstempel ---
+    let prev_tx = voucher_v1.transactions.last().unwrap();
+    let prev_tx_time = DateTime::parse_from_rfc3339(&prev_tx.t_time).unwrap().with_timezone(&Utc);
+    let collision_time = (prev_tx_time + Duration::seconds(1)).to_rfc3339();
+    let prev_tx_hash = crypto_utils::get_hash(utils::to_canonical_json(prev_tx).unwrap());
+
+    // Erzeuge zwei UNTERSCHIEDLICHE Transaktionen vom selben Punkt mit identischem Zeitstempel.
+    // Dies ist ein valides Double-Spend-Szenario und führt zu unterschiedlichen t_ids.
+
+    // Pfad A: Ein Split-Transfer, der 99 sendet und 1 behält.
+    let mut tx_a = Transaction {
+        prev_hash: prev_tx_hash.clone(),
+        t_type: "split".to_string(),
+        t_time: collision_time.clone(),
+        sender_id: id_alice.clone(),
+        recipient_id: id_david.clone(),
+        amount: "99.0000".to_string(),
+        sender_remaining_amount: Some("1.0000".to_string()),
+        ..Default::default()
+    };
+    tx_a = resign_transaction(tx_a, &identity_alice.signing_key);
+    let mut voucher_a = voucher_v1.clone();
+    voucher_a.transactions.push(tx_a.clone());
+
+    // Pfad B: Ein vollständiger Transfer, der 100 sendet.
+    let mut tx_b = Transaction {
+        prev_hash: prev_tx_hash, t_type: "transfer".to_string(), t_time: collision_time,
+        sender_id: id_alice.clone(), recipient_id: id_david.clone(), amount: "100".to_string(), ..Default::default()
+    };
+    tx_b = resign_transaction(tx_b, &identity_alice.signing_key);
+    let mut voucher_b = voucher_v1.clone();
+    voucher_b.transactions.push(tx_b.clone());
+
+    let bundle_a = create_test_bundle(&identity_alice, vec![voucher_a], &id_david, None).unwrap();
+    let bundle_b = create_test_bundle(&identity_alice, vec![voucher_b], &id_david, None).unwrap();
+
+    // Sicherstellen, dass die Transaktionen unterschiedlich sind (und damit auch die Gutscheine)
+    assert_ne!(tx_a.t_id, tx_b.t_id, "Conflicting transactions must have different t_ids");
+
+    // --- 3. David empfängt beide Bundles ---
+    service_david.receive_bundle(&bundle_a, &standards_map, None, "pwd").unwrap();
+    service_david.receive_bundle(&bundle_b, &standards_map, None, "pwd").unwrap();
+
+    // --- 4. Assertions ---
+    let summaries_after = service_david.get_voucher_summaries(None, None).unwrap();
+    assert_eq!(summaries_after.len(), 2, "Wallet should contain two instances");
+    let active_count = summaries_after.iter().filter(|s| s.status == VoucherStatus::Active).count();
+    let quarantined_count = summaries_after.iter().filter(|s| matches!(s.status, VoucherStatus::Quarantined{..})).count();
+    assert_eq!(active_count, 1, "Exactly one voucher should be active (tie-break)");
+    assert_eq!(quarantined_count, 1, "Exactly one voucher should be quarantined (tie-break)");
+}
+
 /// Test 2.1: Stellt sicher, dass der gesamte Zustand eines Wallets verlustfrei
 /// gespeichert und wiederhergestellt werden kann.
 ///

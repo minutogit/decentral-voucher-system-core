@@ -846,6 +846,45 @@ mod security_vulnerabilities {
         victim_wallet.voucher_store.vouchers.clear();
     }
 
+    #[test]
+    fn test_attack_inconsistent_split_transaction() {
+        // ### SETUP ###
+        // Ein Hacker besitzt einen gültigen Gutschein über 100 Einheiten.
+        let hacker_identity = &ACTORS.hacker;
+        let victim_identity = &ACTORS.victim;
+        let data = new_test_voucher_data(hacker_identity.user_id.clone());
+        let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+        let voucher =
+            voucher_manager::create_voucher(data, standard, standard_hash, &hacker_identity.signing_key, "en")
+                .unwrap();
+
+        // ### ANGRIFF ###
+        println!("--- Angriff 3b: Inkonsistente Split-Transaktion (Gelderschaffung) ---");
+        let mut inconsistent_split_voucher = voucher.clone();
+
+        // Hacker erstellt eine Split-Transaktion, bei der die Summe nicht stimmt (100 -> 30 + 80)
+        let inconsistent_tx_unsigned = Transaction {
+            prev_hash: get_hash(
+                to_canonical_json(inconsistent_split_voucher.transactions.last().unwrap()).unwrap(),
+            ),
+            t_time: get_current_timestamp(),
+            sender_id: hacker_identity.user_id.clone(),
+            recipient_id: victim_identity.user_id.clone(),
+            amount: "30".to_string(),
+            sender_remaining_amount: Some("80".to_string()), // Falscher Restbetrag
+            t_type: "split".to_string(),
+            ..Default::default()
+        };
+        let inconsistent_tx = create_hacked_tx(hacker_identity, inconsistent_tx_unsigned);
+        inconsistent_split_voucher.transactions.push(inconsistent_tx);
+
+        // ### VALIDIERUNG ###
+        let result =
+            voucher_validation::validate_voucher_against_standard(&inconsistent_split_voucher, standard);
+
+        // Die Validierung SOLLTE fehlschlagen. Aktuell tut sie das nicht.
+        assert!(result.is_err(), "Validation must fail on inconsistent split transaction.");
+    }
 
     // ===================================================================================
     // ANGRIFFSKLASSE 5: STRUKTURELLE INTEGRITÄTSPRÜFUNG DURCH FUZZING
