@@ -573,6 +573,27 @@ fn verify_transactions(voucher: &Voucher, _standard: &VoucherStandardDefinition)
             }.into());
         }
 
+        // NEU: Zusätzliche Prüfung für Split-Transaktionen auf korrekte Bilanz.
+        // Dies schließt die "Gelderschaffungs"-Lücke.
+        if tx.t_type == "split" {
+            let remaining_amount = match tx.sender_remaining_amount.as_deref() {
+                Some(rem_str) => Decimal::from_str(rem_str)?,
+                None => {
+                    return Err(ValidationError::InvalidTransaction(
+                        "Split transaction must have a sender_remaining_amount.".to_string(),
+                    )
+                    .into())
+                }
+            };
+
+            if sender_balance_before_tx != (amount_to_send + remaining_amount) {
+                return Err(ValidationError::InvalidTransaction(format!(
+                    "Invalid split balance: previous balance ({}) does not equal sent amount ({}) + remaining amount ({}).",
+                    sender_balance_before_tx, amount_to_send, remaining_amount
+                )).into());
+            }
+        }
+
         // Update state for the next iteration
         last_tx_hash = get_hash(to_canonical_json(tx)?);
         last_tx_time = tx.t_time.clone();
