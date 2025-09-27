@@ -9,3 +9,4 @@ pub mod signature_workflows;
 mod state_management;
 // Deklariert das neue Modul für Tests zur atomaren Zustandsverwaltung (Transaktionalität).
 mod transactionality;
+mod lifecycle_and_data;
