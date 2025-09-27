@@ -573,6 +573,14 @@ fn verify_transactions(voucher: &Voucher, _standard: &VoucherStandardDefinition)
             }.into());
         }
 
+        // HÄRTUNG: Ein 'transfer' darf keinen Restbetrag haben. Dies verhindert mehrdeutige Zustände.
+        if tx.t_type == "transfer" && tx.sender_remaining_amount.is_some() {
+            return Err(ValidationError::InvalidTransaction(
+                "A 'transfer' transaction must not have a sender_remaining_amount.".to_string(),
+            )
+            .into());
+        }
+
         // NEU: Zusätzliche Prüfung für Split-Transaktionen auf korrekte Bilanz.
         // Dies schließt die "Gelderschaffungs"-Lücke.
         if tx.t_type == "split" {

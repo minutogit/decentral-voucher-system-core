@@ -886,6 +886,207 @@ mod security_vulnerabilities {
         assert!(result.is_err(), "Validation must fail on inconsistent split transaction.");
     }
 
+    #[test]
+    fn test_attack_init_amount_mismatch() {
+        // ### SETUP ###
+        // Ein Hacker erstellt einen scheinbar gültigen Gutschein mit Nennwert 100.
+        let hacker_identity = &ACTORS.hacker;
+        let data = new_test_voucher_data(hacker_identity.user_id.clone());
+        let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+        let mut voucher =
+            voucher_manager::create_voucher(data, standard, standard_hash, &hacker_identity.signing_key, "en")
+                .unwrap();
+
+        // ### ANGRIFF ###
+        println!("--- Angriff: Inkonsistenter Betrag in 'init'-Transaktion ---");
+        // Der Nennwert des Gutscheins ist 100, aber der Hacker manipuliert die 'init'-Transaktion,
+        // sodass sie nur einen Betrag von 101 ausweist.
+        let mut malicious_init_tx = voucher.transactions[0].clone();
+        malicious_init_tx.amount = "101.0000".to_string();
+
+        // Die Transaktion muss neu signiert werden, damit die Validierung nicht an einer
+        // kaputten Signatur scheitert, bevor der Betrug geprüft wird.
+        let resigned_malicious_tx = create_hacked_tx(hacker_identity, malicious_init_tx);
+        voucher.transactions[0] = resigned_malicious_tx;
+
+        // ### VALIDIERUNG ###
+        let result = voucher_validation::validate_voucher_against_standard(&voucher, standard);
+
+        // Der Betrug muss mit dem spezifischen Fehler `InitAmountMismatch` erkannt werden.
+        assert!(matches!(
+            result.unwrap_err(),
+            VoucherCoreError::Validation(ValidationError::InitAmountMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_attack_negative_or_zero_amount_transaction() {
+        // ### SETUP ###
+        let hacker_identity = &ACTORS.hacker;
+        let victim_identity = &ACTORS.victim;
+        let data = new_test_voucher_data(hacker_identity.user_id.clone());
+        let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+        let voucher =
+            voucher_manager::create_voucher(data, standard, standard_hash, &hacker_identity.signing_key, "en")
+                .unwrap();
+
+        // ### ANGRIFF 1: Negativer Betrag ###
+        let negative_tx_unsigned = Transaction {
+            amount: "-10.0000".to_string(),
+            // Restliche Felder sind für diesen Test nicht primär relevant
+            prev_hash: get_hash(to_canonical_json(voucher.transactions.last().unwrap()).unwrap()),
+            t_time: get_current_timestamp(),
+            sender_id: hacker_identity.user_id.clone(),
+            recipient_id: victim_identity.user_id.clone(),
+            t_type: "transfer".to_string(),
+            ..Default::default()
+        };
+
+        // Die `create_hacked_tx` ist hier nicht nötig, da die Validierung VOR der Signaturprüfung fehlschlagen sollte.
+        let mut voucher_with_negative_tx = voucher.clone();
+        voucher_with_negative_tx.transactions.push(negative_tx_unsigned);
+
+        let result_negative = voucher_validation::validate_voucher_against_standard(&voucher_with_negative_tx, standard);
+        assert!(matches!(
+            result_negative.unwrap_err(),
+            VoucherCoreError::Validation(ValidationError::NegativeOrZeroAmount { .. })
+        ));
+
+        // ### ANGRIFF 2: Betrag von Null ###
+        let zero_tx_unsigned = Transaction {
+            amount: "0.0000".to_string(),
+            prev_hash: get_hash(to_canonical_json(voucher.transactions.last().unwrap()).unwrap()),
+            t_time: get_current_timestamp(),
+            sender_id: hacker_identity.user_id.clone(),
+            recipient_id: victim_identity.user_id.clone(),
+            t_type: "transfer".to_string(),
+            ..Default::default()
+        };
+        let mut voucher_with_zero_tx = voucher.clone();
+        voucher_with_zero_tx.transactions.push(zero_tx_unsigned);
+
+        let result_zero = voucher_validation::validate_voucher_against_standard(&voucher_with_zero_tx, standard);
+        assert!(matches!(
+            result_zero.unwrap_err(),
+            VoucherCoreError::Validation(ValidationError::NegativeOrZeroAmount { .. })
+        ));
+    }
+
+    #[test]
+    fn test_attack_invalid_precision_in_nominal_value() {
+        // ### SETUP ###
+        // Erstelle Testdaten mit einem Nennwert, der zu viele Nachkommastellen hat.
+        let creator_identity = &ACTORS.issuer;
+        let mut voucher_data = new_test_voucher_data(creator_identity.user_id.clone());
+        voucher_data.nominal_value.amount = "100.12345".to_string(); // 5 statt der erlaubten 4
+
+        let (standard, standard_hash) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+
+        // ### ANGRIFF ###
+        // Die `create_voucher` Funktion selbst validiert dies noch nicht, der Zustand wird also erstellt.
+        let malicious_voucher = voucher_manager::create_voucher(voucher_data, standard, standard_hash, &creator_identity.signing_key, "en").unwrap();
+
+        // ### VALIDIERUNG ###
+        // Die `validate_voucher_against_standard` muss diesen Fehler jedoch erkennen.
+        let result = voucher_validation::validate_voucher_against_standard(&malicious_voucher, standard);
+        assert!(matches!(
+            result.unwrap_err(),
+            VoucherCoreError::Validation(ValidationError::InvalidAmountPrecision { path, max_places: 4, found: 5 }) if path == "nominal_value.amount"
+        ));
+    }
+
+    #[test]
+    fn test_attack_full_transfer_amount_mismatch() {
+        // ### SETUP ###
+        let (standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+        let (public_key, signing_key) =
+            crypto_utils::generate_ed25519_keypair_for_tests(Some("creator_stub"));
+        let user_id = crypto_utils::create_user_id(&public_key, Some("cs")).unwrap();
+        let creator_identity = UserIdentity {
+            signing_key,
+            public_key,
+            user_id: user_id.clone(),
+        };
+        let creator = Creator {
+            id: user_id,
+            first_name: "Stub".to_string(),
+            last_name: "Creator".to_string(),
+            ..Default::default()
+        };
+        let voucher_data = create_test_voucher_data_with_amount(creator.clone(), "100");
+        let mut voucher =
+            create_voucher(voucher_data, standard, &SILVER_STANDARD.1, &creator_identity.signing_key, "en")
+                .unwrap();
+
+        // ### ANGRIFF ###
+        // Erstelle eine 'transfer' Transaktion, die aber nicht den vollen Betrag von 100 sendet.
+        // Wir erstellen die Transaktion explizit, anstatt die `init`-Transaktion zu klonen,
+        // um Nebeneffekte zu vermeiden und den Test robuster zu machen.
+        let malicious_tx = Transaction {
+            prev_hash: get_hash(to_canonical_json(voucher.transactions.last().unwrap()).unwrap()),
+            t_type: "transfer".to_string(),
+            amount: "99.0000".to_string(), // Inkorrekt für einen 'transfer' bei einem Guthaben von 100
+            sender_id: creator.id.clone(),
+            recipient_id: ACTORS.bob.user_id.clone(),
+            t_time: get_current_timestamp(),
+            sender_remaining_amount: None,
+            ..Default::default()
+        };
+        let resigned_malicious_tx = create_hacked_tx(&creator_identity, malicious_tx);
+        voucher.transactions.push(resigned_malicious_tx);
+
+        // ### VALIDIERUNG ###
+        let result = voucher_validation::validate_voucher_against_standard(&voucher, standard);
+        assert!(matches!(
+            result.unwrap_err(),
+            VoucherCoreError::Validation(ValidationError::FullTransferAmountMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_attack_remainder_in_full_transfer() {
+        // ### SETUP ###
+        let (standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
+        let (public_key, signing_key) =
+            crypto_utils::generate_ed25519_keypair_for_tests(Some("creator_stub_2"));
+        let user_id = crypto_utils::create_user_id(&public_key, Some("cs2")).unwrap();
+        let creator_identity = UserIdentity {
+            signing_key,
+            public_key,
+            user_id: user_id.clone(),
+        };
+        let creator = Creator {
+            id: user_id,
+            first_name: "Stub".to_string(),
+            last_name: "Creator".to_string(),
+            ..Default::default()
+        };
+        let voucher_data = create_test_voucher_data_with_amount(creator.clone(), "100");
+        let mut voucher =
+            create_voucher(voucher_data, standard, &SILVER_STANDARD.1, &creator_identity.signing_key, "en")
+                .unwrap();
+
+        // ### ANGRIFF ###
+        // Erstelle eine 'transfer' Transaktion, die den vollen Betrag sendet,
+        // aber fälschlicherweise auch einen Restbetrag enthält.
+        let malicious_tx = Transaction {
+            prev_hash: get_hash(to_canonical_json(voucher.transactions.last().unwrap()).unwrap()),
+            t_type: "transfer".to_string(),
+            amount: "100.0000".to_string(),
+            sender_remaining_amount: Some("0.0001".to_string()), // Darf nicht vorhanden sein
+            sender_id: creator.id.clone(),
+            recipient_id: ACTORS.bob.user_id.clone(),
+            t_time: get_current_timestamp(),
+            ..Default::default()
+        };
+        let resigned_malicious_tx = create_hacked_tx(&creator_identity, malicious_tx);
+        voucher.transactions.push(resigned_malicious_tx);
+
+        // ### VALIDIERUNG ###
+        let result = voucher_validation::validate_voucher_against_standard(&voucher, standard);
+        assert!(result.is_err(), "Validation must fail when a 'transfer' transaction has a remainder.");
+    }
+
     // ===================================================================================
     // ANGRIFFSKLASSE 5: STRUKTURELLE INTEGRITÄTSPRÜFUNG DURCH FUZZING
     // ===================================================================================
