@@ -116,10 +116,15 @@ impl AppService {
         password: &str,
     ) -> Result<Vec<u8>, String> {
         let current_state = std::mem::replace(&mut self.state, AppState::Locked);
-
+ 
         let (result, new_state) = match current_state {
-            AppState::Unlocked { mut wallet, identity } => {
-                match wallet.create_transfer(
+            AppState::Unlocked { wallet, identity } => {
+                // TRANSANKTIONALER ANSATZ:
+                // 1. Erstelle eine temporäre Kopie des Wallets für die Änderungen.
+                let mut temp_wallet = wallet.clone();
+ 
+                // 2. Führe die Operation auf der Kopie aus.
+                match temp_wallet.create_transfer(
                     &identity,
                     standard_definition,
                     local_instance_id,
@@ -128,11 +133,20 @@ impl AppService {
                     notes,
                     archive,
                 ) {
+                    // 3. Versuche, die Kopie zu speichern ("Commit").
                     Ok((bundle_bytes, _)) => {
-                        if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
-                            (Err(e.to_string()), AppState::Unlocked { wallet, identity })
-                        } else {
-                            (Ok(bundle_bytes), AppState::Unlocked { wallet, identity })
+                        match temp_wallet.save(&mut self.storage, &identity, password) {
+                            Ok(_) => (
+                                // 4a. Erfolg: Gib die modifizierte Kopie als neuen Zustand zurück.
+                                Ok(bundle_bytes),
+                                AppState::Unlocked { wallet: temp_wallet, identity },
+                            ),
+                            Err(e) => (
+                                // 4b. Fehler: Verwirf die Kopie und gib den originalen,
+                                // unberührten Zustand zurück.
+                                Err(e.to_string()),
+                                AppState::Unlocked { wallet, identity },
+                            ),
                         }
                     }
                     Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
@@ -143,7 +157,7 @@ impl AppService {
         self.state = new_state;
         result
     }
-
+ 
     /// Verarbeitet ein empfangenes Transaktions- oder Signatur-Bundle und speichert den neuen Wallet-Zustand.
     ///
     /// # Arguments
@@ -166,9 +180,9 @@ impl AppService {
         password: &str,
     ) -> Result<ProcessBundleResult, String> {
         let current_state = std::mem::replace(&mut self.state, AppState::Locked);
-
+ 
         let (result, new_state) = match current_state {
-            AppState::Unlocked { mut wallet, identity } => {
+            AppState::Unlocked { wallet, identity } => {
                 match self.validate_vouchers_in_bundle(
                     &identity,
                     bundle_data,
@@ -176,15 +190,24 @@ impl AppService {
                 ) {
                     Err(e) => (Err(e), AppState::Unlocked { wallet, identity }),
                     Ok(_) => {
-                        match wallet
+                        // TRANSANKTIONALER ANSATZ:
+                        let mut temp_wallet = wallet.clone();
+                        match temp_wallet
                             .process_encrypted_transaction_bundle(&identity, bundle_data, archive)
                         {
                             Ok(proc_result) => {
-                                if let Err(e) = wallet.save(&mut self.storage, &identity, password)
-                                {
-                                    (Err(e.to_string()), AppState::Unlocked { wallet, identity })
-                                } else {
-                                    (Ok(proc_result), AppState::Unlocked { wallet, identity })
+                                match temp_wallet.save(&mut self.storage, &identity, password) {
+                                    Ok(_) => (
+                                        Ok(proc_result),
+                                        AppState::Unlocked {
+                                            wallet: temp_wallet,
+                                            identity,
+                                        },
+                                    ),
+                                    Err(e) => (
+                                        Err(e.to_string()),
+                                        AppState::Unlocked { wallet, identity },
+                                    ),
                                 }
                             }
                             Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
@@ -216,13 +239,20 @@ impl AppService {
     ) -> Result<(), String> {
         let current_state = std::mem::replace(&mut self.state, AppState::Locked);
         let (result, new_state) = match current_state {
-            AppState::Unlocked { mut wallet, identity } => {
-                match wallet.add_resolution_endorsement(endorsement) {
+            AppState::Unlocked { wallet, identity } => {
+                // TRANSANKTIONALER ANSATZ:
+                let mut temp_wallet = wallet.clone();
+                match temp_wallet.add_resolution_endorsement(endorsement) {
                     Ok(_) => {
-                        if let Err(e) = wallet.save(&mut self.storage, &identity, password) {
-                            (Err(e.to_string()), AppState::Unlocked { wallet, identity })
-                        } else {
-                            (Ok(()), AppState::Unlocked { wallet, identity })
+                        match temp_wallet.save(&mut self.storage, &identity, password) {
+                            Ok(_) => (
+                                Ok(()),
+                                AppState::Unlocked {
+                                    wallet: temp_wallet,
+                                    identity,
+                                },
+                            ),
+                            Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
                         }
                     }
                     Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
@@ -234,3 +264,4 @@ impl AppService {
         result
     }
 }
+

@@ -78,59 +78,59 @@ impl AppService {
         standard_toml_content: &str,
         password: &str,
     ) -> Result<(), String> {
-        let (mut wallet, identity) = match std::mem::replace(&mut self.state, AppState::Locked) {
-            AppState::Unlocked { wallet, identity } => (wallet, identity),
-            AppState::Locked => return Err("Wallet is locked.".to_string()),
+        let current_state = std::mem::replace(&mut self.state, AppState::Locked);
+
+        let (result, new_state) = match current_state {
+            AppState::Unlocked { wallet, identity } => {
+                match crate::services::standard_manager::verify_and_parse_standard(standard_toml_content) {
+                    Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
+                    Ok((verified_standard, _)) => {
+                        // --- BEGINN DER TRANSAKTION ---
+                        let mut temp_wallet = wallet.clone();
+
+                        // 1. Signatur an die temporäre Wallet-Instanz anhängen.
+                        match temp_wallet.process_and_attach_signature(&identity, container_bytes) {
+                            Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
+                            Ok(updated_instance_id) => {
+                                // 2. Neuen Status basierend auf dem Ergebnis bestimmen.
+                                let instance = temp_wallet.get_voucher_instance(&updated_instance_id).cloned().unwrap(); // Muss existieren
+                                let operation_result = match self.determine_voucher_status(&instance.voucher, &verified_standard) {
+                                    Err(fatal_error_msg) => {
+                                        // Status auf der temporären Instanz aktualisieren.
+                                        temp_wallet.update_voucher_status(&updated_instance_id, VoucherStatus::Quarantined {
+                                            reason: fatal_error_msg.clone(),
+                                        });
+                                        Err(format!("Voucher quarantined due to fatal validation error: {}", fatal_error_msg))
+                                    }
+                                    Ok(new_status) => {
+                                        // Status auf der temporären Instanz aktualisieren.
+                                        temp_wallet.update_voucher_status(&updated_instance_id, new_status);
+                                        Ok(())
+                                    }
+                                };
+
+                                // 3. Versuchen, die Änderungen zu speichern ("Commit").
+                                match temp_wallet.save(&mut self.storage, &identity, password) {
+                                    Ok(_) => (
+                                        // Erfolg: Gib das Ergebnis der Operation zurück und setze die neue Wallet-Instanz.
+                                        operation_result,
+                                        AppState::Unlocked { wallet: temp_wallet, identity },
+                                    ),
+                                    Err(e) => (
+                                        // Fehler: Verwirf die Änderungen und gib den Speicherfehler zurück.
+                                        Err(e.to_string()),
+                                        AppState::Unlocked { wallet, identity },
+                                    ),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            AppState::Locked => (Err("Wallet is locked.".to_string()), AppState::Locked),
         };
 
-        let (verified_standard, _) =
-            match crate::services::standard_manager::verify_and_parse_standard(standard_toml_content)
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    self.state = AppState::Unlocked { wallet, identity };
-                    return Err(e.to_string());
-                }
-            };
-
-        let updated_instance_id =
-            match wallet.process_and_attach_signature(&identity, container_bytes) {
-                Ok(id) => id,
-                Err(e) => {
-                    self.state = AppState::Unlocked { wallet, identity };
-                    return Err(e.to_string());
-                }
-            };
-
-        let instance = wallet
-            .get_voucher_instance(&updated_instance_id)
-            .cloned()
-            .unwrap();
-        let result = match self.determine_voucher_status(&instance.voucher, &verified_standard) {
-            Err(fatal_error_msg) => {
-                wallet.update_voucher_status(
-                    &updated_instance_id,
-                    VoucherStatus::Quarantined {
-                        reason: fatal_error_msg.clone(),
-                    },
-                );
-                wallet
-                    .save(&mut self.storage, &identity, password)
-                    .map_err(|e| e.to_string())?;
-                Err(format!(
-                    "Voucher quarantined due to fatal validation error: {}",
-                    fatal_error_msg
-                ))
-            }
-            Ok(new_status) => {
-                wallet.update_voucher_status(&updated_instance_id, new_status);
-                wallet
-                    .save(&mut self.storage, &identity, password)
-                    .map_err(|e| e.to_string())
-            }
-        };
-        
-        self.state = AppState::Unlocked { wallet, identity };
+        self.state = new_state;
         result
     }
 }
