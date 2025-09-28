@@ -1,10 +1,10 @@
 # llm-context.md für decentral-voucher-system-core
 
-Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher_lib`. Sie dient als "README für die KI", um ein umfassendes Verständnis des Projekts und seiner Anforderungen zu gewährleisten.
+Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher_core`. Sie dient als "README für die KI", um ein umfassendes Verständnis des Projekts und seiner Anforderungen zu gewährleisten.
 
 ## 1\. Projekt & Zweck
 
-- **Projektname:** `voucher_lib`
+- **Projektname:** `voucher_core`
 
 - **Zweck:** Implementierung der Kernlogik eines dezentralen, vertrauensbasierten elektronischen Gutschein-Zahlungssystems.
 
@@ -104,14 +104,14 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
       "country": "STRING",      // Land.
       "full_address": "STRING"  // Vollständige, formatierte Adresse.
     },
-    "organization": "STRING",   // Die Organisation des Erstellers.
-    "community": "STRING",      // Beschreibung der Gemeinschaft, zu der der Ersteller gehört.
-    "phone": "STRING",          // Telefonnummer des Erstellers.
-    "email": "STRING",          // E-Mail-Adresse des Erstellers.
-    "url": "STRING",            // URL des Erstellers oder dessen Webseite.
+    "organization": "STRING, optional",   // Die Organisation des Erstellers.
+    "community": "STRING, optional",      // Beschreibung der Gemeinschaft, zu der der Ersteller gehört.
+    "phone": "STRING, optional",          // Telefonnummer des Erstellers.
+    "email": "STRING, optional",          // E-Mail-Adresse des Erstellers.
+    "url": "STRING, optional",            // URL des Erstellers oder dessen Webseite.
     "gender": "STRING",         // Geschlecht des Erstellers ISO 5218 (1 = male", 2 = female", 0 = not known, 9 = Not applicable).
-    "service_offer": "STRING",  // Beschreibt die Angebote oder Talente des Erstellers.
-    "needs": "STRING",          // Beschreibt die Gesuche oder Bedürfnisse des Erstellers.
+    "service_offer": "STRING, optional",  // Beschreibt die Angebote oder Talente des Erstellers.
+    "needs": "STRING, optional",          // Beschreibt die Gesuche oder Bedürfnisse des Erstellers.
     "signature": "STRING",      // Die digitale Signatur des Erstellers. Sie signiert den Hash des initialen Gutschein-Objekts (ohne voucher_id, Signaturen und Transaktionen).
     "coordinates": "STRING"     // Geografische Koordinaten des Erstellers (z.B. "Breitengrad, Längengrad").
   },
@@ -125,15 +125,15 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
       "guarantor_id": "STRING",         // Eindeutige ID des Bürgen (aus Public Key).
       "first_name": "STRING",
       "last_name": "STRING",
-      "organization": "STRING",
-      "community": "STRING",
-      "address": { // Vollständiges Adressobjekt, optional
+      "organization": "STRING, optional",
+      "community": "STRING, optional",
+      "address": { // Vollständiges Adressobjekt, optional.
       },
       "gender": "STRING", // ISO 5218
-      "email": "STRING",
-      "phone": "STRING",
-      "coordinates": "STRING",
-      "url": "STRING",
+      "email": "STRING, optional",
+      "phone": "STRING, optional",
+      "coordinates": "STRING, optional",
+      "url": "STRING, optional",
       "signature": "STRING",            // Die digitale Signatur des Bürgen, die die `signature_id` dieses Objekts unterzeichnet.
       "signature_time": "YYYY-MM-DDTHH:MM:SS.SSSSSSZ" // Zeitpunkt der Bürgen-Signatur.
     }
@@ -143,13 +143,13 @@ Diese Definitionen werden als externe **TOML-Dateien** (z.B. aus einem `voucher_
     { // Jede Transaktion ist ein in sich geschlossenes, signiertes Objekt.
       "t_id": "STRING",                 // Eindeutige ID der Transaktion, erzeugt durch Hashing der Transaktionsdaten (ohne t_id und Signatur).
       "prev_hash": "STRING",            // Der Hash der vorherigen Transaktion (oder der voucher_id bei der "init"-Transaktion), der die Kette kryptographisch sichert.
-      "t_type": "STRING",               // Art der Transaktion: "init" für Initialisierung, "split" für Teilung, "transfer" für einen vollen Transfer.
+      "t_type": "STRING, optional",     // Art der Transaktion: "init" für Initialisierung, "split" für Teilung, "transfer" für einen vollen Transfer. Kann bei vollem Transfer leer sein.
       "t_time": "YYYY-MM-DDTHH:MM:SS.SSSSSSZ", // Zeitpunkt der Transaktion.
       "sender_id": "STRING",            // ID des Senders der Transaktion.
       "recipient_id": "STRING",         // ID des Empfängers der Transaktion.
       "amount": "STRING",               // Der Betrag, der bei dieser Transaktion bewegt wurde.
       "sender_remaining_amount": "STRING",// Der Restbetrag beim Sender. Dieses Feld existiert nur bei "split"-Transaktionen.
-      "sender_signature": "STRING"      // Digitale Signatur des Senders. Signiert ein Objekt, das aus prev_hash, sender_id und t_id besteht.
+      "sender_signature": "STRING"      // Digitale Signatur des Senders. Signiert ein Objekt, das aus prev_hash + sender_id + t_id besteht.
     }
   ],
   "additional_signatures": [ // Ein Array für zusätzliche, optionale Signaturen, die an den Gutschein angehängt werden können.
@@ -234,20 +234,19 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 ## 6\. Aktueller Projektstrukturbaum
 
 ```
-.
 ├── Cargo.lock
 ├── Cargo.toml
 ├── README.md
 ├── sign_standards.sh
 ├── src
 │   ├── app_service
+│   │   ├── app_queries.rs
+│   │   ├── app_signature_handler.rs
 │   │   ├── command_handler.rs
 │   │   ├── conflict_handler.rs
 │   │   ├── data_encryption.rs
 │   │   ├── lifecycle.rs
-│   │   ├── mod.rs
-│   │   ├── app_queries.rs
-│   │   └── app_signature_handler.rs
+│   │   └── mod.rs
 │   ├── archive
 │   │   ├── file_archive.rs
 │   │   └── mod.rs
@@ -289,6 +288,7 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │       ├── queries.rs
 │       ├── signature_handler.rs
 │       └── tests.rs
+├── test_plan.txt
 ├── tests
 │   ├── core_logic
 │   │   ├── lifecycle.rs
@@ -326,9 +326,13 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 │   ├── validation_tests.rs
 │   ├── wallet_api
 │   │   ├── general_workflows.rs
+│   │   ├── hostile_bundles.rs
+│   │   ├── hostile_standards.rs
+│   │   ├── lifecycle_and_data.rs
 │   │   ├── mod.rs
 │   │   ├── signature_workflows.rs
-│   │   └── state_management.rs
+│   │   ├── state_management.rs
+│   │   └── transactionality.rs
 │   └── wallet_api_tests.rs
 ├── validate_standards.sh
 └── voucher_standards
@@ -358,7 +362,7 @@ Definiert den `AppService`, eine übergeordnete Fassade, die die `Wallet`-Logik 
   - Generiert eine neue BIP-39 Mnemonic-Phrase.
 - `pub fn validate_mnemonic(mnemonic: &str) -> Result<(), String>`
   - Validiert eine vom Benutzer eingegebene BIP-39 Mnemonic-Phrase.
-- `pub fn create_profile(...) -> Result<(), String>`
+- `pub fn create_profile(&mut self, mnemonic: &str, passphrase: Option<&str>, user_prefix: Option<&str>, password: &str) -> Result<(), String>`
   - Erstellt ein komplett neues Wallet und Profil, speichert es und setzt den Service in den `Unlocked`-Zustand.
 - `pub fn login(...) -> Result<(), String>`
   - Entsperrt ein existierendes Wallet und lädt es in den Speicher.
@@ -366,30 +370,38 @@ Definiert den `AppService`, eine übergeordnete Fassade, die die `Wallet`-Logik 
   - Stellt ein Wallet mit der Mnemonic-Phrase wieder her und setzt ein neues Passwort.
 - `pub fn logout(&mut self)`
   - Sperrt das Wallet und entfernt sensible Daten aus dem Speicher.
-- `pub fn get_voucher_summaries(&self) -> Result<Vec<VoucherSummary>, String>`
-  - Gibt eine Liste von Zusammenfassungen aller Gutscheine im Wallet zurück.
-- `pub fn get_total_balance_by_currency(&self) -> Result<HashMap<String, String>, String>`
+- `pub fn get_voucher_summaries(&self, voucher_standard_uuid_filter: Option<&[String]>, status_filter: Option<&[VoucherStatus]>) -> Result<Vec<VoucherSummary>, String>`
+  - Gibt eine Liste von Zusammenfassungen aller Gutscheine im Wallet zurück, optional gefiltert nach Standard und Status.
+- `pub fn get_total_balance_by_currency(&self) -> Result<Vec<AggregatedBalance>, String>`
   - Aggregiert die Guthaben aller aktiven Gutscheine, gruppiert nach Währung.
 - `pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String>`
   - Ruft eine detaillierte Ansicht für einen einzelnen Gutschein ab.
 - `pub fn get_user_id(&self) -> Result<String, String>`
   - Gibt die User-ID des Wallet-Inhabers zurück.
-- `pub fn create_new_voucher(...) -> Result<Voucher, String>`
-  - Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand.
-- `pub fn create_transfer_bundle(...) -> Result<Vec<u8>, String>`
-  - Erstellt eine Transaktion, verpackt sie in ein `SecureContainer`-Bundle und speichert den neuen Wallet-Zustand.
-- `pub fn receive_bundle(...) -> Result<ProcessBundleResult, String>`
-  - Verarbeitet ein empfangenes Transaktions- oder Signatur-Bundle und speichert den neuen Wallet-Zustand.
+- `pub fn create_new_voucher(&mut self, standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: &str) -> Result<Voucher, String>`
+  - Erstellt einen brandneuen Gutschein, validiert ihn gegen den bereitgestellten Standard, fügt ihn zum Wallet hinzu und speichert den Zustand.
+- `pub fn create_transfer_bundle(&mut self, standard_definition: &VoucherStandardDefinition, local_instance_id: &str, recipient_id: &str, amount_to_send: &str, notes: Option<String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<Vec<u8>, String>`
+  - Erstellt eine Transaktion, verpackt sie in ein `SecureContainer`-Bundle und speichert den neuen Wallet-Zustand. Benötigt die Standard-Definition zur Validierung.
+- `pub fn receive_bundle(&mut self, bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`
+  - Verarbeitet ein empfangenes Transaktions-Bundle, validiert die enthaltenen Gutscheine gegen die bereitgestellten Standard-Definitionen und speichert den neuen Wallet-Zustand.
 - `pub fn create_signing_request_bundle(...) -> Result<Vec<u8>, String>`
   - Erstellt ein Bundle, um einen Gutschein zur Unterzeichnung an einen Bürgen zu senden.
 - `pub fn create_detached_signature_response_bundle(...) -> Result<Vec<u8>, String>`
   - Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage.
-- `pub fn process_and_attach_signature(...) -> Result<(), String>`
-  - Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Zustand.
+- `pub fn process_and_attach_signature(&mut self, container_bytes: &[u8], standard_toml_content: &str, password: &str) -> Result<(), String>`
+  - Verarbeitet eine empfangene losgelöste Signatur, validiert den Gutschein neu gegen den Standard, fügt die Signatur hinzu und speichert den Zustand.
 - `pub fn save_encrypted_data(...) -> Result<(), String>`
   - Speichert einen beliebigen Byte-Slice verschlüsselt auf der Festplatte.
 - `pub fn load_encrypted_data(...) -> Result<Vec<u8>, String>`
   - Lädt und entschlüsselt einen zuvor gespeicherten, beliebigen Datenblock.
+- `pub fn list_conflicts(&self) -> Result<Vec<ProofOfDoubleSpendSummary>, String>`
+  - Gibt eine Liste von Zusammenfassungen aller bekannten Double-Spend-Konflikte zurück.
+- `pub fn get_proof_of_double_spend(&self, proof_id: &str) -> Result<ProofOfDoubleSpend, String>`
+  - Ruft einen vollständigen `ProofOfDoubleSpend` anhand seiner ID ab.
+- `pub fn create_resolution_endorsement(&self, proof_id: &str, notes: Option<String>) -> Result<ResolutionEndorsement, String>`
+  - Erstellt eine signierte Beilegungserklärung für einen Konflikt.
+- `pub fn import_resolution_endorsement(&mut self, endorsement: ResolutionEndorsement, password: &str) -> Result<(), String>`
+  - Importiert eine Beilegungserklärung, fügt sie dem entsprechenden Konfliktbeweis hinzu und speichert den Wallet-Zustand.
 
 ### `src/wallet` Modul
 
@@ -407,8 +419,8 @@ Das `wallet`-Modul wurde refaktorisiert, um die Komplexität zu reduzieren und d
 - **Abfragen & Ansichten** (`queries.rs`)
   - `pub fn list_vouchers(&self) -> Vec<VoucherSummary>`: Gibt eine vereinfachte Liste aller Gutscheine zurück.
   - `pub fn get_voucher_details(...) -> Result<VoucherDetails, ...>`: Gibt detaillierte Informationen zu einem Gutschein zurück.
-  - `pub fn get_total_balance_by_currency(&self) -> HashMap<String, String>`: Aggregiert alle Guthaben nach Währung.
   - `pub fn get_user_id(&self) -> &str`: Gibt die ID des Wallet-Inhabers zurück.
+  - `pub fn get_total_balance_by_currency(&self) -> Vec<AggregatedBalance>`: Aggregiert alle Guthaben nach Währung.
 - **Signatur-Workflows** (`signature_handler.rs`)
   - `pub fn create_signing_request(...)`: Erstellt einen `SecureContainer` zur Anforderung einer Signatur.
   - `pub fn create_detached_signature_response(...)`: Erstellt eine signierte Antwort auf eine Anfrage.
@@ -454,6 +466,18 @@ Kapselt die zustandslose Logik für das Erstellen, Verschlüsseln, Öffnen und V
 - `pub fn open_and_verify_bundle(...)`: Öffnet einen `SecureContainer`, validiert den Inhalt als `TransactionBundle` und verifiziert dessen digitale Signatur.
 
 ### `services::crypto_utils` Modul
+
+### `services::conflict_manager` Modul
+
+Dieses Modul kapselt die Geschäftslogik zur Erkennung, Verifizierung und Verwaltung von Double-Spending-Konflikten.
+
+- `pub fn create_fingerprint_for_transaction(...) -> Result<TransactionFingerprint, ...>`: Erstellt einen einzelnen, anonymisierten Fingerprint für eine Transaktion, inklusive des verschlüsselten Zeitstempels.
+- `pub fn scan_and_update_own_fingerprints(...)`: Durchsucht alle Gutscheine und aktualisiert den Store mit den eigenen Fingerprints.
+- `pub fn check_for_double_spend(...) -> DoubleSpendCheckResult`: Führt eine Double-Spend-Prüfung durch, indem eigene und fremde Fingerprints kombiniert werden.
+- `pub fn create_proof_of_double_spend(...) -> Result<ProofOfDoubleSpend, ...>`: Erstellt einen fälschungssicheren, portablen Beweis für einen Double-Spend-Versuch mit deterministischer `proof_id`.
+- `pub fn create_and_sign_resolution_endorsement(...) -> Result<ResolutionEndorsement, ...>`: Erstellt eine signierte Beilegungserklärung für einen Konflikt.
+- `pub fn encrypt_transaction_timestamp(...) -> Result<u128, ...>`: Verschlüsselt einen Transaktionszeitstempel via XOR für die anonymisierte Analyse auf Layer 2.
+
 
 Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierung, Hashing, Signaturen und User ID-Verwaltung.
 
@@ -514,8 +538,7 @@ Dieses Modul stellt die Kernlogik für die Erstellung und Verarbeitung von Gutsc
 
 Dieses Modul enthält die Logik zur Validierung eines `Voucher`-Objekts gegen die Regeln seines Standards. **Die Validierungslogik wurde erheblich gehärtet.**
 
-- `pub fn validate_voucher_against_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), ValidationError>`
-  - Führt eine umfassende Prüfung des Gutscheins durch, inklusive der korrekten Verkettung unter Einbeziehung des `voucher_nonce`, der Validierung der vereinfachten Transaktions-Signatur und neuer Geschäftsregeln (z.B. keine Transaktionen an sich selbst).
+  - `pub fn validate_voucher_against_standard(voucher: &Voucher, standard: &VoucherStandardDefinition) -> Result<(), VoucherCoreError>`  - Führt eine umfassende Prüfung des Gutscheins durch, inklusive der korrekten Verkettung unter Einbeziehung des `voucher_nonce`, der Validierung der vereinfachten Transaktions-Signatur und neuer Geschäftsregeln (z.B. keine Transaktionen an sich selbst).
   - Überprüft die **Konsistenz des eingebetteten Standard-Hashes** mit dem Hash des aktuellen Standard-Objekts, um sicherzustellen, dass der Gutschein immer gegen die exakte Version des Standards validiert wird, mit der er erstellt wurde.
   - Überprüft, ob der **Transaktionstyp** (`t_type`) laut Standard erlaubt ist.
   - Überprüft die Integrität und kryptographische Gültigkeit aller **zusätzlichen Signaturen** (`additional_signatures`).
