@@ -415,7 +415,7 @@ fn test_receive_bundle_is_transactional_on_conflict_and_save_failure() {
     let mut service_alice = AppService::new(dir_alice.path()).unwrap();
     let m_alice = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     service_alice.create_profile(m_alice, None, Some("alice"), "pwd").unwrap();
-    let (pk_alice, sk_alice) = voucher_lib::services::crypto_utils::derive_ed25519_keypair(m_alice, None).unwrap();
+    let (pk_alice, sk_alice) = voucher_lib::services::crypto_utils::derive_ed25519_keypair(m_alice, Some("alice")).unwrap();
     let id_alice = service_alice.get_user_id().unwrap();
     let identity_alice = voucher_lib::UserIdentity { signing_key: sk_alice, public_key: pk_alice, user_id: id_alice.clone() };
 

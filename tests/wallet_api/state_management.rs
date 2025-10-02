@@ -188,7 +188,7 @@ fn api_wallet_reactive_double_spend_earliest_wins() {
     let m_alice =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     service_alice.create_profile(&m_alice, None, Some("alice"), "pwd").unwrap();
-    let (pk_alice, sk_alice) = crypto_utils::derive_ed25519_keypair(m_alice, None).unwrap();
+    let (pk_alice, sk_alice) = crypto_utils::derive_ed25519_keypair(m_alice, Some("alice")).unwrap();
     let id_alice = service_alice.get_user_id().unwrap();
     let identity_alice = voucher_lib::UserIdentity {
         signing_key: sk_alice,
@@ -336,7 +336,7 @@ fn api_wallet_reactive_double_spend_identical_timestamps() {
     let m_alice =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     service_alice.create_profile(&m_alice, None, Some("alice"), "pwd").unwrap();
-    let (pk_alice, sk_alice) = crypto_utils::derive_ed25519_keypair(m_alice, None).unwrap();
+    let (pk_alice, sk_alice) = crypto_utils::derive_ed25519_keypair(m_alice, Some("alice")).unwrap();
     let id_alice = service_alice.get_user_id().unwrap();
     let identity_alice = voucher_lib::UserIdentity {
         signing_key: sk_alice,

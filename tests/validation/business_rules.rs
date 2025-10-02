@@ -232,25 +232,22 @@ mod signature_requirements {
     use voucher_lib::error::ValidationError;
 
     fn load_toml_standard(path: &str) -> (voucher_lib::VoucherStandardDefinition, String) {
-        let toml_str = generate_signed_standard_toml(path);
-        verify_and_parse_standard(&toml_str).unwrap()
+        let toml_str = generate_signed_standard_toml(path);        verify_and_parse_standard(&toml_str).unwrap()
     }
-
     fn create_additional_signature(
-        voucher: &voucher_lib::Voucher, signer_id: &str, signing_key: &ed25519_dalek::SigningKey, description: &str,
+        voucher: &voucher_lib::Voucher, signer: &voucher_lib::UserIdentity, description: &str,
     ) -> voucher_lib::models::voucher::AdditionalSignature {
         use ed25519_dalek::Signer;
         use voucher_lib::services::{crypto_utils, utils};
         let mut signature_obj = voucher_lib::models::voucher::AdditionalSignature {
-            voucher_id: voucher.voucher_id.clone(), signer_id: signer_id.to_string(),
+            voucher_id: voucher.voucher_id.clone(), signer_id: signer.user_id.clone(),
             signature_time: utils::get_current_timestamp(), description: description.to_string(),
             ..Default::default()
         };
         let mut obj_to_hash = signature_obj.clone();
         obj_to_hash.signature_id = "".to_string();
-        obj_to_hash.signature = "".to_string();
         let signature_id = crypto_utils::get_hash(utils::to_canonical_json(&obj_to_hash).unwrap());
-        let signature = signing_key.sign(signature_id.as_bytes());
+        let signature = signer.signing_key.sign(signature_id.as_bytes());
         let signature_b58 = bs58::encode(signature.to_bytes()).into_string();
         signature_obj.signature_id = signature_id;
         signature_obj.signature = signature_b58;
@@ -293,8 +290,7 @@ mod signature_requirements {
         let mut voucher = create_voucher_for_manipulation(
             voucher_data, &standard, &standard_hash, &creator_identity.signing_key, "en",
         );
-        let signature_with_wrong_desc =
-            create_additional_signature(&voucher, &approver.user_id, &approver.signing_key, "Some other description");
+        let signature_with_wrong_desc = create_additional_signature(&voucher, approver, "Some other description");
         voucher.additional_signatures.push(signature_with_wrong_desc);
         let result = validate_voucher_against_standard(&voucher, &standard);
         assert!(matches!(
@@ -306,19 +302,31 @@ mod signature_requirements {
 
     #[test]
     fn test_validate_voucher_when_signature_description_is_correct_then_succeeds() {
-        let (standard, standard_hash) = load_toml_standard("tests/test_data/standards/standard_strict_sig_description.toml");
+        // SETUP: Lade den Basis-Standard
+        let (base_standard, _) = load_toml_standard("tests/test_data/standards/standard_strict_sig_description.toml");
         let creator = &ACTORS.alice;
         let approver = &ACTORS.bob;
+
+        // KORREKTUR: Erstelle einen neuen, angepassten Standard zur Laufzeit,
+        // der explizit `ACTORS.bob` als erlaubten Unterzeichner definiert.
+        let (custom_standard, custom_hash) = test_utils::create_custom_standard(&base_standard, |s| {
+            s.validation.as_mut().unwrap()
+                .required_signatures.as_mut().unwrap()
+                .iter_mut()
+                .find(|rule| rule.role_description == "Official Approval by Bob")
+                .unwrap().allowed_signer_ids = vec![approver.user_id.clone()];
+        });
+
         let voucher_data = NewVoucherData {
             creator: Creator { id: creator.user_id.clone(), ..Default::default() },
             validity_duration: Some("P1Y".to_string()),
             nominal_value: NominalValue { amount: "100".to_string(), ..Default::default() },
             ..Default::default()
         };
-        let mut voucher = create_voucher_for_manipulation(voucher_data, &standard, &standard_hash, &creator.signing_key, "en");
-        let correct_signature = create_additional_signature(&voucher, &approver.user_id, &approver.signing_key, "Official Approval 2025");
+        let mut voucher = create_voucher_for_manipulation(voucher_data, &custom_standard, &custom_hash, &creator.signing_key, "en");
+        let correct_signature = create_additional_signature(&voucher, approver, "Official Approval 2025");
         voucher.additional_signatures.push(correct_signature);
-        assert!(validate_voucher_against_standard(&voucher, &standard).is_ok());
+        assert!(validate_voucher_against_standard(&voucher, &custom_standard).is_ok());
     }
 }
 

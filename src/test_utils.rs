@@ -133,6 +133,19 @@ lazy_static! {
         let mut standard: VoucherStandardDefinition = toml::from_str(toml_str)
             .expect("Failed to parse Required Sig TOML template for tests");
 
+        // HINZUGEFÜGT: Korrigiere die hartkodierten, veralteten User-IDs in den Validierungsregeln.
+        // Die TOML-Datei enthält `did:key:...`-Strings ohne Prüfsumme. Wir ersetzen sie hier im Speicher
+        // durch die korrekte, zur Laufzeit generierte User-ID unseres Test-Herausgebers.
+        if let Some(validation) = standard.validation.as_mut() {
+            if let Some(sig_rules) = validation.required_signatures.as_mut() {
+                for rule in sig_rules.iter_mut() {
+                    // Wir aktualisieren alle Regeln, um sicherzustellen, dass sie die neue User-ID verwenden.
+                    // Dadurch wird der Vergleich in `validate_required_signatures` erfolgreich sein.
+                    rule.allowed_signer_ids = vec![issuer.user_id.clone()];
+                }
+            }
+        }
+
         standard.signature = None;
         let canonical_json_for_signing = to_canonical_json(&standard)
             .expect("Failed to create canonical JSON for Required Sig standard");

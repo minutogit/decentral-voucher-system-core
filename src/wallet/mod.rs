@@ -150,8 +150,18 @@ impl Wallet {
         passphrase: Option<&str>,
         user_prefix: Option<&str>,
     ) -> Result<(Self, UserIdentity), VoucherCoreError> {
-        let (public_key, signing_key) =
-            crate::services::crypto_utils::derive_ed25519_keypair(mnemonic_phrase, passphrase)?;
+        // Das Präfix wird Teil der Passphrase, um kryptographisch getrennte Konten zu erzeugen.
+        let final_passphrase_str = format!(
+            "{}{}",
+            passphrase.unwrap_or(""),
+            user_prefix.unwrap_or("").to_lowercase()
+        );
+        let final_passphrase = if final_passphrase_str.is_empty() {
+            None
+        } else {
+            Some(final_passphrase_str.as_str())
+        };
+        let (public_key, signing_key) = crate::services::crypto_utils::derive_ed25519_keypair(mnemonic_phrase, final_passphrase)?;
         let user_id = create_user_id(&public_key, user_prefix)
             .map_err(|e| VoucherCoreError::Crypto(e.to_string()))?;
 

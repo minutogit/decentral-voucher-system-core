@@ -1432,7 +1432,9 @@ mod security_vulnerabilities {
         }
 
         fn create_valid_approval_signature(voucher: &Voucher) -> AdditionalSignature {
-            let signer = &ACTORS.issuer; // Gehört zu den allowed_signer_ids
+            // KORREKTUR: Wir müssen die Identität verwenden, die den Standard signiert hat (TEST_ISSUER),
+            // da dessen ID in den `allowed_signer_ids` steht.
+            let signer = &self::test_utils::TEST_ISSUER;
             let mut sig = AdditionalSignature {
                 voucher_id: voucher.voucher_id.clone(),
                 signer_id: signer.user_id.clone(),
@@ -1444,11 +1446,16 @@ mod security_vulnerabilities {
             // 'signature_id' und 'signature' selbst berechnet werden. Die Verifizierungslogik
             // tut genau das. Wir müssen es hier exakt nachbilden.
             let mut data_for_id_hash = sig.clone();
+            println!("\n[DEBUG TEST CREATE SIG] --- START CREATION ---");
             data_for_id_hash.signature_id = "".to_string();
             data_for_id_hash.signature = "".to_string();
-            sig.signature_id = get_hash(to_canonical_json(&data_for_id_hash).unwrap());
+            let canonical_json_for_creation = to_canonical_json(&data_for_id_hash).unwrap();
+            println!("[DEBUG TEST CREATE SIG] Canonical JSON for creation:\n{}", canonical_json_for_creation);
+            sig.signature_id = get_hash(&canonical_json_for_creation);
+            println!("[DEBUG TEST CREATE SIG] Generated signature_id: {}", sig.signature_id);
             let digital_sig = sign_ed25519(&signer.signing_key, sig.signature_id.as_bytes());
             sig.signature = bs58::encode(digital_sig.to_bytes()).into_string();
+            println!("[DEBUG TEST CREATE SIG] --- END CREATION ---\n");
             sig
         }
 

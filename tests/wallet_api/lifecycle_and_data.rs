@@ -178,7 +178,7 @@ mod tests {
 
         // 1. Profil erstellen
         service
-            .create_profile(&mnemonic, None, Some("test"), PASSWORD)
+            .create_profile(&mnemonic, None, None, PASSWORD)
             .unwrap();
 
         // 2. Einen Test-Gutschein erstellen und dem Wallet hinzufügen

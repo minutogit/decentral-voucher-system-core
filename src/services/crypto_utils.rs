@@ -387,70 +387,83 @@ pub fn verify_ed25519(public_key: &EdPublicKey, message: &[u8], signature: &Sign
 /// Error types for user ID creation.
 #[derive(Debug)]
 pub enum UserIdError {
-    /// The prefix is too short (must be at least 1 character).
-    PrefixTooShort,
-    /// The prefix is too long (maximum 32 characters allowed).
+    /// Das Präfix ist zu lang (maximal 63 Zeichen erlaubt).
     PrefixTooLong(usize),
-    /// The prefix contains invalid characters (only alphanumeric and '-' are allowed).
+    /// Das Präfix enthält ungültige Zeichen.
     InvalidPrefixChars,
+    /// Das Präfix darf nicht mit einem Bindestrich beginnen oder enden.
+    InvalidPrefixStartEnd,
+    /// Das Präfix darf keine zwei aufeinanderfolgenden Bindestriche enthalten.
+    PrefixHasDoubleHyphen,
 }
 
 impl fmt::Display for UserIdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            UserIdError::PrefixTooShort => write!(f, "Prefix cannot be empty if provided."),
-            UserIdError::PrefixTooLong(len) => write!(f, "Prefix is too long: {} characters (maximum is 32).", len),
-            UserIdError::InvalidPrefixChars => write!(f, "Prefix contains invalid characters. Only alphanumeric characters (a-z, A-Z, 0-9) and hyphens (-) are allowed."),
+            UserIdError::PrefixTooLong(len) => write!(
+                f,
+                "Prefix is too long: {} characters (maximum is 63).",
+                len
+            ),
+            UserIdError::InvalidPrefixChars => write!(
+                f,
+                "Prefix contains invalid characters. Only lowercase letters (a-z), numbers (0-9), and hyphens (-) are allowed."
+            ),
+            UserIdError::InvalidPrefixStartEnd => {
+                write!(f, "Prefix must not start or end with a hyphen.")
+            }
+            UserIdError::PrefixHasDoubleHyphen => {
+                write!(f, "Prefix must not contain consecutive hyphens.")
+            }
         }
     }
 }
 
 impl std::error::Error for UserIdError {}
 
-
-/// Generates a user ID based on the W3C did:key standard, with an optional prefix for sub-addressing.
+/// Generiert eine User-ID mit optionalem Präfix und einer obligatorischen Prüfsumme.
 ///
-/// The format is: `[prefix]@[did:key:z...Ed25519 public key...]` or just `did:key:z...`
-///
-/// # Arguments
-///
-/// * `public_key` - The Ed25519 public key.
-/// * `user_prefix` - An optional context prefix. If `None` or `Some("")`, no prefix is used.
-///
-/// # Returns
-///
-/// A `Result` containing the user ID string or a `UserIdError`.
+/// Das Format ist: `[präfix-]prüfsumme@did:key:z...`
 pub fn create_user_id(public_key: &EdPublicKey, user_prefix: Option<&str>) -> Result<String, UserIdError> {
-    // Multicodec prefix for Ed25519 public keys: 0xed01
     const ED25519_MULTICODEC_PREFIX: [u8; 2] = [0xed, 0x01];
 
     let mut bytes_to_encode = Vec::with_capacity(34);
     bytes_to_encode.extend_from_slice(&ED25519_MULTICODEC_PREFIX);
     bytes_to_encode.extend_from_slice(&public_key.to_bytes());
-
     let did_key = format!("did:key:z{}", bs58::encode(bytes_to_encode).into_string());
 
-    if let Some(prefix) = user_prefix {
-        if prefix.is_empty() {
-            // Treat Some("") as a request for a prefix-less ID
-            return Ok(did_key);
-        }
+    let prefix = user_prefix.unwrap_or("").to_lowercase();
 
-        // Validate the non-empty prefix
-        if prefix.len() > 32 {
+    if !prefix.is_empty() {
+        if prefix.len() > 63 {
             return Err(UserIdError::PrefixTooLong(prefix.len()));
         }
-
-        let is_valid_prefix = prefix.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-        if !is_valid_prefix {
+        if !prefix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
             return Err(UserIdError::InvalidPrefixChars);
         }
-
-        Ok(format!("{}@{}", prefix, did_key))
-    } else {
-        // Treat None as a request for a prefix-less ID
-        Ok(did_key)
+        if prefix.starts_with('-') || prefix.ends_with('-') {
+            return Err(UserIdError::InvalidPrefixStartEnd);
+        }
+        if prefix.contains("--") {
+            return Err(UserIdError::PrefixHasDoubleHyphen);
+        }
     }
+
+    // Generiere Prüfsumme
+    let checksum_input = format!("{}{}", prefix, did_key);
+    let hash = get_hash(checksum_input.as_bytes());
+    let checksum = &hash[hash.len() - 3..];
+
+    let human_readable_part = if prefix.is_empty() {
+        checksum.to_string()
+    } else {
+        format!("{}-{}", prefix, checksum)
+    };
+
+    Ok(format!("{}@{}", human_readable_part, did_key))
 }
 
 
@@ -464,26 +477,43 @@ pub fn create_user_id(public_key: &EdPublicKey, user_prefix: Option<&str>) -> Re
 ///
 /// `true` if the user ID is valid, `false` otherwise.
 pub fn validate_user_id(user_id: &str) -> bool {
-    let (prefix_part, _did_part) = if let Some(pos) = user_id.rfind('@') {
-        let (p, d) = user_id.split_at(pos);
-        (Some(p), &d[1..]) // d[1..] to skip the '@'
-    } else {
-        (None, user_id)
-    };
+    let parts: Vec<&str> = user_id.split('@').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    let human_readable_part = parts[0];
+    let did_key_part = parts[1];
 
-    // Validate prefix part if it exists
-    if let Some(prefix) = prefix_part {
-        if prefix.is_empty() || prefix.len() > 32 {
-            return false;
-        }
-        if !prefix.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if get_pubkey_from_user_id(user_id).is_err() {
+        return false;
+    }
+
+    let (prefix, received_checksum) =
+        if let Some(pos) = human_readable_part.rfind('-') {
+            let (p, c) = human_readable_part.split_at(pos);
+            (p, &c[1..])
+        } else {
+            ("", human_readable_part)
+        };
+
+    if !prefix.is_empty() {
+        if prefix.len() > 63
+            || !prefix
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            || prefix.starts_with('-')
+            || prefix.ends_with('-')
+            || prefix.contains("--")
+        {
             return false;
         }
     }
-    
-    // Validate did:key part by trying to extract the public key
-    // We use a simplified check here, as get_pubkey_from_user_id does the full validation.
-    get_pubkey_from_user_id(user_id).is_ok()
+
+    let checksum_input = format!("{}{}", prefix, did_key_part);
+    let expected_hash = get_hash(checksum_input.as_bytes());
+    let expected_checksum = &expected_hash[expected_hash.len() - 3..];
+
+    received_checksum == expected_checksum
 }
 
 /// Custom error type for `get_pubkey_from_user_id` function.
@@ -506,18 +536,24 @@ pub enum GetPubkeyError {
 impl std::fmt::Display for GetPubkeyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GetPubkeyError::InvalidPrefix =>
-                write!(f, "Invalid prefix format (e.g., empty prefix is not allowed)"),
-            GetPubkeyError::InvalidDidFormat =>
-                write!(f, "Invalid user ID format (must be '[prefix]@[did:key:z...]' or 'did:key:z...')"),
-            GetPubkeyError::DecodingFailed(e) => 
-                write!(f, "Base58 decoding failed: {}", e),
-            GetPubkeyError::InvalidMulticodec =>
-                write!(f, "Decoded key has invalid multicodec prefix (expected 0xed01 for Ed25519)"),
-            GetPubkeyError::InvalidLength(len) => 
-                write!(f, "Decoded public key has invalid length (expected 32, got {})", len),
-            GetPubkeyError::ConversionFailed(e) => 
-                write!(f, "Public key conversion failed: {}", e),
+            GetPubkeyError::InvalidPrefix => {
+                write!(f, "Invalid prefix format (e.g., empty prefix is not allowed)")
+            }
+            GetPubkeyError::InvalidDidFormat => write!(
+                f,
+                "Invalid user ID format (must be '[prefix]@[did:key:z...]' or 'did:key:z...')"
+            ),
+            GetPubkeyError::DecodingFailed(e) => write!(f, "Base58 decoding failed: {}", e),
+            GetPubkeyError::InvalidMulticodec => write!(
+                f,
+                "Decoded key has invalid multicodec prefix (expected 0xed01 for Ed25519)"
+            ),
+            GetPubkeyError::InvalidLength(len) => write!(
+                f,
+                "Decoded public key has invalid length (expected 32, got {})",
+                len
+            ),
+            GetPubkeyError::ConversionFailed(e) => write!(f, "Public key conversion failed: {}", e),
         }
     }
 }

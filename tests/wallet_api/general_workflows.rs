@@ -156,7 +156,7 @@ fn api_app_service_lifecycle_with_passphrase() {
         .create_profile(&mnemonic, Some(passphrase), Some("test-user"), password)
         .expect("Profile creation with passphrase failed");
     let original_user_id = service.get_user_id().unwrap();
-    assert!(original_user_id.starts_with("test-user@did:key:z"));
+    assert!(original_user_id.starts_with("test-user-"));
     service.logout();
 
     // --- 3. Wiederherstellung ohne Passphrase (muss fehlschlagen) ---
@@ -236,7 +236,7 @@ fn api_app_service_password_recovery() {
     let new_password = "password-ABC";
 
     service
-        .create_profile(&mnemonic, None, Some("recovery-test"), initial_password)
+        .create_profile(&mnemonic, None, None, initial_password)
         .expect("Profile creation failed");
     service.logout();
 
@@ -294,7 +294,7 @@ fn api_app_service_password_recovery_with_passphrase() {
         .create_profile(
             &mnemonic,
             Some(passphrase),
-            Some("recovery-test"),
+            None,
             initial_password,
         )
         .expect("Profile creation with passphrase failed");

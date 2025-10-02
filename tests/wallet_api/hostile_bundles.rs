@@ -23,7 +23,7 @@ fn setup_sender_recipient() -> (AppService, UserIdentity, AppService, String) {
     service_sender
         .create_profile(&m_sender, None, Some("sender"), "pwd")
         .unwrap();
-    let (pk, sk) = voucher_lib::services::crypto_utils::derive_ed25519_keypair(&m_sender, None).unwrap();
+    let (pk, sk) = voucher_lib::services::crypto_utils::derive_ed25519_keypair(&m_sender, Some("sender")).unwrap();
     let id_sender = service_sender.get_user_id().unwrap();
     let identity_sender = UserIdentity {
         signing_key: sk,
