@@ -81,16 +81,16 @@ impl AppService {
         let current_state = std::mem::replace(&mut self.state, AppState::Locked);
 
         let (result, new_state) = match current_state {
-            AppState::Unlocked { wallet, identity } => {
+            AppState::Unlocked { mut storage, wallet, identity } => {
                 match crate::services::standard_manager::verify_and_parse_standard(standard_toml_content) {
-                    Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
+                    Err(e) => (Err(e.to_string()), AppState::Unlocked { storage, wallet, identity }),
                     Ok((verified_standard, _)) => {
                         // --- BEGINN DER TRANSAKTION ---
                         let mut temp_wallet = wallet.clone();
 
                         // 1. Signatur an die temporäre Wallet-Instanz anhängen.
                         match temp_wallet.process_and_attach_signature(&identity, container_bytes) {
-                            Err(e) => (Err(e.to_string()), AppState::Unlocked { wallet, identity }),
+                            Err(e) => (Err(e.to_string()), AppState::Unlocked { storage, wallet, identity }),
                             Ok(updated_instance_id) => {
                                 // 2. Neuen Status basierend auf dem Ergebnis bestimmen.
                                 let instance = temp_wallet.get_voucher_instance(&updated_instance_id).cloned().unwrap(); // Muss existieren
@@ -110,16 +110,16 @@ impl AppService {
                                 };
 
                                 // 3. Versuchen, die Änderungen zu speichern ("Commit").
-                                match temp_wallet.save(&mut self.storage, &identity, password) {
+                                match temp_wallet.save(&mut storage, &identity, password) {
                                     Ok(_) => (
                                         // Erfolg: Gib das Ergebnis der Operation zurück und setze die neue Wallet-Instanz.
                                         operation_result,
-                                        AppState::Unlocked { wallet: temp_wallet, identity },
+                                        AppState::Unlocked { storage, wallet: temp_wallet, identity },
                                     ),
                                     Err(e) => (
                                         // Fehler: Verwirf die Änderungen und gib den Speicherfehler zurück.
                                         Err(e.to_string()),
-                                        AppState::Unlocked { wallet, identity },
+                                        AppState::Unlocked { storage, wallet, identity },
                                     ),
                                 }
                             }

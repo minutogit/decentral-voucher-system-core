@@ -9,7 +9,7 @@
 
 use voucher_lib::test_utils::{
     add_voucher_to_wallet, create_voucher_for_manipulation, generate_signed_standard_toml,
-    generate_valid_mnemonic, setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD,
+    generate_valid_mnemonic, setup_in_memory_wallet, setup_service_with_profile, ACTORS, MINUTO_STANDARD, SILVER_STANDARD,
 };
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -21,7 +21,7 @@ use voucher_lib::{
         voucher_standard_definition::VoucherStandardDefinition,
     },
     services::voucher_manager::NewVoucherData,
-    storage::{file_storage::FileStorage, AuthMethod},
+    storage::{AuthMethod},
     wallet::Wallet,
     VoucherCoreError, VoucherStatus,
 };
@@ -44,37 +44,27 @@ fn api_app_service_full_lifecycle() {
     // --- 1. Setup ---
     let silver_standard_toml =
         generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
-    let standard = &SILVER_STANDARD.0;
+    let (standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     let dir_alice = tempdir().expect("Failed to create temp dir for Alice");
     let dir_bob = tempdir().expect("Failed to create temp dir for Bob");
-    let mnemonic_alice = generate_valid_mnemonic();
-    let mnemonic_bob = generate_valid_mnemonic();
+    let actor_alice = &ACTORS.alice;
+    let actor_bob = &ACTORS.bob;
     let password = "password123";
 
-    let mut service_alice =
-        AppService::new(dir_alice.path()).expect("Failed to create service for Alice");
-    let mut service_bob =
-        AppService::new(dir_bob.path()).expect("Failed to create service for Bob");
-
     // --- 2. Profile erstellen ---
-    service_alice
-        .create_profile(&mnemonic_alice, None, Some("alice"), password)
-        .expect("Alice profile creation failed");
-    service_bob
-        .create_profile(&mnemonic_bob, None, Some("bob"), password)
-        .expect("Bob profile creation failed");
+    let (mut service_alice, profile_info_alice) =
+        setup_service_with_profile(dir_alice.path(), actor_alice, "Alice", password);
+    let (mut service_bob, _) =
+        setup_service_with_profile(dir_bob.path(), actor_bob, "Bob", password);
 
     let id_alice = service_alice.get_user_id().unwrap();
     let id_bob = service_bob.get_user_id().unwrap();
 
     // --- 3. Logout und Login für Alice ---
     service_alice.logout();
-    assert!(
-        service_alice.get_user_id().is_err(),
-        "Service should be locked after logout"
-    );
+    assert!(service_alice.get_user_id().is_err(), "Service should be locked after logout");
     service_alice
-        .login(password)
+        .login(&profile_info_alice.folder_name, password)
         .expect("Login with correct password should succeed");
     assert_eq!(service_alice.get_user_id().unwrap(), id_alice);
 
@@ -144,26 +134,23 @@ fn api_app_service_full_lifecycle() {
 #[test]
 fn api_app_service_lifecycle_with_passphrase() {
     // --- 1. Setup ---
+    let actor_with_passphrase = &ACTORS.test_user; // Dieser Aktor ist mit einer Passphrase konfiguriert.
     let dir = tempdir().expect("Failed to create temp dir");
-    let mut service = AppService::new(dir.path()).expect("Failed to create service");
-    let mnemonic =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let passphrase = "my-secret-passphrase";
     let password = "password123";
 
-    // --- 2. Profil mit Passphrase erstellen ---
-    service
-        .create_profile(&mnemonic, Some(passphrase), Some("test-user"), password)
-        .expect("Profile creation with passphrase failed");
+    // --- 2. Profil mit Passphrase erstellen und Service entsperren ---
+    let (mut service, profile_info) = setup_service_with_profile(dir.path(), actor_with_passphrase, "Test User", password);
     let original_user_id = service.get_user_id().unwrap();
-    assert!(original_user_id.starts_with("test-user-"));
+    assert!(original_user_id.starts_with(actor_with_passphrase.prefix.unwrap()));
     service.logout();
 
     // --- 3. Wiederherstellung ohne Passphrase (muss fehlschlagen) ---
-    // Die existierende Wiederherstellungsfunktion nutzt nur die Mnemonic.
-    // Dies leitet eine andere Identität ab, was zu einem Ladefehler führen muss.
-    let recovery_result =
-        service.recover_wallet_and_set_new_password(&mnemonic, None, "any-new-password");
+    let recovery_result = service.recover_wallet_and_set_new_password(
+        &profile_info.folder_name,
+        &actor_with_passphrase.mnemonic,
+        None, // <- Fehlende Passphrase
+        "any-new-password",
+    );
 
     assert!(
         recovery_result.is_err(),
@@ -228,34 +215,27 @@ fn api_app_service_mnemonic_helpers() {
 ///     während der Login mit dem neuen Passwort funktioniert.
 #[test]
 fn api_app_service_password_recovery() {
+    // --- 1. Setup ---
     let dir = tempdir().expect("Failed to create temp dir");
-    let mut service = AppService::new(dir.path()).expect("Failed to create service");
-    let mnemonic =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let actor = &ACTORS.alice; // Alice hat keine Passphrase.
     let initial_password = "password-123";
     let new_password = "password-ABC";
 
-    service
-        .create_profile(&mnemonic, None, None, initial_password)
-        .expect("Profile creation failed");
+    // --- 2. Profil erstellen und wieder sperren ---
+    let (mut service, profile_info) = setup_service_with_profile(dir.path(), actor, "Alice Recovery", initial_password);
     service.logout();
 
-    let wrong_mnemonic =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
-    assert!(service
-        .recover_wallet_and_set_new_password(&wrong_mnemonic, None, new_password)
-        .is_err());
-    assert!(
-        service.get_user_id().is_err(),
-        "Service should remain locked after failed recovery"
-    );
-
+    // --- 3. Wiederherstellung mit falscher Mnemonic (muss fehlschlagen) ---
+    let wrong_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon"; // Schlechte Prüfsumme
     assert!(
         service
-            .recover_wallet_and_set_new_password(&mnemonic, None, new_password)
-            .is_ok(),
-        "Recovery with correct mnemonic should succeed"
+            .recover_wallet_and_set_new_password(&profile_info.folder_name, wrong_mnemonic, None, new_password)
+            .is_err()
     );
+    assert!( service.get_user_id().is_err(), "Service should remain locked after failed recovery" );
+
+    // --- 4. Wiederherstellung mit korrekter Mnemonic (muss erfolgreich sein) ---
+    service.recover_wallet_and_set_new_password(&profile_info.folder_name, &actor.mnemonic, None, new_password).expect("Recovery with correct mnemonic should succeed");
     assert!(
         service.get_user_id().is_ok(),
         "Service should be unlocked after successful recovery"
@@ -263,11 +243,11 @@ fn api_app_service_password_recovery() {
 
     service.logout();
     assert!(
-        service.login(initial_password).is_err(),
+        service.login(&profile_info.folder_name, initial_password).is_err(),
         "Login with old password should fail after recovery"
     );
     assert!(
-        service.login(new_password).is_ok(),
+        service.login(&profile_info.folder_name, new_password).is_ok(),
         "Login with new password should succeed after recovery"
     );
 }
@@ -282,40 +262,34 @@ fn api_app_service_password_recovery() {
 #[test]
 fn api_app_service_password_recovery_with_passphrase() {
     let dir = tempdir().expect("Failed to create temp dir");
-    let mut service = AppService::new(dir.path()).expect("Failed to create service");
-    let mnemonic =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let passphrase = "my-secret-passphrase";
+    let actor = &ACTORS.test_user; // Dieser Aktor verwendet eine Passphrase.
     let initial_password = "password-123";
     let new_password = "password-ABC";
 
     // 1. Profil mit Passphrase erstellen
-    service
-        .create_profile(
-            &mnemonic,
-            Some(passphrase),
-            None,
-            initial_password,
-        )
-        .expect("Profile creation with passphrase failed");
+    let (mut service, profile_info) = setup_service_with_profile(dir.path(), actor, "Passphrase User", initial_password);
     service.logout();
 
     // 2. Wiederherstellung OHNE Passphrase (muss fehlschlagen)
     let recovery_fail =
-        service.recover_wallet_and_set_new_password(&mnemonic, None, new_password);
+        service.recover_wallet_and_set_new_password(&profile_info.folder_name, &actor.mnemonic, None, new_password);
     assert!(
         recovery_fail.is_err(),
         "Recovery without the correct passphrase should fail"
     );
 
     // 3. Wiederherstellung MIT korrekter Passphrase (muss erfolgreich sein)
-    service
-        .recover_wallet_and_set_new_password(&mnemonic, Some(passphrase), new_password)
+    service .recover_wallet_and_set_new_password(&profile_info.folder_name, &actor.mnemonic, actor.passphrase, new_password)
         .expect("Recovery with correct passphrase should succeed");
 
     // 4. Verifizierung
     service.logout();
-    service.login(new_password).expect("Login with new password should succeed");
+    // Erneutes Login nach der Wiederherstellung
+    let login_result = service.login(&profile_info.folder_name, new_password);
+    assert!(
+        login_result.is_ok(),
+        "Login with new password should succeed. Error: {:?}", login_result.err()
+    );
 }
 
 // --- 2. Wallet Workflows ---
@@ -330,12 +304,17 @@ fn api_app_service_password_recovery_with_passphrase() {
 #[test]
 fn api_wallet_lifecycle() {
     let dir = tempdir().unwrap();
-    let mut storage = FileStorage::new(dir.path());
-    let valid_mnemonic =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let test_user = &ACTORS.alice; // Nehmen wir Alice als Testperson
     let (wallet_a, identity_a) =
-        Wallet::new_from_mnemonic(valid_mnemonic, None, Some("test")).expect("Wallet creation failed");
+        Wallet::new_from_mnemonic(&test_user.mnemonic, test_user.passphrase, test_user.prefix).expect("Wallet creation failed");
     let original_user_id = wallet_a.profile.user_id.clone();
+    let folder_name = {
+        let secret_string = format!("{}{}{}", &test_user.mnemonic, test_user.passphrase.unwrap_or(""), test_user.prefix.unwrap_or(""));
+        voucher_lib::services::crypto_utils::get_hash(secret_string.as_bytes())
+    };
+    let user_storage_path = dir.path().join(folder_name);
+    let mut storage = voucher_lib::storage::file_storage::FileStorage::new(user_storage_path);
+
 
     wallet_a
         .save(&mut storage, &identity_a, "password123")
@@ -359,21 +338,21 @@ fn api_wallet_lifecycle() {
 /// 4.  Bob empfängt das Bundle und hat danach einen aktiven Gutschein über 100m.
 #[test]
 fn api_wallet_transfer_full_amount() {
-    let alice_identity = &ACTORS.alice;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let alice = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
     let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true)
+        add_voucher_to_wallet(&mut alice_wallet, &alice.identity, "100", minuto_standard, true)
             .unwrap();
-    let bob_identity = &ACTORS.bob;
-    let mut bob_wallet = setup_in_memory_wallet(bob_identity);
+    let bob = &ACTORS.bob;
+    let mut bob_wallet = setup_in_memory_wallet(&bob.identity);
 
     let (bundle_bytes, _) = alice_wallet
         .create_transfer(
-            alice_identity,
+            &alice.identity,
             minuto_standard,
             &voucher_id,
-            &bob_identity.user_id,
+            &bob.identity.user_id,
             "100",
             None,
             None,
@@ -388,7 +367,7 @@ fn api_wallet_transfer_full_amount() {
     assert_eq!(summary.status, VoucherStatus::Archived);
 
     bob_wallet
-        .process_encrypted_transaction_bundle(bob_identity, &bundle_bytes, None)
+        .process_encrypted_transaction_bundle(&bob.identity, &bundle_bytes, None)
         .unwrap();
 
     let summary = bob_wallet.list_vouchers(None, None).pop().unwrap();
@@ -406,21 +385,21 @@ fn api_wallet_transfer_full_amount() {
 /// 4.  Bob empfängt das Bundle und hat danach einen aktiven Gutschein über 30m.
 #[test]
 fn api_wallet_transfer_split_amount() {
-    let alice_identity = &ACTORS.alice;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let alice = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
     let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true)
+        add_voucher_to_wallet(&mut alice_wallet, &alice.identity, "100", minuto_standard, true)
             .unwrap();
-    let bob_identity = &ACTORS.bob;
-    let mut bob_wallet = setup_in_memory_wallet(bob_identity);
+    let bob = &ACTORS.bob;
+    let mut bob_wallet = setup_in_memory_wallet(&bob.identity);
 
     let (bundle_bytes, _) = alice_wallet
         .create_transfer(
-            alice_identity,
+            &alice.identity,
             minuto_standard,
             &voucher_id,
-            &bob_identity.user_id,
+            &bob.identity.user_id,
             "30",
             None,
             None,
@@ -435,7 +414,7 @@ fn api_wallet_transfer_split_amount() {
     assert_eq!(active_summary.current_amount, "70");
 
     bob_wallet
-        .process_encrypted_transaction_bundle(bob_identity, &bundle_bytes, None)
+        .process_encrypted_transaction_bundle(&bob.identity, &bundle_bytes, None)
         .unwrap();
     let bob_summary = bob_wallet.list_vouchers(None, None).pop().unwrap();
     assert_eq!(bob_summary.current_amount, "30");
@@ -449,19 +428,19 @@ fn api_wallet_transfer_split_amount() {
 ///     wird versucht und schlägt fehl.
 #[test]
 fn api_wallet_transfer_invalid_amount() {
-    let alice_identity = &ACTORS.alice;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let alice = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
     let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true)
+        add_voucher_to_wallet(&mut alice_wallet, &alice.identity, "100", minuto_standard, true)
             .unwrap();
-    let bob_identity = &ACTORS.bob;
+    let bob = &ACTORS.bob;
 
     let result_negative = alice_wallet.create_transfer(
-        alice_identity,
+        &alice.identity,
         minuto_standard,
         &voucher_id,
-        &bob_identity.user_id,
+        &bob.identity.user_id,
         "-50",
         None,
         None,
@@ -472,10 +451,10 @@ fn api_wallet_transfer_invalid_amount() {
     ));
 
     let result_decimal = alice_wallet.create_transfer(
-        alice_identity,
+        &alice.identity,
         minuto_standard,
         &voucher_id,
-        &bob_identity.user_id,
+        &bob.identity.user_id,
         "50.5",
         None,
         None,
@@ -494,13 +473,13 @@ fn api_wallet_transfer_invalid_amount() {
 ///     Fehler fehl.
 #[test]
 fn api_wallet_transfer_inactive_voucher() {
-    let alice_identity = &ACTORS.alice;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let alice = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
     let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true)
+        add_voucher_to_wallet(&mut alice_wallet, &alice.identity, "100", minuto_standard, true)
             .unwrap();
-    let bob_identity = &ACTORS.bob;
+    let bob = &ACTORS.bob;
 
     let instance = alice_wallet
         .voucher_store
@@ -510,10 +489,10 @@ fn api_wallet_transfer_inactive_voucher() {
     instance.status = VoucherStatus::Quarantined { reason: "test".to_string() };
 
     let result = alice_wallet.create_transfer(
-        alice_identity,
+        &alice.identity,
         minuto_standard,
         &voucher_id,
-        &bob_identity.user_id,
+        &bob.identity.user_id,
         "50",
         None,
         None,
@@ -535,20 +514,20 @@ fn api_wallet_transfer_inactive_voucher() {
 ///     verbraucht und archiviert wurde. Dies ist der eingebaute Schutz.
 #[test]
 fn api_wallet_proactive_double_spend_prevention() {
-    let alice_identity = &ACTORS.alice;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
+    let alice = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
     let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, true)
+        add_voucher_to_wallet(&mut alice_wallet, &alice.identity, "100", minuto_standard, true)
             .unwrap();
-    let bob_identity = &ACTORS.bob;
+    let bob = &ACTORS.bob;
 
     alice_wallet
         .create_transfer(
-            alice_identity,
+            &alice.identity,
             minuto_standard,
             &voucher_id,
-            &bob_identity.user_id,
+            &bob.identity.user_id,
             "100",
             None,
             None,
@@ -556,10 +535,10 @@ fn api_wallet_proactive_double_spend_prevention() {
         .expect("First transfer should succeed");
 
     let result = alice_wallet.create_transfer(
-        alice_identity,
+        &alice.identity,
         minuto_standard,
         &voucher_id,
-        &ACTORS.charlie.user_id,
+        &ACTORS.charlie.identity.user_id,
         "100",
         None,
         None,
@@ -580,13 +559,13 @@ fn api_wallet_proactive_double_spend_prevention() {
 ///     und den korrekten Betrag.
 #[test]
 fn api_wallet_create_voucher_and_get_id() {
-    let identity = &ACTORS.issuer;
-    let mut wallet = setup_in_memory_wallet(identity);
-    assert_eq!(wallet.get_user_id(), identity.user_id);
+    let issuer = &ACTORS.issuer;
+    let mut wallet = setup_in_memory_wallet(&issuer.identity);
+    assert_eq!(wallet.get_user_id(), issuer.identity.user_id);
 
     let new_voucher_data = NewVoucherData {
         creator: Creator {
-            id: identity.user_id.clone(),
+            id: issuer.identity.user_id.clone(),
             ..Default::default()
         },
         nominal_value: NominalValue {
@@ -600,7 +579,7 @@ fn api_wallet_create_voucher_and_get_id() {
 
     wallet
         .create_new_voucher(
-            identity,
+            &issuer.identity,
             silver_standard,
             silver_standard_hash,
             "en",
@@ -626,8 +605,8 @@ fn api_wallet_create_voucher_and_get_id() {
 ///     wobei nur die aktiven Gutscheine berücksichtigt wurden.
 #[test]
 fn api_wallet_query_total_balance() {
-    let identity = &ACTORS.issuer;
-    let mut wallet = setup_in_memory_wallet(identity);
+    let issuer = &ACTORS.issuer;
+    let mut wallet = setup_in_memory_wallet(&issuer.identity);
     let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     let (silver_standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
 
@@ -635,7 +614,7 @@ fn api_wallet_query_total_balance() {
         |amount: &str, status: VoucherStatus, standard: &VoucherStandardDefinition| {
             let new_voucher_data = NewVoucherData {
                 creator: Creator {
-                    id: identity.user_id.clone(),
+                    id: issuer.identity.user_id.clone(),
                     ..Default::default()
                 },
                 nominal_value: NominalValue {
@@ -654,10 +633,10 @@ fn api_wallet_query_total_balance() {
                 new_voucher_data,
                 standard,
                 &correct_hash,
-                &identity.signing_key,
+                &issuer.identity.signing_key,
                 "en",
             );
-            let local_id = Wallet::calculate_local_instance_id(&voucher, &identity.user_id).unwrap();
+            let local_id = Wallet::calculate_local_instance_id(&voucher, &issuer.identity.user_id).unwrap();
             wallet
                 .add_voucher_instance(local_id, voucher, status);
         };
@@ -704,10 +683,10 @@ fn api_wallet_query_total_balance() {
 ///     übergeben. Bobs Wallet bleibt leer.
 #[test]
 fn api_wallet_rejects_invalid_bundle() {
-    let alice_identity = &ACTORS.alice;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
-    let bob_identity = &ACTORS.bob;
-    let bob_wallet = setup_in_memory_wallet(bob_identity);
+    let alice = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
+    let bob = &ACTORS.bob;
+    let bob_wallet = setup_in_memory_wallet(&bob.identity);
 
     let toml_str = include_str!("../test_data/standards/standard_content_rules.toml");
     let mut standard: VoucherStandardDefinition = toml::from_str(toml_str).unwrap();
@@ -721,7 +700,7 @@ fn api_wallet_rejects_invalid_bundle() {
 
     let voucher_data = NewVoucherData {
         creator: Creator {
-            id: alice_identity.user_id.clone(),
+            id: alice.identity.user_id.clone(),
             ..Default::default()
         },
         nominal_value: NominalValue {
@@ -741,7 +720,7 @@ fn api_wallet_rejects_invalid_bundle() {
         voucher_data,
         &standard,
         &standard_hash,
-        &alice_identity.signing_key,
+        &alice.identity.signing_key,
         "en",
     )
         .unwrap();
@@ -750,15 +729,15 @@ fn api_wallet_rejects_invalid_bundle() {
 
     let bundle_bytes = alice_wallet
         .create_and_encrypt_transaction_bundle(
-            alice_identity,
+            &alice.identity,
             vec![voucher.clone()],
-            &bob_identity.user_id,
+            &bob.identity.user_id,
             None,
         )
         .unwrap();
 
     let decrypted_bundle =
-        voucher_lib::services::bundle_processor::open_and_verify_bundle(bob_identity, &bundle_bytes)
+        voucher_lib::services::bundle_processor::open_and_verify_bundle(&bob.identity, &bundle_bytes)
             .unwrap();
     let received_voucher = decrypted_bundle.vouchers.first().unwrap();
 
@@ -797,10 +776,11 @@ fn api_app_service_get_voucher_details_returns_correct_data() {
     let password = "password123";
     let mut service_alice =
         AppService::new(dir_alice.path()).expect("Failed to create service for Alice");
+    let mnemonic = generate_valid_mnemonic();
 
     // 1. Profile erstellen
     service_alice
-        .create_profile(&generate_valid_mnemonic(), None, Some("alice"), password)
+        .create_profile("Alice Details", &mnemonic, None, Some("alice"), password)
         .expect("Alice profile creation failed");
 
     let id_alice = service_alice.get_user_id().unwrap();

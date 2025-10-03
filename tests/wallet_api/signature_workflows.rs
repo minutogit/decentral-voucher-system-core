@@ -6,29 +6,23 @@
 
 // Binde das `test_utils` Modul explizit über seinen Dateipfad ein.
 
-use voucher_lib::test_utils;
-
-use voucher_lib::test_utils::{
-    create_additional_signature_data, create_voucher_for_manipulation, debug_open_container,
-    generate_signed_standard_toml, generate_valid_mnemonic, setup_in_memory_wallet, ACTORS,
-    add_voucher_to_wallet, MINUTO_STANDARD, SILVER_STANDARD,
-};
 use std::{fs, path::PathBuf};
 use tempfile::tempdir;
 use voucher_lib::{
-    app_service::AppService,
-    error::ValidationError,
-    models::{
-        secure_container::SecureContainer,
-        signature::DetachedSignature,
-        voucher::{Creator, GuarantorSignature, NominalValue, Voucher},
+    error::ValidationError, models::{
+        secure_container::SecureContainer, signature::DetachedSignature, voucher::{
+            Creator, GuarantorSignature, NominalValue, Voucher
+        }
     },
     services::{
-        secure_container_manager::{self, ContainerManagerError},
-        voucher_manager::NewVoucherData,
-        voucher_validation,
+        secure_container_manager::{self, ContainerManagerError}, voucher_manager::NewVoucherData, voucher_validation
     },
-    UserIdentity, VoucherCoreError, Wallet, VoucherStatus, VoucherInstance,
+    test_utils::{
+        self, add_voucher_to_wallet, create_additional_signature_data,
+        create_voucher_for_manipulation, debug_open_container, generate_signed_standard_toml,
+        setup_in_memory_wallet, ACTORS, MINUTO_STANDARD, SILVER_STANDARD,
+    },
+    UserIdentity, VoucherCoreError, VoucherInstance, VoucherStatus, Wallet,
 };
 
 /// Hilfsfunktion, um einen Standard-Gutschein für Tests zu erstellen und
@@ -84,19 +78,19 @@ fn setup_voucher_for_alice(
 ///     benötigten Bürgen nicht erfüllt ist.
 #[test]
 fn api_wallet_full_signature_workflow() {
-    let alice_identity = &ACTORS.alice;
-    let bob_identity = &ACTORS.bob;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
-    let bob_wallet = setup_in_memory_wallet(bob_identity);
+    let alice = &ACTORS.alice;
+    let bob = &ACTORS.bob;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
+    let bob_wallet = setup_in_memory_wallet(&bob.identity);
     let temp_dir = tempdir().expect("Failed to create temporary directory");
 
-    let (voucher, local_id) = setup_voucher_for_alice(&mut alice_wallet, alice_identity);
+    let (voucher, local_id) = setup_voucher_for_alice(&mut alice_wallet, &alice.identity);
     let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
     assert!(voucher_validation::validate_voucher_against_standard(&voucher, minuto_standard)
         .is_err());
 
     let request_container_bytes = alice_wallet
-        .create_signing_request(alice_identity, &local_id, &bob_identity.user_id)
+        .create_signing_request(&alice.identity, &local_id, &bob.identity.user_id)
         .unwrap();
     let request_file_path: PathBuf = temp_dir.path().join("request.secure");
     fs::write(&request_file_path, request_container_bytes).unwrap();
@@ -104,7 +98,7 @@ fn api_wallet_full_signature_workflow() {
     let received_request_bytes = fs::read(&request_file_path).unwrap();
     let container: SecureContainer = serde_json::from_slice(&received_request_bytes).unwrap();
     let (decrypted_payload, _) =
-        secure_container_manager::open_secure_container(&container, bob_identity).unwrap();
+        secure_container_manager::open_secure_container(&container, &bob.identity).unwrap();
     let voucher_from_alice: Voucher = serde_json::from_slice(&decrypted_payload).unwrap();
 
     let guarantor_metadata = GuarantorSignature {
@@ -113,10 +107,10 @@ fn api_wallet_full_signature_workflow() {
     };
     let response_container_bytes = bob_wallet
         .create_detached_signature_response(
-            bob_identity,
+            &bob.identity,
             &voucher_from_alice,
             DetachedSignature::Guarantor(guarantor_metadata),
-            &alice_identity.user_id,
+            &alice.identity.user_id,
         )
         .unwrap();
     let response_file_path: PathBuf = temp_dir.path().join("response.secure");
@@ -124,14 +118,14 @@ fn api_wallet_full_signature_workflow() {
 
     let received_response_bytes = fs::read(&response_file_path).unwrap();
     alice_wallet
-        .process_and_attach_signature(alice_identity, &received_response_bytes)
+        .process_and_attach_signature(&alice.identity, &received_response_bytes)
         .unwrap();
 
     let instance = alice_wallet.voucher_store.vouchers.get(&local_id).unwrap();
     assert_eq!(instance.voucher.guarantor_signatures.len(), 1);
     assert_eq!(
         instance.voucher.guarantor_signatures[0].guarantor_id,
-        bob_identity.user_id
+        bob.user_id
     );
     assert!(matches!(
         voucher_validation::validate_voucher_against_standard(&instance.voucher, minuto_standard)
@@ -148,18 +142,18 @@ fn api_wallet_full_signature_workflow() {
 /// 3.  Der Versuch schlägt mit `NotAnIntendedRecipient` fehl.
 #[test]
 fn api_wallet_signature_fail_wrong_recipient() {
-    let alice_identity = &ACTORS.alice;
-    let bob_identity = &ACTORS.bob;
-    let eve_identity = &ACTORS.hacker;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
-    let (_, local_id) = setup_voucher_for_alice(&mut alice_wallet, alice_identity);
+    let alice = &ACTORS.alice;
+    let bob = &ACTORS.bob;
+    let eve = &ACTORS.hacker;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
+    let (_, local_id) = setup_voucher_for_alice(&mut alice_wallet, &alice.identity);
 
     let request_bytes = alice_wallet
-        .create_signing_request(alice_identity, &local_id, &bob_identity.user_id)
+        .create_signing_request(&alice.identity, &local_id, &bob.identity.user_id)
         .unwrap();
 
     let container: SecureContainer = serde_json::from_slice(&request_bytes).unwrap();
-    let result = secure_container_manager::open_secure_container(&container, eve_identity);
+    let result = secure_container_manager::open_secure_container(&container, &eve.identity);
 
     assert!(matches!(
         result.unwrap_err(),
@@ -177,11 +171,11 @@ fn api_wallet_signature_fail_wrong_recipient() {
 ///     Authentifizierungsfehlers (AEAD) fehlschlägt.
 #[test]
 fn api_wallet_signature_fail_tampered_container() {
-    let alice_identity = &ACTORS.alice;
-    let bob_identity = &ACTORS.bob;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
-    let bob_wallet = setup_in_memory_wallet(bob_identity);
-    let (voucher, _) = setup_voucher_for_alice(&mut alice_wallet, alice_identity);
+    let alice = &ACTORS.alice;
+    let bob = &ACTORS.bob;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
+    let bob_wallet = setup_in_memory_wallet(&bob.identity);
+    let (voucher, _) = setup_voucher_for_alice(&mut alice_wallet, &alice.identity);
 
     let guarantor_metadata = GuarantorSignature {
         voucher_id: voucher.voucher_id.clone(),
@@ -189,10 +183,10 @@ fn api_wallet_signature_fail_tampered_container() {
     };
     let response_bytes = bob_wallet
         .create_detached_signature_response(
-            bob_identity,
+            &bob.identity,
             &voucher,
             DetachedSignature::Guarantor(guarantor_metadata),
-            &alice_identity.user_id,
+            &alice.identity.user_id,
         )
         .unwrap();
 
@@ -202,7 +196,7 @@ fn api_wallet_signature_fail_tampered_container() {
     }
     let tampered_bytes = serde_json::to_vec(&container).unwrap();
 
-    let result = alice_wallet.process_and_attach_signature(alice_identity, &tampered_bytes);
+    let result = alice_wallet.process_and_attach_signature(&alice.identity, &tampered_bytes);
 
     assert!(matches!(
         result.unwrap_err(),
@@ -222,15 +216,15 @@ fn api_wallet_signature_fail_tampered_container() {
 ///     mit der ID von B nicht kennt, an den die Signatur angehängt werden soll.
 #[test]
 fn api_wallet_signature_fail_mismatched_voucher_id() {
-    let alice_identity = &ACTORS.alice;
-    let bob_identity = &ACTORS.bob;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
-    let bob_wallet = setup_in_memory_wallet(bob_identity);
-    let (_voucher_a, _) = setup_voucher_for_alice(&mut alice_wallet, alice_identity);
+    let alice = &ACTORS.alice;
+    let bob = &ACTORS.bob;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
+    let bob_wallet = setup_in_memory_wallet(&bob.identity);
+    let (_voucher_a, _) = setup_voucher_for_alice(&mut alice_wallet, &alice.identity);
 
     let voucher_data_b = NewVoucherData {
         creator: Creator {
-            id: alice_identity.user_id.clone(),
+            id: alice.user_id.clone(),
             ..Default::default()
         },
         nominal_value: NominalValue {
@@ -245,7 +239,7 @@ fn api_wallet_signature_fail_mismatched_voucher_id() {
         voucher_data_b,
         minuto_standard,
         minuto_standard_hash,
-        &alice_identity.signing_key,
+        &alice.identity.signing_key,
         "en",
     );
 
@@ -255,14 +249,14 @@ fn api_wallet_signature_fail_mismatched_voucher_id() {
     };
     let response_bytes = bob_wallet
         .create_detached_signature_response(
-            bob_identity,
+            &bob.identity,
             &voucher_b,
             DetachedSignature::Guarantor(guarantor_metadata),
-            &alice_identity.user_id,
+            &alice.identity.user_id,
         )
         .unwrap();
 
-    let result = alice_wallet.process_and_attach_signature(alice_identity, &response_bytes);
+    let result = alice_wallet.process_and_attach_signature(&alice.identity, &response_bytes);
 
     assert!(matches!(
         result.unwrap_err(),
@@ -279,16 +273,16 @@ fn api_wallet_signature_fail_mismatched_voucher_id() {
 /// 3.  Der Prozess schlägt mit `InvalidPayloadType` fehl.
 #[test]
 fn api_wallet_signature_fail_wrong_payload_type() {
-    let alice_identity = &ACTORS.alice;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
-    let (_, local_id) = setup_voucher_for_alice(&mut alice_wallet, alice_identity);
+    let alice = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
+    let (_, local_id) = setup_voucher_for_alice(&mut alice_wallet, &alice.identity);
 
     let request_container_bytes = alice_wallet
-        .create_signing_request(alice_identity, &local_id, &alice_identity.user_id)
+        .create_signing_request(&alice.identity, &local_id, &alice.identity.user_id)
         .unwrap();
 
     let result =
-        alice_wallet.process_and_attach_signature(alice_identity, &request_container_bytes);
+        alice_wallet.process_and_attach_signature(&alice.identity, &request_container_bytes);
 
     assert!(matches!(
         result.unwrap_err(),
@@ -316,19 +310,13 @@ fn api_app_service_full_signature_workflow() {
     let dir_guarantor = tempdir().unwrap();
     let password = "sig-password";
 
-    let mut service_creator = AppService::new(dir_creator.path()).unwrap();
-    service_creator
-        .create_profile(&generate_valid_mnemonic(), None, Some("creator"), password)
-        .unwrap();
-
-    let mut service_guarantor = AppService::new(dir_guarantor.path()).unwrap();
-    service_guarantor
-        .create_profile(&generate_valid_mnemonic(), None, Some("guarantor"), password)
-        .unwrap();
+    let creator = &ACTORS.alice;
+    let guarantor = &ACTORS.guarantor1;
+    let (mut service_creator, _) = test_utils::setup_service_with_profile(dir_creator.path(), creator, "Creator", password);
+    let (mut service_guarantor, profile_guarantor) = test_utils::setup_service_with_profile(dir_guarantor.path(), guarantor, "Guarantor", password);
     let id_guarantor = service_guarantor.get_user_id().unwrap();
 
-    service_creator
-        .create_new_voucher(
+    let _voucher = service_creator.create_new_voucher(
             &silver_standard_toml,
             "en",
             NewVoucherData {
@@ -354,7 +342,7 @@ fn api_app_service_full_signature_workflow() {
         .unwrap();
 
     let (voucher_to_sign, sender_id) = {
-        service_guarantor.login(password).unwrap();
+        service_guarantor.login(&profile_guarantor.folder_name, password).unwrap();
         let guarantor_identity = service_guarantor.get_unlocked_mut_for_test().1;
         debug_open_container(&request_bytes, guarantor_identity).unwrap()
     };
@@ -392,29 +380,29 @@ fn api_app_service_full_signature_workflow() {
 /// 5.  Der Gutschein hat danach eine Signatur von Bob.
 #[test]
 fn api_wallet_signature_roundtrip_minuto_required() {
-    let alice_identity = &ACTORS.alice;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
-    let bob_identity = &ACTORS.bob;
-    let bob_wallet = setup_in_memory_wallet(bob_identity); // Bobs Wallet für die Antwort
+    let alice = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
+    let bob = &ACTORS.bob;
+    let bob_wallet = setup_in_memory_wallet(&bob.identity); // Bobs Wallet für die Antwort
     let (minuto_standard, _) = (&MINUTO_STANDARD.0, &MINUTO_STANDARD.1);
 
     // Erstelle einen Minuto-Gutschein, der noch Bürgen braucht. `false` = nicht valide erstellen.
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "100", minuto_standard, false)
+        add_voucher_to_wallet(&mut alice_wallet, &alice.identity, "100", minuto_standard, false)
             .unwrap();
 
     // Alice erstellt eine Signaturanfrage für Bob
     let request_bytes = alice_wallet
-        .create_signing_request(alice_identity, &voucher_id, &bob_identity.user_id)
+        .create_signing_request(&alice.identity, &voucher_id, &bob.identity.user_id)
         .unwrap();
 
     // Bob verarbeitet die Anfrage und erstellt eine Antwort
     let (voucher_for_signing, _) =
-        debug_open_container(&request_bytes, bob_identity).unwrap();
+        debug_open_container(&request_bytes, &bob.identity).unwrap();
 
     // Bob erstellt seine Signatur-Daten (als Enum)
     let mut signature_data_enum =
-        test_utils::create_guarantor_signature_data(bob_identity, "1", &voucher_for_signing.voucher_id);
+        test_utils::create_guarantor_signature_data(&bob.identity, "1", &voucher_for_signing.voucher_id);
     // Wir modifizieren die innere Struktur via Pattern Matching
     if let DetachedSignature::Guarantor(guarantor_struct) = &mut signature_data_enum {
         guarantor_struct.first_name = "Bob".to_string();
@@ -423,20 +411,19 @@ fn api_wallet_signature_roundtrip_minuto_required() {
 
     // Bob erstellt die verschlüsselte Antwort mit der Signatur
     let response_bytes = bob_wallet
-        .create_detached_signature_response(bob_identity, &voucher_for_signing, signature_data_enum, &alice_identity.user_id)
+        .create_detached_signature_response(&bob.identity, &voucher_for_signing, signature_data_enum, &alice.identity.user_id)
         .unwrap();
 
     // Alice verarbeitet die Signatur-Antwort
     alice_wallet
-        .process_and_attach_signature(alice_identity, &response_bytes)
+        .process_and_attach_signature(&alice.identity, &response_bytes)
         .unwrap();
 
     // Assert: Der Gutschein hat jetzt genau eine Signatur von Bob
     let final_instance = alice_wallet.voucher_store.vouchers.get(&voucher_id).unwrap();
     assert_eq!(final_instance.voucher.guarantor_signatures.len(), 1);
     assert_eq!(
-        final_instance.voucher.guarantor_signatures[0].guarantor_id,
-        bob_identity.user_id
+        final_instance.voucher.guarantor_signatures[0].guarantor_id, bob.identity.user_id
     );
 }
 
@@ -465,25 +452,12 @@ fn test_full_guarantor_workflow_via_app_service() {
         generate_signed_standard_toml("voucher_standards/minuto_v1/standard.toml");
 
     // Creator Service
-    let mut service_creator =
-        AppService::new(dir_creator.path()).expect("Failed to create creator service");
-    service_creator
-        .create_profile(&generate_valid_mnemonic(), None, Some("creator"), password)
-        .expect("Creator profile creation failed");
+    let creator = &ACTORS.alice;
+    let (mut service_creator, _) = test_utils::setup_service_with_profile(dir_creator.path(), creator, "Creator", password);
     let creator_id = service_creator.get_user_id().unwrap();
-
-    // Guarantor 1 Service
-    let mut service_g1 = AppService::new(dir_g1.path()).expect("Failed to create g1 service");
-    service_g1
-        .create_profile(&generate_valid_mnemonic(), None, Some("g1"), password)
-        .expect("G1 profile creation failed");
+    let (service_g1, _) = test_utils::setup_service_with_profile(dir_g1.path(), &ACTORS.guarantor1, "Guarantor 1", password);
     let g1_id = service_g1.get_user_id().unwrap();
-
-    // Guarantor 2 Service
-    let mut service_g2 = AppService::new(dir_g2.path()).expect("Failed to create g2 service");
-    service_g2
-        .create_profile(&generate_valid_mnemonic(), None, Some("g2"), password)
-        .expect("G2 profile creation failed");
+    let (service_g2, _) = test_utils::setup_service_with_profile(dir_g2.path(), &ACTORS.guarantor2, "Guarantor 2", password);
     let g2_id = service_g2.get_user_id().unwrap();
 
     // --- 2. Schritt 1: Erstellung des unvollständigen Gutscheins ---
@@ -578,39 +552,39 @@ fn test_full_guarantor_workflow_via_app_service() {
 /// 5.  Der Gutschein hat danach eine Signatur, obwohl sie nicht erforderlich war.
 #[test]
 fn api_wallet_signature_roundtrip_silver_optional() {
-    let alice_identity = &ACTORS.alice;
-    let mut alice_wallet = setup_in_memory_wallet(alice_identity);
-    let bob_identity = &ACTORS.bob;
-    let bob_wallet = setup_in_memory_wallet(bob_identity);
+    let alice = &ACTORS.alice;
+    let mut alice_wallet = setup_in_memory_wallet(&alice.identity);
+    let bob = &ACTORS.bob;
+    let bob_wallet = setup_in_memory_wallet(&bob.identity);
     let (silver_standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
 
     let voucher_id =
-        add_voucher_to_wallet(&mut alice_wallet, alice_identity, "10", silver_standard, false)
+        add_voucher_to_wallet(&mut alice_wallet, &alice.identity, "10", silver_standard, false)
             .unwrap();
 
     let request_bytes = alice_wallet
-        .create_signing_request(alice_identity, &voucher_id, &bob_identity.user_id)
+        .create_signing_request(&alice.identity, &voucher_id, &bob.identity.user_id)
         .unwrap();
 
-    let (voucher_for_signing, _) = debug_open_container(&request_bytes, bob_identity).unwrap();
+    let (voucher_for_signing, _) = debug_open_container(&request_bytes, &bob.identity).unwrap();
 
     let mut signature_data_enum =
-        test_utils::create_guarantor_signature_data(bob_identity, "1", &voucher_for_signing.voucher_id);
+        test_utils::create_guarantor_signature_data(&bob.identity, "1", &voucher_for_signing.voucher_id);
     if let DetachedSignature::Guarantor(guarantor_struct) = &mut signature_data_enum {
         guarantor_struct.first_name = "Bob".to_string();
         guarantor_struct.last_name = "Builder".to_string();
     }
     let response_bytes = bob_wallet
         .create_detached_signature_response(
-            bob_identity,
+            &bob.identity,
             &voucher_for_signing,
             signature_data_enum,
-            &alice_identity.user_id,
+            &alice.identity.user_id,
         )
         .unwrap();
 
     alice_wallet
-        .process_and_attach_signature(alice_identity, &response_bytes)
+        .process_and_attach_signature(&alice.identity, &response_bytes)
         .unwrap();
 
     let final_instance = alice_wallet.voucher_store.vouchers.get(&voucher_id).unwrap();

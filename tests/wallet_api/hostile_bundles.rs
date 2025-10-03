@@ -6,8 +6,8 @@
 use voucher_lib::{
     app_service::AppService,
     test_utils::{
-        create_test_bundle, generate_signed_standard_toml, generate_valid_mnemonic,
-        resign_transaction, SILVER_STANDARD,
+        create_test_bundle, generate_signed_standard_toml, resign_transaction, ACTORS,
+        SILVER_STANDARD, setup_service_with_profile,
     },
     UserIdentity,
     models::voucher::{Creator, NominalValue}, services::voucher_manager::NewVoucherData,
@@ -18,24 +18,15 @@ use tempfile::tempdir;
 /// Erstellt eine Sender- und Empfänger-Instanz für die Tests.
 fn setup_sender_recipient() -> (AppService, UserIdentity, AppService, String) {
     let dir_sender = tempdir().unwrap();
-    let mut service_sender = AppService::new(dir_sender.path()).unwrap();
-    let m_sender = generate_valid_mnemonic();
-    service_sender
-        .create_profile(&m_sender, None, Some("sender"), "pwd")
-        .unwrap();
-    let (pk, sk) = voucher_lib::services::crypto_utils::derive_ed25519_keypair(&m_sender, Some("sender")).unwrap();
-    let id_sender = service_sender.get_user_id().unwrap();
-    let identity_sender = UserIdentity {
-        signing_key: sk,
-        public_key: pk,
-        user_id: id_sender,
-    };
+    let sender = &ACTORS.sender;
+    let (service_sender, _) =
+        setup_service_with_profile(dir_sender.path(), sender, "Sender", "pwd");
+    let identity_sender = sender.identity.clone();
 
     let dir_recipient = tempdir().unwrap();
-    let mut service_recipient = AppService::new(dir_recipient.path()).unwrap();
-    service_recipient
-        .create_profile(&generate_valid_mnemonic(), None, Some("recipient"), "pwd")
-        .unwrap();
+    let recipient = &ACTORS.recipient1;
+    let (service_recipient, _) =
+        setup_service_with_profile(dir_recipient.path(), recipient, "Recipient", "pwd");
     let id_recipient = service_recipient.get_user_id().unwrap();
 
     (service_sender, identity_sender, service_recipient, id_recipient)

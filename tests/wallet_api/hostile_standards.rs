@@ -4,10 +4,9 @@
 //! Gutschein-Standard-Definitionen härten.
 
 use voucher_lib::{
-    app_service::AppService,
     models::voucher::{Creator, NominalValue},
     services::voucher_manager::NewVoucherData,
-    test_utils::{create_custom_standard, generate_valid_mnemonic, SILVER_STANDARD},
+    test_utils::{self, create_custom_standard, ACTORS, SILVER_STANDARD},
 };
 use tempfile::tempdir;
 
@@ -26,11 +25,8 @@ fn test_disallowed_transaction_type() {
     let hostile_standard_toml = toml::to_string(&hostile_standard).unwrap();
 
     let dir = tempdir().unwrap();
-    let mut service = AppService::new(dir.path()).unwrap();
     let password = "password";
-    service
-        .create_profile(&generate_valid_mnemonic(), None, Some("test"), password)
-        .unwrap();
+    let (mut service, _) = test_utils::setup_service_with_profile(dir.path(), &ACTORS.alice, "Test User", password);
     let user_id = service.get_user_id().unwrap();
 
     let voucher = service
@@ -86,11 +82,8 @@ fn test_violation_of_max_creation_validity() {
     let hostile_standard_toml = toml::to_string(&hostile_standard).unwrap();
 
     let dir = tempdir().unwrap();
-    let mut service = AppService::new(dir.path()).unwrap();
     let password = "password";
-    service
-        .create_profile(&generate_valid_mnemonic(), None, Some("test"), password)
-        .unwrap();
+    let (mut service, _) = test_utils::setup_service_with_profile(dir.path(), &ACTORS.alice, "Test User", password);
     let user_id = service.get_user_id().unwrap();
 
     // 2. ACT: Versuche, einen Gutschein mit einer Gültigkeit von 2 Jahren zu erstellen

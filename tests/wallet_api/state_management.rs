@@ -8,7 +8,7 @@ use voucher_lib::{
     models::{conflict::{ProofOfDoubleSpend, ResolutionEndorsement}, voucher::{Creator, NominalValue}},
     services::{crypto_utils, voucher_manager::NewVoucherData},
     test_utils::{
-        create_test_bundle, generate_signed_standard_toml, generate_valid_mnemonic,
+        create_test_bundle, generate_signed_standard_toml,
         resign_transaction, ACTORS, SILVER_STANDARD,
     },
     VoucherStatus,
@@ -16,7 +16,8 @@ use voucher_lib::{
 
 use chrono::DateTime;
 use chrono::{Duration, Utc};
-use std::collections::HashMap;
+use std::{collections::HashMap};
+use voucher_lib::test_utils;
 use tempfile::tempdir;
 use voucher_lib::{models::voucher::Transaction, services::utils};
 
@@ -63,20 +64,11 @@ fn api_app_service_full_conflict_resolution_workflow() {
     let dir_reporter = tempdir().unwrap();
     let dir_victim = tempdir().unwrap();
     let password = "conflict-password";
+    let reporter = &ACTORS.reporter;
+    let victim = &ACTORS.victim;
 
-    // Reporter-Service
-    let mut service_reporter = AppService::new(dir_reporter.path()).unwrap();
-    service_reporter
-        .create_profile(&generate_valid_mnemonic(), None, Some("reporter"), password)
-        .unwrap();
-    // FIX: Unbenutzte Variable markieren
-    let _id_reporter = service_reporter.get_user_id().unwrap();
-
-    // Victim-Service
-    let mut service_victim = AppService::new(dir_victim.path()).unwrap();
-    service_victim
-        .create_profile(&generate_valid_mnemonic(), None, Some("victim"), password)
-        .unwrap();
+    let (mut service_reporter, profile_reporter) = test_utils::setup_service_with_profile(dir_reporter.path(), reporter, "Reporter", password);
+    let (mut service_victim, _) = test_utils::setup_service_with_profile(dir_victim.path(), victim, "Victim", password);
     let id_victim = service_victim.get_user_id().unwrap();
 
     // --- 2. Beweis im Reporter-Wallet anlegen ---
@@ -114,7 +106,9 @@ fn api_app_service_full_conflict_resolution_workflow() {
 
     // --- 6. Aktion 4 (Finale Prüfung): Persistenz verifizieren ---
     let mut service_checker = AppService::new(dir_reporter.path()).unwrap();
-    service_checker.login(password).unwrap();
+    service_checker
+        .login(&profile_reporter.folder_name, password)
+        .unwrap();
     let conflicts_after = service_checker.list_conflicts().unwrap();
     assert_eq!(conflicts_after.len(), 1);
     assert_eq!(conflicts_after[0].proof_id, proof_id);
@@ -183,27 +177,14 @@ fn api_app_service_conflict_api_fails_when_locked() {
 fn api_wallet_reactive_double_spend_earliest_wins() {
     // --- 1. Setup ---
     let dir_alice = tempdir().unwrap();
-    let mut service_alice = AppService::new(dir_alice.path()).unwrap();
-    // Manually derive Alice's identity to sign conflicting transactions outside the AppService flow
-    let m_alice =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    service_alice.create_profile(&m_alice, None, Some("alice"), "pwd").unwrap();
-    let (pk_alice, sk_alice) = crypto_utils::derive_ed25519_keypair(m_alice, Some("alice")).unwrap();
-    let id_alice = service_alice.get_user_id().unwrap();
-    let identity_alice = voucher_lib::UserIdentity {
-        signing_key: sk_alice,
-        public_key: pk_alice,
-        user_id: id_alice.clone(),
-    };
-
     let dir_david = tempdir().unwrap();
-    let mut service_david = AppService::new(dir_david.path()).unwrap();
-    let m_david = generate_valid_mnemonic();
-    service_david.create_profile(&m_david, None, Some("david"), "pwd").unwrap();
+    let alice = &ACTORS.alice;
+    let david = &ACTORS.david;
+    let (mut service_alice, _) = test_utils::setup_service_with_profile(dir_alice.path(), alice, "Alice", "pwd");
+    let (mut service_david, _) = test_utils::setup_service_with_profile(dir_david.path(), david, "David", "pwd");
+    let id_alice = service_alice.get_user_id().unwrap();
     let id_david = service_david.get_user_id().unwrap();
-
-    // KORREKTUR: Die Transaktionen müssen an David gehen, damit sein Wallet sie verarbeiten kann.
-    // Bob und Charlie sind hier nur konzeptionelle Namen für die beiden Konfliktpfade.
+    let identity_alice = alice.identity.clone();
     let silver_standard_toml =
         generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
     let (standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
@@ -332,23 +313,15 @@ fn api_wallet_reactive_double_spend_earliest_wins() {
 fn api_wallet_reactive_double_spend_identical_timestamps() {
     // --- 1. Setup (identisch zu earliest_wins) ---
     let dir_alice = tempdir().unwrap();
-    let mut service_alice = AppService::new(dir_alice.path()).unwrap();
-    let m_alice =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    service_alice.create_profile(&m_alice, None, Some("alice"), "pwd").unwrap();
-    let (pk_alice, sk_alice) = crypto_utils::derive_ed25519_keypair(m_alice, Some("alice")).unwrap();
-    let id_alice = service_alice.get_user_id().unwrap();
-    let identity_alice = voucher_lib::UserIdentity {
-        signing_key: sk_alice,
-        public_key: pk_alice,
-        user_id: id_alice.clone(),
-    };
-
+    let alice = &ACTORS.alice;
     let dir_david = tempdir().unwrap();
-    let mut service_david = AppService::new(dir_david.path()).unwrap();
-    service_david.create_profile(&generate_valid_mnemonic(), None, Some("david"), "pwd").unwrap();
-    let id_david = service_david.get_user_id().unwrap();
+    let david = &ACTORS.david;
 
+    let (mut service_alice, _) = test_utils::setup_service_with_profile(dir_alice.path(), alice, "Alice", "pwd");
+    let (mut service_david, _) = test_utils::setup_service_with_profile(dir_david.path(), david, "David", "pwd");
+    let id_alice = service_alice.get_user_id().unwrap();
+    let id_david = service_david.get_user_id().unwrap();
+    let identity_alice = alice.identity.clone();
     let silver_standard_toml =
         generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
     let (standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
@@ -448,7 +421,7 @@ fn api_wallet_save_and_load_fidelity() {
 
     // --- 1. Setup ---
     let dir = tempdir().unwrap();
-    let mnemonic = generate_valid_mnemonic();
+    let test_user = &ACTORS.test_user;
     let password = "a-very-secure-password";
     let silver_toml = generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
     let (silver_standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
@@ -457,8 +430,7 @@ fn api_wallet_save_and_load_fidelity() {
 
     // --- 2. Wallet A in komplexen Zustand versetzen ---
     {
-        let mut service_a = AppService::new(dir.path()).unwrap();
-        service_a.create_profile(&mnemonic, None, Some("fidelity-test"), password).unwrap();
+        let (mut service_a, _) = test_utils::setup_service_with_profile(dir.path(), test_user, "Test User A", password);
         let id_a = service_a.get_user_id().unwrap();
 
         // Aktive Gutscheine erstellen
@@ -491,12 +463,13 @@ fn api_wallet_save_and_load_fidelity() {
             .expect("Silver voucher summary not found")
             .local_instance_id
             .clone();
-        service_a.create_transfer_bundle(silver_standard, &silver_voucher_id_10oz, &ACTORS.bob.user_id, "3", None, None, password).unwrap();
+        service_a.create_transfer_bundle(silver_standard, &silver_voucher_id_10oz, &ACTORS.bob.identity.user_id, "3", None, None, password).unwrap();
 
         // Bundle-Metadaten durch Empfang erzeugen
         let transfer_back_bundle = {
-            let mut service_bob = AppService::new(tempdir().unwrap().path()).unwrap();
-            service_bob.create_profile(&generate_valid_mnemonic(), None, Some("bob"), "pwd").unwrap();
+            let dir_bob = tempdir().unwrap();
+            let bob = &ACTORS.bob;
+            let (mut service_bob, _) = test_utils::setup_service_with_profile(dir_bob.path(), bob, "Bob", "pwd");
             let id_bob = service_bob.get_user_id().unwrap();
             service_bob
                 .create_new_voucher(
@@ -527,14 +500,16 @@ fn api_wallet_save_and_load_fidelity() {
         service_a.create_transfer_bundle(
             silver_standard,
             &silver_voucher_id_7oz,
-            &ACTORS.charlie.user_id, "7", None, None,
+            &ACTORS.charlie.identity.user_id, "7", None, None,
             password
         ).unwrap();
     } // service_a geht out of scope, Wallet wird aus dem Speicher entfernt
 
     // --- 3. Wallet B aus demselben Verzeichnis laden ---
     let mut service_b = AppService::new(dir.path()).unwrap();
-    service_b.login(password).expect("Login for service_b should succeed");
+    let profile_b = service_b.list_profiles().unwrap().pop().unwrap(); // Get the single profile
+    service_b.login(&profile_b.folder_name, password)
+        .expect("Login for service_b should succeed");
 
     // --- 4. Assertions ---
     let summaries = service_b.get_voucher_summaries(None, None).unwrap();
@@ -594,15 +569,10 @@ fn api_wallet_save_and_load_fidelity() {
 #[test]
 fn test_create_voucher_adds_exactly_one_instance() {
     // 1. ARRANGE: Testumgebung und Anfangszustand herstellen
-    let temp_dir = tempdir().expect("Failed to create temp dir");
-    let mut app_service = AppService::new(temp_dir.path()).expect("Failed to init AppService");
-
-    let mnemonic = AppService::generate_mnemonic(12).unwrap();
+    let test_user = &ACTORS.test_user;
     let password = "test_password_123";
-
-    app_service
-        .create_profile(&mnemonic, None, Some("test"), password)
-        .expect("Failed to create profile");
+    let dir = tempdir().expect("Failed to create temp dir");
+    let (mut app_service, _) = test_utils::setup_service_with_profile(dir.path(), test_user, "Test User", password);
     let user_id = app_service.get_user_id().unwrap();
 
     // Assertion Zero: Sicherstellen, dass das Wallet initial leer ist.
@@ -658,16 +628,11 @@ fn test_create_voucher_adds_exactly_one_instance() {
 #[test]
 fn test_create_voucher_is_transactional_on_save_failure() {
     // 1. ARRANGE
-    let temp_dir = tempdir().expect("Failed to create temp dir");
-    let mut app_service = AppService::new(temp_dir.path()).expect("Failed to init AppService");
-
-    let mnemonic = AppService::generate_mnemonic(12).unwrap();
+    let test_user = &ACTORS.test_user;
     let correct_password = "correct_password";
     let wrong_password = "wrong_password";
-
-    app_service
-        .create_profile(&mnemonic, None, Some("test"), correct_password)
-        .expect("Failed to create profile");
+    let dir = tempdir().expect("Failed to create temp dir");
+    let (mut app_service, _) = test_utils::setup_service_with_profile(dir.path(), test_user, "Test User", correct_password);
     let user_id = app_service.get_user_id().unwrap();
 
     let standard_toml = generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");

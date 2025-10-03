@@ -28,6 +28,10 @@ Dies ist die Kontextdatei für die Entwicklung der Rust-Core-Bibliothek `voucher
 
 - **Kein globales Ledger:** Im Gegensatz zu traditionellen Blockchains wird bewusst auf ein globales, verteiltes Ledger verzichtet. Die Integrität wird durch digitale Signaturen und soziale Kontrolle gewährleistet.
 
+- **Entkoppelte & Anonymisierte Speicherung:** Die Kernlogik (`Wallet`) ist vom Speicher (`Storage`-Trait) entkoppelt. Die Standardimplementierung `FileStorage` speichert jedes Benutzerprofil in einem eigenen, anonymen Unterverzeichnis. Der Name dieses Verzeichnisses wird aus einem Hash der Benutzergeheimnisse (`mnemonic`, `passphrase`, `prefix`) abgeleitet, um die Privatsphäre auf dem Speichermedium zu schützen.
+
+- **Kryptographisch getrennte Konten:** Jedes Konto (identifiziert durch ein `prefix`, z.B. "pc", "mobil") wird von einem einzigen Master-Mnemonic abgeleitet, erzeugt aber ein eigenes, einzigartiges Schlüsselpaar. Dies geschieht, indem das Präfix an die Passphrase angehängt wird, bevor der Schlüssel abgeleitet wird (`final_passphrase = passphrase + prefix`). Dies verhindert, dass ein Gutschein versehentlich auf dem falschen Gerät angenommen werden kann und erhöht die Sicherheit.
+
 - **Offline-Fähigkeit:** Transaktionen sollen auch offline durchgeführt werden können, indem die aktualisierte Gutschein-Datei direkt an den neuen Halter übergeben wird.
 
 - **Fokus auf Betrugserkennung, nicht -vermeidung:** Da es kein globales Ledger gibt, kann die Core-Bibliothek nicht verhindern, dass ein Nutzer widersprüchliche Transaktionshistorien (Double Spending) erzeugt. Das System stellt stattdessen sicher, dass jeder Betrugsversuch durch digitale Signaturen kryptographisch beweisbar ist, was eine Erkennung und soziale Sanktionen in einem übergeordneten System (Layer 2) ermöglicht.
@@ -237,6 +241,7 @@ Die Reaktion des Wallets auf einen nachgewiesenen Double Spend wurde verbessert,
 ├── Cargo.lock
 ├── Cargo.toml
 ├── README.md
+├── sign_test_standards.sh
 ├── sign_standards.sh
 ├── src
 │   ├── app_service
@@ -364,10 +369,10 @@ Definiert den `AppService`, eine übergeordnete Fassade, die die `Wallet`-Logik 
   - Validiert eine vom Benutzer eingegebene BIP-39 Mnemonic-Phrase.
 - `pub fn create_profile(&mut self, mnemonic: &str, passphrase: Option<&str>, user_prefix: Option<&str>, password: &str) -> Result<(), String>`
   - Erstellt ein komplett neues Wallet und Profil, speichert es und setzt den Service in den `Unlocked`-Zustand.
-- `pub fn login(...) -> Result<(), String>`
-  - Entsperrt ein existierendes Wallet und lädt es in den Speicher.
-- `pub fn recover_wallet_and_set_new_password(...) -> Result<(), String>`
-  - Stellt ein Wallet mit der Mnemonic-Phrase wieder her und setzt ein neues Passwort.
+- `pub fn login(&mut self, mnemonic: &str, passphrase: Option<&str>, prefix: Option<&str>, password: &str) -> Result<(), String>`
+  - Entsperrt ein existierendes Wallet. Benötigt `mnemonic`, `passphrase` und `prefix`, um den korrekten, anonymisierten Speicher-Unterordner zu finden.
+- `pub fn recover_wallet_and_set_new_password(&mut self, mnemonic: &str, passphrase: Option<&str>, prefix: Option<&str>, new_password: &str) -> Result<(), String>`
+  - Stellt ein Wallet wieder her und setzt ein neues Passwort. Benötigt ebenfalls die Geheimnisse (`mnemonic`, `passphrase`, `prefix`), um den Speicherort zu finden.
 - `pub fn logout(&mut self)`
   - Sperrt das Wallet und entfernt sensible Daten aus dem Speicher.
 - `pub fn get_voucher_summaries(&self, voucher_standard_uuid_filter: Option<&[String]>, status_filter: Option<&[VoucherStatus]>) -> Result<Vec<VoucherSummary>, String>`
@@ -444,7 +449,7 @@ Definiert die Abstraktion für die persistente Speicherung und stellt eine Stand
   - Definiert die Schnittstelle für Speicheroperationen, die nun für jeden Datenspeicher separat existieren (`load/save_wallet`, `load/save_bundle_metadata`, `load/save_fingerprints`, `load/save_proofs`).
 - `pub struct FileStorage`
   - Implementiert den `Storage`-Trait.
-  - Verwaltet die Ver- und Entschlüsselung der Wallet-Daten in mehreren separaten Dateien (`profile.enc`, `vouchers.enc`, `bundles.meta.enc`, `fingerprints.enc`, `proofs.enc`).
+  - Speichert die Daten jedes Profils in einem eigenen **anonymen Unterverzeichnis**, um die Privatsphäre zu erhöhen.
   - Implementiert die "Zwei-Schloss"-Mechanik mit Key-Wrapping für den Passwort-Zugriff und die Mnemonic-Wiederherstellung.
   - Bietet eine Funktion (`reset_password`) zum Zurücksetzen des Passworts, wenn der Benutzer sein Passwort vergessen hat.
 
@@ -484,9 +489,9 @@ Dieses Modul enthält kryptographische Hilfsfunktionen für Schlüsselgenerierun
 - `pub fn get_hash(input: impl AsRef<[u8]>) -> String`
   - Berechnet einen SHA3-256-Hash der Eingabe und gibt ihn als Base58-kodierten String zurück.
 - `pub fn derive_ed25519_keypair(mnemonic_phrase: &str, passphrase: Option<&str>) -> Result<(EdPublicKey, SigningKey), VoucherCoreError>`
-  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase über einen **gehärteten, mehrstufigen Prozess** (BIP-39 Seed -> PBKDF2 Stretch -> HKDF Expand) ab, um die Sicherheit zu erhöhen.
+  - Leitet ein Ed25519-Schlüsselpaar aus einer mnemonischen Phrase ab. Die übergebene `passphrase` sollte bereits das `prefix` des Kontos enthalten, um kryptographisch getrennte Konten zu erzeugen.
 - `pub fn create_user_id(public_key: &EdPublicKey, user_prefix: Option<&str>) -> Result<String, UserIdError>`
-  - Generiert eine User ID konform zum **`did:key`-Standard**. Das Format ist `[prefix]@[did:key:z...Ed25519-PublicKey...]` oder nur `did:key:z...`.
+  - Generiert eine User ID konform zum **`did:key`-Standard** mit einer integrierten Prüfsumme. Das Format ist `[prefix-]checksum@did:key:z...`.
 - `pub fn get_pubkey_from_user_id(user_id: &str) -> Result<EdPublicKey, GetPubkeyError>`
   - Extrahiert den Ed25519 Public Key aus einer `did:key`-basierten User ID-Zeichenkette.
 - Bietet Funktionen zur Generierung und Validierung von BIP-39 Mnemonic-Phrasen (`generate_mnemonic`, `validate_mnemonic_phrase`).

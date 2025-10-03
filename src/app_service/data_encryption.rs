@@ -29,8 +29,7 @@ impl AppService {
         password: &str,
     ) -> Result<(), String> {
         match &mut self.state {
-            AppState::Unlocked { identity, .. } => self
-                .storage
+            AppState::Unlocked { storage, identity, .. } => storage
                 .save_arbitrary_data(&identity.user_id, password, name, data)
                 .map_err(|e| e.to_string()),
             AppState::Locked => Err("Wallet is locked.".to_string()),
@@ -51,9 +50,9 @@ impl AppService {
     /// Schlägt fehl, wenn das Wallet gesperrt ist, das Passwort falsch ist oder die Daten nicht gefunden werden können.
     pub fn load_encrypted_data(&self, name: &str, password: &str) -> Result<Vec<u8>, String> {
         match &self.state {
-            AppState::Unlocked { identity, .. } => {
+            AppState::Unlocked { storage, identity, .. } => {
                 let auth_method = AuthMethod::Password(password);
-                self.storage
+                storage
                     .load_arbitrary_data(&identity.user_id, &auth_method, name)
                     .map_err(|e| e.to_string())
             }

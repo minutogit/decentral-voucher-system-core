@@ -7,14 +7,12 @@
 //! die `UserIdentity` und stellt sicher, dass Zustandsänderungen im Wallet
 //! automatisch gespeichert werden.
 //!
-//! ## Konzept: Zustandsmanagement
+//! ## Konzept: Profil-Management
 //!
-//! Der Service operiert in zwei Zuständen:
-//! - **`Locked`**: Kein Wallet geladen. Nur Operationen wie `create_profile` oder `login` sind möglich.
-//! - **`Unlocked`**: Ein Wallet ist geladen und entschlüsselt. Alle Operationen (Transfers, Abfragen etc.) sind verfügbar.
-//!
-//! Aktionen, die den internen Zustand des Wallets verändern (z.B. `create_new_voucher`, `receive_bundle`),
-//! speichern das Wallet bei Erfolg automatisch und sicher auf dem Datenträger.
+//! Der `AppService` unterstützt mehrere, voneinander getrennte Benutzerprofile.
+//! Jedes Profil wird in einem eigenen, anonym benannten Unterverzeichnis gespeichert.
+//! Eine zentrale `profiles.json`-Datei im Basisverzeichnis ordnet benutzerfreundliche
+//! Profilnamen den anonymen Ordnern zu, um den Login zu erleichtern.
 //!
 //! ## Beispiel: Typischer Lebenszyklus
 //!
@@ -25,27 +23,31 @@
 //! # use voucher_lib::models::voucher::Creator;
 //! # use voucher_lib::models::voucher_standard_definition::VoucherStandardDefinition;
 //!
-//! // 1. Initialisierung des Services
-//! let storage_path = Path::new("/tmp/my_wallet_docs");
+//! // 1. Initialisierung des Services mit einem Basis-Speicherpfad.
+//! let storage_path = Path::new("/tmp/my_wallets");
 //! let mut app = AppService::new(storage_path).expect("Service konnte nicht erstellt werden.");
 //!
-//! // 2. Neues Profil erstellen (dies entsperrt das Wallet)
-//! // In einer echten Anwendung wird die Mnemonic sicher generiert und gespeichert.
+//! // 2. Neues Profil erstellen (dies entsperrt das Wallet).
 //! let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-//! app.create_profile(&mnemonic, None, Some("user"), "sicheres-passwort-123")
+//! app.create_profile("Mein Wallet", &mnemonic, None, Some("user"), "sicheres-passwort-123")
 //!    .expect("Profil konnte nicht erstellt werden.");
 //!
-//! // 3. Eine Aktion ausführen (z.B. Guthaben prüfen)
+//! // 3. Eine Aktion ausführen (z.B. Guthaben prüfen).
 //! let balance = app.get_total_balance_by_currency().unwrap();
-//! assert!(balance.is_empty()); // Wallet ist noch leer.
+//! assert!(balance.is_empty());
 //!
-//! // 4. Wallet sperren
+//! // 4. Wallet sperren (Logout).
 //! app.logout();
 //!
-//! // 5. Erneut anmelden
-//! app.login("sicheres-passwort-123").expect("Login fehlgeschlagen.");
+//! // 5. Profile für den Login-Screen abrufen.
+//! let profiles = app.list_profiles().expect("Profile konnten nicht geladen werden.");
+//! let profile_to_load = profiles.first().unwrap();
 //!
-//! // 6. Die User-ID abrufen
+//! // 6. Erneut anmelden mit dem Ordnernamen des Profils und dem Passwort.
+//! app.login(&profile_to_load.folder_name, "sicheres-passwort-123")
+//!    .expect("Login fehlgeschlagen.");
+//!
+//! // 7. Die User-ID abrufen.
 //! let user_id = app.get_user_id().unwrap();
 //! println!("Angemeldet als: {}", user_id);
 //! ```
@@ -54,11 +56,13 @@ use crate::error::{ValidationError, VoucherCoreError};
 use crate::models::profile::UserIdentity;
 use crate::models::voucher::Voucher;
 use crate::models::voucher_standard_definition::VoucherStandardDefinition;
-use crate::services::bundle_processor;
+use crate::services::{bundle_processor, crypto_utils};
 use crate::storage::file_storage::FileStorage;
 use crate::wallet::instance::{ValidationFailureReason, VoucherStatus};
 use crate::wallet::Wallet;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 // Deklaration der neuen Handler als öffentliche Sub-Module.
 // Jede Datei enthält einen `impl AppService`-Block für ihren spezifischen Bereich.
@@ -69,6 +73,18 @@ pub mod lifecycle;
 pub mod app_queries;
 pub mod app_signature_handler;
 
+/// Repräsentiert die öffentlich sichtbaren Informationen eines Profils.
+/// Wird verwendet, um dem Frontend eine Liste der verfügbaren Profile zu übergeben.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ProfileInfo {
+    /// Der vom Benutzer gewählte, menschenlesbare Name des Profils.
+    #[serde(rename = "profileName")]
+    pub profile_name: String,
+    /// Der anonyme, abgeleitete Name des Ordners, in dem die Profildaten gespeichert sind.
+    #[serde(rename = "folderName")]
+    pub folder_name: String,
+}
+
 /// Repräsentiert den Kernzustand der Anwendung.
 pub enum AppState {
     /// Es ist kein Wallet geladen und keine `UserIdentity` im Speicher.
@@ -76,6 +92,7 @@ pub enum AppState {
     /// Ein Wallet ist geladen und die `UserIdentity` (inkl. privatem Schlüssel)
     /// ist für Operationen verfügbar.
     Unlocked {
+        storage: FileStorage,
         wallet: Wallet,
         identity: UserIdentity,
     },
@@ -87,9 +104,8 @@ pub enum AppState {
 /// Interaktion mit der `voucher_core`-Bibliothek, indem sie das Zustandsmanagement
 /// und die Persistenzabläufe kapselt.
 pub struct AppService {
-    /// Die konkrete Storage-Implementierung, die vom Service verwendet wird.
-    /// Für Client-Anwendungen ist dies typischerweise `FileStorage`.
-    storage: FileStorage,
+    /// Der Basispfad, in dem die anonymen Wallet-Verzeichnisse gespeichert werden.
+    base_storage_path: PathBuf,
     /// Der aktuelle Zustand des Services (Locked oder Unlocked).
     state: AppState,
 }
@@ -97,6 +113,26 @@ pub struct AppService {
 // --- Interne Hilfsmethoden ---
 
 impl AppService {
+    /// Leitet den anonymen Ordnernamen aus den Benutzergeheimnissen ab.
+    ///
+    /// Diese Methode kapselt die Logik zur Erzeugung eines kryptographisch sicheren,
+    /// anonymen und eindeutigen Ordnernamens für ein neues Profil.
+    fn derive_folder_name(
+        mnemonic: &str,
+        passphrase: Option<&str>,
+        prefix: Option<&str>,
+    ) -> String {
+        // 1. Erstelle den eindeutigen, geheimen String für dieses Konto.
+        let secret_string = format!(
+            "{}{}{}",
+            mnemonic,
+            passphrase.unwrap_or(""),
+            prefix.unwrap_or("")
+        );
+        // 2. Hashe diesen String, um den anonymen Ordnernamen zu erhalten.
+        crypto_utils::get_hash(secret_string.as_bytes())
+    }
+
     /// Die zentrale Logik zur Bestimmung des Gutschein-Status.
     /// Diese Methode wird von mehreren Handlern (`command_handler`, `signature_handler`)
     /// verwendet und verbleibt daher hier.
@@ -112,7 +148,6 @@ impl AppService {
             Err(e) => {
                 if let VoucherCoreError::Validation(validation_error) = e {
                     let reason = match validation_error {
-                        // KORREKTUR: `max` wird jetzt erfasst und übergeben. Duplizierter Arm wurde entfernt.
                         ValidationError::CountOutOfBounds { ref field, min, max, found, .. } if field == "guarantor_signatures" => Some(
                             ValidationFailureReason::GuarantorCountLow {
                                 required: min,
@@ -186,7 +221,7 @@ impl AppService {
     #[doc(hidden)]
     pub fn get_unlocked_mut_for_test(&mut self) -> (&mut Wallet, &UserIdentity) {
         match &mut self.state {
-            AppState::Unlocked { wallet, identity } => (wallet, identity),
+            AppState::Unlocked { wallet, identity, .. } => (wallet, identity),
             _ => panic!("Service must be unlocked for this test helper"),
         }
     }

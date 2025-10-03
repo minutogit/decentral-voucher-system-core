@@ -9,16 +9,16 @@ use std::collections::HashMap;
 use tempfile::tempdir;
 
 use voucher_lib::{
-    app_service::AppService,
     models::{
         conflict::{ProofOfDoubleSpend, ResolutionEndorsement},
         secure_container::SecureContainer,
         voucher::{Creator, NominalValue},
     },
     services::{crypto_utils, voucher_manager::NewVoucherData},
-    test_utils::{generate_signed_standard_toml, generate_valid_mnemonic, resign_transaction, SILVER_STANDARD},
+    test_utils::{generate_signed_standard_toml, resign_transaction, ACTORS, SILVER_STANDARD},
     VoucherStatus,
 };
+use voucher_lib::test_utils;
 use chrono::{Duration, Utc};
 
 /// Lokale Test-Hilfsfunktion, um einen mock `ProofOfDoubleSpend` zu erzeugen.
@@ -49,16 +49,12 @@ fn create_mock_proof_of_double_spend(
 fn test_transfer_bundle_is_transactional_on_save_failure() {
     // 1. ARRANGE: Wallet mit einem aktiven Gutschein über 100 Einheiten vorbereiten.
     let dir = tempdir().unwrap();
-    let mut service = AppService::new(dir.path()).unwrap();
     let correct_password = "correct_password";
     let wrong_password = "wrong_password";
-
-    service
-        .create_profile(&generate_valid_mnemonic(), None, Some("tx-test"), correct_password)
-        .unwrap();
+    let test_user = &ACTORS.test_user;
+    let (mut service, _) = test_utils::setup_service_with_profile(dir.path(), test_user, "Test User", correct_password);
 
     let silver_toml = generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
-    let (silver_standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     let user_id = service.get_user_id().unwrap();
 
     service
@@ -78,6 +74,7 @@ fn test_transfer_bundle_is_transactional_on_save_failure() {
     let voucher_to_split_id = summary_before[0].local_instance_id.clone();
 
     // 2. ACT: Versuche, einen Transfer mit falschem Passwort zu erstellen.
+    let (silver_standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
     let result = service.create_transfer_bundle(
         silver_standard,
         &voucher_to_split_id,
@@ -119,23 +116,13 @@ fn test_transfer_bundle_is_transactional_on_save_failure() {
 fn test_receive_bundle_is_transactional_on_save_failure() {
     // 1. ARRANGE: Ein leeres Empfänger-Wallet und ein gültiges Bundle vorbereiten.
     let dir_sender = tempdir().unwrap();
-    let mut service_sender = AppService::new(dir_sender.path()).unwrap();
-    service_sender
-        .create_profile(&generate_valid_mnemonic(), None, Some("sender"), "pwd")
-        .unwrap();
-
+    let sender = &ACTORS.sender;
     let dir_recipient = tempdir().unwrap();
-    let mut service_recipient = AppService::new(dir_recipient.path()).unwrap();
+    let recipient = &ACTORS.recipient1;
     let correct_password = "correct_password";
     let wrong_password = "wrong_password";
-    service_recipient
-        .create_profile(
-            &generate_valid_mnemonic(),
-            None,
-            Some("recipient"),
-            correct_password,
-        )
-        .unwrap();
+    let (mut service_sender, _) = test_utils::setup_service_with_profile(dir_sender.path(), sender, "Sender", "pwd");
+    let (mut service_recipient, _) = test_utils::setup_service_with_profile(dir_recipient.path(), recipient, "Recipient", correct_password);
 
     let silver_toml = generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
     let (silver_standard, _) = (&SILVER_STANDARD.0, &SILVER_STANDARD.1);
@@ -198,13 +185,10 @@ fn test_receive_bundle_is_transactional_on_save_failure() {
 fn test_attach_signature_is_transactional_on_save_failure() {
     // 1. ARRANGE: Wallet mit einem Gutschein (Silber-Standard, benötigt keine Bürgen) vorbereiten.
     let dir_creator = tempdir().unwrap();
-    let mut service_creator = AppService::new(dir_creator.path()).unwrap();
     let correct_password = "correct_password";
     let wrong_password = "wrong_password";
-
-    service_creator
-        .create_profile(&generate_valid_mnemonic(), None, Some("creator"), correct_password)
-        .unwrap();
+    let creator = &ACTORS.alice;
+    let (mut service_creator, _) = test_utils::setup_service_with_profile(dir_creator.path(), creator, "Creator", correct_password);
     let id_creator = service_creator.get_user_id().unwrap();
 
     let silver_toml = generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
@@ -212,9 +196,8 @@ fn test_attach_signature_is_transactional_on_save_failure() {
     let mut standards_map = HashMap::new();
     standards_map.insert(silver_standard.metadata.uuid.clone(), silver_toml.clone());
 
-    let mut service_signer = AppService::new(tempdir().unwrap().path()).unwrap();
-    service_signer
-        .create_profile(&generate_valid_mnemonic(), None, Some("signer"), "pwd").unwrap();
+    let signer = &ACTORS.guarantor1;
+    let (mut service_signer, _) = test_utils::setup_service_with_profile(tempdir().unwrap().path(), signer, "Signer", "pwd");
     let id_signer = service_signer.get_user_id().unwrap();
 
 
@@ -336,24 +319,13 @@ fn test_attach_signature_is_transactional_on_save_failure() {
 fn test_import_endorsement_is_transactional_on_save_failure() {
     // 1. ARRANGE: Wallet mit einem ungelösten Konfliktbeweis vorbereiten.
     let dir_reporter = tempdir().unwrap();
-    let mut service_reporter = AppService::new(dir_reporter.path()).unwrap();
     let correct_password = "correct_password";
     let wrong_password = "wrong_password";
-
-    service_reporter
-        .create_profile(
-            &generate_valid_mnemonic(),
-            None,
-            Some("reporter"),
-            correct_password,
-        )
-        .unwrap();
-
+    let reporter = &ACTORS.reporter;
     let dir_victim = tempdir().unwrap();
-    let mut service_victim = AppService::new(dir_victim.path()).unwrap();
-    service_victim
-        .create_profile(&generate_valid_mnemonic(), None, Some("victim"), "pwd")
-        .unwrap();
+    let victim = &ACTORS.victim;
+    let (mut service_reporter, _) = test_utils::setup_service_with_profile(dir_reporter.path(), reporter, "Reporter", correct_password);
+    let (mut service_victim, _) = test_utils::setup_service_with_profile(dir_victim.path(), victim, "Victim", "pwd");
     let id_victim = service_victim.get_user_id().unwrap();
 
     // Beweis manuell hinzufügen und durch eine andere Operation speichern
@@ -412,18 +384,13 @@ fn test_receive_bundle_is_transactional_on_conflict_and_save_failure() {
     // 1. ARRANGE: David empfängt einen Gutschein (Pfad A). Ein zweiter,
     // konfliktreicher Gutschein (Pfad B) wird vorbereitet.
     let dir_alice = tempdir().unwrap();
-    let mut service_alice = AppService::new(dir_alice.path()).unwrap();
-    let m_alice = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    service_alice.create_profile(m_alice, None, Some("alice"), "pwd").unwrap();
-    let (pk_alice, sk_alice) = voucher_lib::services::crypto_utils::derive_ed25519_keypair(m_alice, Some("alice")).unwrap();
-    let id_alice = service_alice.get_user_id().unwrap();
-    let identity_alice = voucher_lib::UserIdentity { signing_key: sk_alice, public_key: pk_alice, user_id: id_alice.clone() };
-
     let dir_david = tempdir().unwrap();
-    let mut service_david = AppService::new(dir_david.path()).unwrap();
+    let alice = &ACTORS.alice;
     let correct_password = "correct_password";
     let wrong_password = "wrong_password";
-    service_david.create_profile(&generate_valid_mnemonic(), None, Some("david"), correct_password).unwrap();
+    let david = &ACTORS.david;
+    let (mut service_alice, _) = test_utils::setup_service_with_profile(dir_alice.path(), alice, "Alice", "pwd");
+    let (mut service_david, _) = test_utils::setup_service_with_profile(dir_david.path(), david, "David", correct_password);
     let id_david = service_david.get_user_id().unwrap();
 
     let silver_toml = generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
@@ -431,6 +398,8 @@ fn test_receive_bundle_is_transactional_on_conflict_and_save_failure() {
     standards_map.insert(SILVER_STANDARD.0.metadata.uuid.clone(), silver_toml.clone());
 
     // FIX: Explizite Voucher-Daten anstelle von Default::default() verwenden, um Panic zu vermeiden.
+    let id_alice = service_alice.get_user_id().unwrap();
+    let identity_alice = alice.identity.clone();
     let voucher_v1 = service_alice.create_new_voucher(
         &silver_toml,
         "en",

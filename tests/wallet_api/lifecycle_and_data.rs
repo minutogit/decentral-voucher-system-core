@@ -7,14 +7,14 @@
 #[cfg(test)]
 mod tests {
     use voucher_lib::models::voucher::Creator;
-    use voucher_lib::services::voucher_manager::NewVoucherData;
+    use voucher_lib::services::voucher_manager::{NewVoucherData};
     use voucher_lib::app_service::AppService;
-    use voucher_lib::test_utils::generate_valid_mnemonic;
+    use voucher_lib::test_utils;
+    use voucher_lib::test_utils::{generate_signed_standard_toml, ACTORS};
     use tempfile::tempdir;
 
     const PASSWORD: &str = "correct-password-123";
     const WRONG_PASSWORD: &str = "wrong-password-!@#";
-    const SILVER_STANDARD_TOML: &str = include_str!("../../voucher_standards/silver_v1/standard.toml");
 
     // --- Teil 1: Absicherung des Gelben Bereichs (data_encryption.rs) ---
 
@@ -23,14 +23,9 @@ mod tests {
     /// Überprüft den kompletten "Happy Path" des generischen Datenspeichers.
     #[test]
     fn test_data_encryption_workflow() {
-        let dir = tempdir().unwrap();
-        let mut service = AppService::new(dir.path()).unwrap();
-        let mnemonic = generate_valid_mnemonic();
-
         // 1. Profil erstellen und entsperren
-        service
-            .create_profile(&mnemonic, None, Some("test"), PASSWORD)
-            .expect("Profile creation should succeed");
+        let dir = tempdir().unwrap();
+        let (mut service, _) = test_utils::setup_service_with_profile(dir.path(), &ACTORS.test_user, "Data User", PASSWORD);
 
         // 2. Daten speichern
         let data_name = "user_settings";
@@ -54,14 +49,8 @@ mod tests {
     #[test]
     fn test_data_encryption_fails_when_locked() {
         let dir = tempdir().unwrap();
-        let mut service = AppService::new(dir.path()).unwrap();
-        let mnemonic = generate_valid_mnemonic();
-
-        // 1. Profil erstellen
-        service
-            .create_profile(&mnemonic, None, Some("test"), PASSWORD)
-            .unwrap();
-
+        // 1. Profil erstellen (Service ist danach entsperrt)
+        let (mut service, _) = test_utils::setup_service_with_profile(dir.path(), &ACTORS.test_user, "Lock User", PASSWORD);
         // 2. Service sperren
         service.logout();
 
@@ -87,13 +76,8 @@ mod tests {
     #[test]
     fn test_data_encryption_fails_with_wrong_password() {
         let dir = tempdir().unwrap();
-        let mut service = AppService::new(dir.path()).unwrap();
-        let mnemonic = generate_valid_mnemonic();
-
         // 1. Profil erstellen und Daten mit korrektem Passwort speichern
-        service
-            .create_profile(&mnemonic, None, Some("test"), PASSWORD)
-            .unwrap();
+        let (mut service, _) = test_utils::setup_service_with_profile(dir.path(), &ACTORS.test_user, "Wrong Pass User", PASSWORD);
 
         let data_name = "user_settings";
         let original_data = b"some config".to_vec();
@@ -128,7 +112,7 @@ mod tests {
         let invalid_mnemonic = "this is not a valid bip39 phrase";
 
         // 2. Profilerstellung versuchen
-        let result = service.create_profile(invalid_mnemonic, None, Some("test"), PASSWORD);
+        let result = service.create_profile("Invalid Mnemonic Profile", invalid_mnemonic, None, Some("test"), PASSWORD);
 
         // 3. Assert: Funktion muss einen Fehler zurückgeben
         assert!(result.is_err());
@@ -145,17 +129,12 @@ mod tests {
     #[test]
     fn test_login_fails_with_wrong_password() {
         let dir = tempdir().unwrap();
-        let mut service = AppService::new(dir.path()).unwrap();
-        let mnemonic = generate_valid_mnemonic();
-
         // 1. Profil erstellen und wieder sperren
-        service
-            .create_profile(&mnemonic, None, Some("test"), PASSWORD)
-            .unwrap();
+        let (mut service, profile_info) = test_utils::setup_service_with_profile(dir.path(), &ACTORS.test_user, "Login Test", PASSWORD);
         service.logout();
 
         // 2. Login mit falschem Passwort versuchen
-        let result = service.login(WRONG_PASSWORD);
+        let result = service.login(&profile_info.folder_name, WRONG_PASSWORD);
 
         // 3. Assert: Login muss fehlschlagen
         assert!(result.is_err());
@@ -173,13 +152,9 @@ mod tests {
     #[test]
     fn test_recovery_preserves_wallet_data() {
         let dir = tempdir().unwrap();
-        let mut service = AppService::new(dir.path()).unwrap();
-        let mnemonic = generate_valid_mnemonic();
-
+        let test_user = &ACTORS.test_user;
         // 1. Profil erstellen
-        service
-            .create_profile(&mnemonic, None, None, PASSWORD)
-            .unwrap();
+        let (mut service, profile_info) = test_utils::setup_service_with_profile(dir.path(), test_user, "Recovery Test", PASSWORD);
 
         // 2. Einen Test-Gutschein erstellen und dem Wallet hinzufügen
         let user_id = service.get_user_id().unwrap();
@@ -193,11 +168,15 @@ mod tests {
                 amount: "100.0000".to_string(),
                 ..Default::default()
             },
+            // KORREKTUR: Fehlende Gültigkeitsdauer für die Gutschein-Erstellung hinzufügen.
+            validity_duration: Some("P1Y".to_string()),
             ..Default::default()
         };
 
+        // KORREKTUR: Einen korrekt signierten Standard verwenden, anstatt des rohen TOML-Strings.
+        let signed_standard = generate_signed_standard_toml("voucher_standards/silver_v1/standard.toml");
         let created_voucher = service
-            .create_new_voucher(SILVER_STANDARD_TOML, "de", voucher_data, PASSWORD)
+            .create_new_voucher(&signed_standard, "de", voucher_data, PASSWORD)
             .expect("Voucher creation should succeed");
 
         // 3. Prüfen, ob der Gutschein vorhanden ist
@@ -210,7 +189,7 @@ mod tests {
 
         // 5. Wallet wiederherstellen und neues Passwort setzen
         service
-            .recover_wallet_and_set_new_password(&mnemonic, None, "new_password")
+            .recover_wallet_and_set_new_password(&profile_info.folder_name, &test_user.mnemonic, test_user.passphrase, "new_password")
             .expect("Recovery should succeed");
 
         // 6. Assert: Der Gutschein muss nach der Wiederherstellung noch vorhanden sein

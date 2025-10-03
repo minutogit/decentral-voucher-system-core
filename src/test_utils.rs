@@ -1,12 +1,14 @@
 //! # src/test_utils.rs
 //!
+//! HINWEIS: Diese Datei wurde stark refaktorisiert, um die Mnemonic-Phrasen der Test-Akteure für die neuen APIs verfügbar zu machen.
 //! Zentrale Hilfsfunktionen für alle Tests (intern und extern).
 
 // HINWEIS: Absoluter Pfad zu externen Crates für mehr Robustheit
 use lazy_static::lazy_static;
 use toml;
-use bip39::Language;
+use bip39::{Language};
 use ed25519_dalek::Signer;
+use std::path::Path;
 use std::path::PathBuf;
 
 // HINWEIS: Alle `voucher_lib` Imports wurden zu `crate` geändert.
@@ -29,62 +31,142 @@ use crate::services::{
 };
 use crate::wallet::Wallet;
 use crate::{models::voucher::Voucher, UserIdentity, VoucherCoreError, VoucherInstance, VoucherStatus};
+use crate::app_service::{AppService, ProfileInfo};
+use std::ops::Deref;
 
-// --- Zentralisierte Akteure und Standards ---
+/// Bündelt alle Informationen eines Test-Benutzers.
+/// Enthält die Mnemonic, die für `FileStorage::new` und `login` benötigt wird.
+#[derive(Clone)]
+pub struct TestUser {
+    pub identity: UserIdentity,
+    pub mnemonic: String,
+    pub passphrase: Option<&'static str>,
+    pub prefix: Option<&'static str>,
+}
 
-/// Eine private Hilfsfunktion, um eine deterministische UserIdentity aus einem Seed zu erstellen.
-fn identity_from_seed(seed: &str, prefix: &str) -> UserIdentity {
-    let (public_key, signing_key) = generate_ed25519_keypair_for_tests(Some(seed));
-    let user_id = create_user_id(&public_key, Some(prefix)).unwrap();
-    UserIdentity {
+impl Deref for TestUser {
+    type Target = UserIdentity;
+
+    fn deref(&self) -> &Self::Target {
+        &self.identity
+    }
+}
+
+/// Erstellt eine `TestUser`-Instanz mit der langsamen, produktionssicheren Schlüsselableitung.
+/// Notwendig für Tests, die Passphrasen oder die Recovery-Logik verifizieren.
+fn user_from_mnemonic_slow(
+    mnemonic: &str,
+    passphrase: Option<&'static str>,
+    prefix: Option<&'static str>,
+) -> TestUser {
+    // HINWEIS: Dies ist absichtlich die "langsame" Funktion, um sicherzustellen, dass die Tests
+    // exakt dieselbe kryptographische Logik wie der Produktionscode verwenden.
+    let (public_key, signing_key) = crypto_utils::derive_ed25519_keypair(mnemonic, passphrase)
+        .expect("Failed to derive keypair from test mnemonic");
+
+    let user_id = create_user_id(&public_key, prefix).unwrap();
+
+    let identity = UserIdentity {
         signing_key,
         public_key,
         user_id,
+    };
+
+    TestUser {
+        identity,
+        mnemonic: mnemonic.to_string(),
+        passphrase,
+        prefix,
     }
+}
+
+/// Erstellt eine `TestUser`-Instanz mit der schnellen, nur für Tests gedachten Schlüsselableitung.
+/// Hält die meisten Tests performant. Ignoriert Passphrasen.
+fn user_from_mnemonic_fast(mnemonic: &str, prefix: Option<&'static str>) -> TestUser {
+    let (public_key, signing_key) =
+        crypto_utils::generate_ed25519_keypair_for_tests(Some(mnemonic));
+
+    let user_id = create_user_id(&public_key, prefix).unwrap();
+
+    let identity = UserIdentity {
+        signing_key,
+        public_key,
+        user_id,
+    };
+
+    TestUser {
+        identity,
+        mnemonic: mnemonic.to_string(),
+        passphrase: None, // Passphrase wird von der schnellen Methode nicht verwendet.
+        prefix,
+    }
+}
+
+/// Feste, deterministische Mnemonics für reproduzierbare Tests.
+mod mnemonics {
+    pub const ALICE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    pub const BOB: &str = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+    pub const CHARLIE: &str = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above";
+    pub const DAVID: &str = "brother offer escape switch virtual school pet quiz point hurdle boil popular";
+    pub const HACKER: &str = "clog cloud attitude around people thought sad will cute police feature junior";
+    // HINZUGEFÜGT: Fehlende Mnemonics für Konsistenz
+    pub const REPORTER: &str = "travel shell spy arctic clarify velvet wrist cigar jewel vintage life head";
 }
 
 /// Eine Struktur, die alle für Tests benötigten, einmalig erstellten Identitäten enthält.
 #[allow(dead_code)]
 pub struct TestActors {
-    pub alice: UserIdentity,
-    pub bob: UserIdentity,
-    pub charlie: UserIdentity,
-    pub david: UserIdentity,
-    pub issuer: UserIdentity,
-    pub hacker: UserIdentity,
-    pub guarantor1: UserIdentity,
-    pub guarantor2: UserIdentity,
-    pub male_guarantor: UserIdentity,
-    pub female_guarantor: UserIdentity,
-    pub sender: UserIdentity,
-    pub recipient1: UserIdentity,
-    pub recipient2: UserIdentity,
-    pub test_user: UserIdentity,
-    pub victim: UserIdentity,
+    pub alice: TestUser,
+    pub bob: TestUser,
+    pub charlie: TestUser,
+    pub david: TestUser,
+    pub issuer: TestUser,
+    pub hacker: TestUser,
+    pub guarantor1: TestUser,
+    pub guarantor2: TestUser,
+    pub male_guarantor: TestUser,
+    pub female_guarantor: TestUser,
+    pub sender: TestUser,
+    pub recipient1: TestUser,
+    pub recipient2: TestUser,
+    pub test_user: TestUser,
+    pub victim: TestUser,
+    pub reporter: TestUser,
+}
+
+lazy_static! {
+    /// Ein deterministischer Herausgeber, der zum Signieren der Test-Standards verwendet wird.
+    pub static ref TEST_ISSUER: TestUser = user_from_mnemonic_fast(
+        "seek ethics foam novel hat faculty royal donkey burger frost advice visa",
+        Some("issuer")
+    );
 }
 
 lazy_static! {
     /// Initialisiert einmalig alle Akteure, sodass sie in allen Tests wiederverwendet werden können.
     pub static ref ACTORS: TestActors = TestActors {
-        alice: identity_from_seed("alice", "al"),
-        bob: identity_from_seed("bob", "bo"),
-        charlie: identity_from_seed("charlie", "ch"),
-        david: identity_from_seed("david", "da"),
-        issuer: identity_from_seed("issuer", "is"),
-        hacker: identity_from_seed("hacker", "ha"),
-        guarantor1: identity_from_seed("guarantor1", "g1"),
-        guarantor2: identity_from_seed("guarantor2", "g2"),
-        male_guarantor: identity_from_seed("male_guarantor", "mg"),
-        female_guarantor: identity_from_seed("female_guarantor", "fg"),
-        sender: identity_from_seed("sender", "se"),
-        recipient1: identity_from_seed("recipient1", "r1"),
-        recipient2: identity_from_seed("recipient2", "r2"),
-        test_user: identity_from_seed("test_user", "tu"),
-        victim: identity_from_seed("victim", "vi"),
+        // Alice wird in Krypto-Tests verwendet und MUSS die langsame Ableitung nutzen
+        alice: user_from_mnemonic_slow(mnemonics::ALICE, None, Some("al")),
+        bob: user_from_mnemonic_fast(mnemonics::BOB, Some("bo")),
+        charlie: user_from_mnemonic_fast(mnemonics::CHARLIE, Some("ch")),
+        david: user_from_mnemonic_fast(mnemonics::DAVID, Some("da")),
+        issuer: user_from_mnemonic_fast(mnemonics::BOB, Some("is")), // Re-use a known-good one
+        guarantor1: user_from_mnemonic_fast(&generate_valid_mnemonic(), Some("g1")),
+        guarantor2: user_from_mnemonic_fast(&generate_valid_mnemonic(), Some("g2")),
+        male_guarantor: user_from_mnemonic_fast(&generate_valid_mnemonic(), Some("mg")),
+        female_guarantor: user_from_mnemonic_fast(&generate_valid_mnemonic(), Some("fg")),
+        sender: user_from_mnemonic_fast(&generate_valid_mnemonic(), Some("se")),
+        recipient1: user_from_mnemonic_fast(&generate_valid_mnemonic(), Some("r1")),
+        recipient2: user_from_mnemonic_fast(&generate_valid_mnemonic(), Some("r2")),
+        victim: user_from_mnemonic_fast(&generate_valid_mnemonic(), Some("vi")),
+        reporter: user_from_mnemonic_fast(mnemonics::REPORTER, Some("reporter")),
+
+        // Diese Akteure MÜSSEN die langsame, produktionsgetreue Ableitung verwenden
+        hacker: user_from_mnemonic_slow(mnemonics::HACKER, Some("wrong"), Some("ha")),
+        test_user: user_from_mnemonic_slow(&generate_valid_mnemonic(), Some("pass"), Some("tu")),
     };
 
     /// Ein deterministischer Herausgeber, der zum Signieren der Test-Standards verwendet wird.
-    pub static ref TEST_ISSUER: UserIdentity = identity_from_seed("test-issuer-seed-123", "issuer");
 
     /// Lädt den Minuto-Standard und signiert ihn zur Laufzeit für die Tests.
     pub static ref MINUTO_STANDARD: (VoucherStandardDefinition, String) = {
@@ -99,9 +181,9 @@ lazy_static! {
             .expect("Failed to create canonical JSON for Minuto standard");
         let hash_to_sign = get_hash(canonical_json_for_signing.as_bytes());
 
-        let signature = sign_ed25519(&issuer.signing_key, hash_to_sign.as_bytes());
+        let signature = sign_ed25519(&issuer.identity.signing_key, hash_to_sign.as_bytes());
         let signature_block = SignatureBlock {
-            issuer_id: issuer.user_id.clone(),
+            issuer_id: issuer.identity.user_id.clone(),
             signature: bs58::encode(signature.to_bytes()).into_string(),
         };
         standard.signature = Some(signature_block);
@@ -119,8 +201,8 @@ lazy_static! {
         standard.signature = None;
         let canonical_json = to_canonical_json(&standard).unwrap();
         let hash = get_hash(canonical_json.as_bytes());
-        let signature = sign_ed25519(&issuer.signing_key, hash.as_bytes());
-        standard.signature = Some(SignatureBlock { issuer_id: issuer.user_id.clone(), signature: bs58::encode(signature.to_bytes()).into_string() });
+        let signature = sign_ed25519(&issuer.identity.signing_key, hash.as_bytes());
+        standard.signature = Some(SignatureBlock { issuer_id: issuer.identity.user_id.clone(), signature: bs58::encode(signature.to_bytes()).into_string() });
         (standard, hash)
     };
 
@@ -141,7 +223,7 @@ lazy_static! {
                 for rule in sig_rules.iter_mut() {
                     // Wir aktualisieren alle Regeln, um sicherzustellen, dass sie die neue User-ID verwenden.
                     // Dadurch wird der Vergleich in `validate_required_signatures` erfolgreich sein.
-                    rule.allowed_signer_ids = vec![issuer.user_id.clone()];
+                    rule.allowed_signer_ids = vec![issuer.identity.user_id.clone()];
                 }
             }
         }
@@ -151,9 +233,9 @@ lazy_static! {
             .expect("Failed to create canonical JSON for Required Sig standard");
         let hash_to_sign = get_hash(canonical_json_for_signing.as_bytes());
 
-        let signature = sign_ed25519(&issuer.signing_key, hash_to_sign.as_bytes());
+        let signature = sign_ed25519(&issuer.identity.signing_key, hash_to_sign.as_bytes());
         let signature_block = SignatureBlock {
-            issuer_id: issuer.user_id.clone(),
+            issuer_id: issuer.identity.user_id.clone(),
             signature: bs58::encode(signature.to_bytes()).into_string(),
         };
         standard.signature = Some(signature_block);
@@ -185,9 +267,9 @@ pub fn generate_signed_standard_toml(template_path: &str) -> String {
         .expect("Failed to create canonical JSON for standard");
     let hash_to_sign = get_hash(canonical_json_for_signing.as_bytes());
 
-    let signature = sign_ed25519(&issuer.signing_key, hash_to_sign.as_bytes());
+    let signature = sign_ed25519(&issuer.identity.signing_key, hash_to_sign.as_bytes());
     let signature_block = SignatureBlock {
-        issuer_id: issuer.user_id.clone(),
+        issuer_id: issuer.identity.user_id.clone(),
         signature: bs58::encode(signature.to_bytes()).into_string(),
     };
     standard.signature = Some(signature_block);
@@ -207,10 +289,10 @@ pub fn create_custom_standard(
     let canonical_json = to_canonical_json(&standard).unwrap();
     let hash = get_hash(canonical_json.as_bytes());
 
-    let signature = crate::test_utils::TEST_ISSUER.signing_key.sign(hash.as_bytes());
+    let signature = crate::test_utils::TEST_ISSUER.identity.signing_key.sign(hash.as_bytes());
 
     standard.signature = Some(crate::models::voucher_standard_definition::SignatureBlock {
-        issuer_id: crate::test_utils::TEST_ISSUER.user_id.clone(),
+        issuer_id: crate::test_utils::TEST_ISSUER.identity.user_id.clone(),
         signature: bs58::encode(signature.to_bytes()).into_string(),
     });
 
@@ -226,8 +308,8 @@ pub fn setup_voucher_with_one_tx() -> (
     Voucher,
 ) {
     let (standard, standard_hash) = (&crate::test_utils::SILVER_STANDARD.0, &crate::test_utils::SILVER_STANDARD.1);
-    let creator = &crate::test_utils::ACTORS.alice;
-    let recipient = &crate::test_utils::ACTORS.bob;
+    let creator = &crate::test_utils::ACTORS.alice.identity;
+    let recipient = &crate::test_utils::ACTORS.bob.identity;
 
     let voucher_data = NewVoucherData {
         creator: Creator { id: creator.user_id.clone(), ..Default::default() },
@@ -325,19 +407,19 @@ pub fn add_voucher_to_wallet(
 
     if with_valid_guarantors {
         let sig_data1 =
-            create_guarantor_signature_data(&crate::test_utils::ACTORS.guarantor1, "1", &voucher.voucher_id);
+            create_guarantor_signature_data(&crate::test_utils::ACTORS.guarantor1.identity, "1", &voucher.voucher_id);
         let sig_data2 =
-            create_guarantor_signature_data(&crate::test_utils::ACTORS.guarantor2, "2", &voucher.voucher_id);
+            create_guarantor_signature_data(&crate::test_utils::ACTORS.guarantor2.identity, "2", &voucher.voucher_id);
 
         let signed_sig1 = signature_manager::complete_and_sign_detached_signature(
             sig_data1,
             &voucher.voucher_id,
-            &crate::test_utils::ACTORS.guarantor1,
+            &crate::test_utils::ACTORS.guarantor1.identity,
         )?;
         let signed_sig2 = signature_manager::complete_and_sign_detached_signature(
             sig_data2,
             &voucher.voucher_id,
-            &crate::test_utils::ACTORS.guarantor2,
+            &crate::test_utils::ACTORS.guarantor2.identity,
         )?;
 
         if let DetachedSignature::Guarantor(s) = signed_sig1 {
@@ -360,6 +442,36 @@ pub fn add_voucher_to_wallet(
 
 
     Ok(local_id.clone())
+}
+
+/// Eine zentrale Hilfsfunktion, um einen `AppService` zu instanziieren
+/// und direkt ein Profil darin zu erstellen.
+///
+/// Diese Funktion kapselt den korrekten, mehrstufigen Prozess des Profil-Managements
+/// und gibt alle notwendigen Informationen für nachfolgende Testschritte zurück.
+///
+/// # Returns
+/// Ein Tupel `(AppService, ProfileInfo)`, wobei:
+/// - `AppService` die entsperrte Service-Instanz ist.
+/// - `ProfileInfo` die Metadaten des erstellten Profils enthält (inkl. `folder_name`).
+#[allow(dead_code)]
+pub fn setup_service_with_profile(
+    base_path: &Path,
+    user: &TestUser,
+    profile_name: &str,
+    password: &str,
+) -> (AppService, ProfileInfo) {
+    let mut service = AppService::new(base_path).expect("Failed to create AppService in test setup");
+
+    service
+        .create_profile(profile_name, &user.mnemonic, user.passphrase, user.prefix, password)
+        .unwrap_or_else(|e| panic!("Failed to create profile '{}' in test setup: {}", profile_name, e));
+
+    let profile_info = service.list_profiles().expect("Failed to list profiles after creation")
+        .into_iter().find(|p| p.profile_name == profile_name)
+        .expect("Could not find freshly created profile in index");
+
+    (service, profile_info)
 }
 
 pub fn create_guarantor_signature_data(
@@ -579,14 +691,14 @@ pub fn create_guarantor_signature(
 pub fn create_male_guarantor_signature(voucher: &Voucher) -> GuarantorSignature {
     let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date).unwrap();
     let signature_time = (creation_dt + chrono::Duration::days(1)).to_rfc3339();
-    create_guarantor_signature_with_time(&voucher.voucher_id, &crate::test_utils::ACTORS.male_guarantor, "Martin", "1", &signature_time)
+    create_guarantor_signature_with_time(&voucher.voucher_id, &crate::test_utils::ACTORS.male_guarantor.identity, "Martin", "1", &signature_time)
 }
 
 #[allow(dead_code)]
 pub fn create_female_guarantor_signature(voucher: &Voucher) -> GuarantorSignature {
     let creation_dt = chrono::DateTime::parse_from_rfc3339(&voucher.creation_date).unwrap();
     let signature_time = (creation_dt + chrono::Duration::days(2)).to_rfc3339();
-    create_guarantor_signature_with_time(&voucher.voucher_id, &crate::test_utils::ACTORS.female_guarantor, "Frida", "2", &signature_time)
+    create_guarantor_signature_with_time(&voucher.voucher_id, &crate::test_utils::ACTORS.female_guarantor.identity, "Frida", "2", &signature_time)
 }
 
 #[allow(dead_code)]

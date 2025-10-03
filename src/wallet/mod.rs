@@ -150,18 +150,11 @@ impl Wallet {
         passphrase: Option<&str>,
         user_prefix: Option<&str>,
     ) -> Result<(Self, UserIdentity), VoucherCoreError> {
-        // Das Präfix wird Teil der Passphrase, um kryptographisch getrennte Konten zu erzeugen.
-        let final_passphrase_str = format!(
-            "{}{}",
-            passphrase.unwrap_or(""),
-            user_prefix.unwrap_or("").to_lowercase()
+        let (public_key, signing_key) = crate::services::crypto_utils::derive_ed25519_keypair(mnemonic_phrase, passphrase)?;
+        println!("\n[Debug Wallet::new] Derived keypair from mnemonic.\n  - Mnemonic Hint: '...' (len: {})\n  - Passphrase used: {}\n",
+            mnemonic_phrase.len(), passphrase.is_some()
         );
-        let final_passphrase = if final_passphrase_str.is_empty() {
-            None
-        } else {
-            Some(final_passphrase_str.as_str())
-        };
-        let (public_key, signing_key) = crate::services::crypto_utils::derive_ed25519_keypair(mnemonic_phrase, final_passphrase)?;
+
         let user_id = create_user_id(&public_key, user_prefix)
             .map_err(|e| VoucherCoreError::Crypto(e.to_string()))?;
 
@@ -196,6 +189,11 @@ impl Wallet {
         auth: &AuthMethod,
     ) -> Result<(Self, UserIdentity), VoucherCoreError> {
         let (profile, voucher_store, identity) = storage.load_wallet(auth)?;
+
+        if let AuthMethod::Mnemonic(..) = auth {
+             println!("[Debug Wallet::load] Recovery successful! Decrypted identity with Mnemonic. User ID: {}", identity.user_id);
+        }
+
         let bundle_meta_store = storage.load_bundle_metadata(&identity.user_id, auth)?;
         let fingerprint_store = storage.load_fingerprints(&identity.user_id, auth)?;
         let proof_store = storage.load_proofs(&identity.user_id, auth)?;

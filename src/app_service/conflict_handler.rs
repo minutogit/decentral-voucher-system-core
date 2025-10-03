@@ -46,7 +46,7 @@ impl AppService {
         notes: Option<String>,
     ) -> Result<ResolutionEndorsement, String> {
         match &self.state {
-            AppState::Unlocked { wallet, identity } => wallet
+            AppState::Unlocked { wallet, identity, .. } => wallet
                 .create_resolution_endorsement(identity, proof_id, notes)
                 .map_err(|e| e.to_string()),
             AppState::Locked => Err("Wallet is locked.".to_string()),

@@ -53,9 +53,15 @@ fn create_test_voucher(identity: &UserIdentity) -> Voucher {
 fn test_wallet_creation_save_and_load() {
     // 1. Setup
     let temp_dir = tempdir().expect("Failed to create temp dir");
-    let mut storage = FileStorage::new(temp_dir.path());
     let password = "strongpassword123";
     let identity = &ACTORS.alice;
+    let folder_name = {
+        let secret_string = format!("{}{}{}", &identity.mnemonic, identity.passphrase.unwrap_or(""), identity.prefix.unwrap_or(""));
+        crypto_utils::get_hash(secret_string.as_bytes())
+    };
+    let user_storage_path = temp_dir.path().join(folder_name);
+    let mut storage = FileStorage::new(user_storage_path);
+
     let wallet = setup_in_memory_wallet(identity);
 
     // 2. Speichern
@@ -77,9 +83,15 @@ fn test_wallet_creation_save_and_load() {
 fn test_password_recovery_and_reset_with_data() {
     // 1. Setup: Erstelle ein Profil mit einem Gutschein.
     let temp_dir = tempdir().expect("Failed to create temp dir");
-    let mut storage = FileStorage::new(temp_dir.path());
     let initial_password = "my-secret-password";
     let identity = &ACTORS.test_user;
+    let folder_name = {
+        let secret_string = format!("{}{}{}", &identity.mnemonic, identity.passphrase.unwrap_or(""), identity.prefix.unwrap_or(""));
+        crypto_utils::get_hash(secret_string.as_bytes())
+    };
+    let user_storage_path = temp_dir.path().join(folder_name);
+    let mut storage = FileStorage::new(user_storage_path);
+
     let mut wallet = setup_in_memory_wallet(identity);
     let voucher = create_test_voucher(identity);
     let local_id = Wallet::calculate_local_instance_id(&voucher, &identity.user_id).unwrap();
@@ -130,14 +142,20 @@ fn test_password_recovery_and_reset_with_data() {
 #[test]
 fn test_load_with_missing_voucher_store() {
     let temp_dir = tempdir().unwrap();
-    let mut storage = FileStorage::new(temp_dir.path());
     let password = "password123";
     let identity = &ACTORS.test_user;
+    let folder_name = {
+        let secret_string = format!("{}{}{}", &identity.mnemonic, identity.passphrase.unwrap_or(""), identity.prefix.unwrap_or(""));
+        crypto_utils::get_hash(secret_string.as_bytes())
+    };
+    let user_storage_path = temp_dir.path().join(folder_name);
+    let mut storage = FileStorage::new(user_storage_path);
+
     let wallet = setup_in_memory_wallet(identity);
     wallet.save(&mut storage, identity, password).unwrap();
 
     // Lösche die Gutschein-Datei
-    fs::remove_file(temp_dir.path().join("vouchers.enc")).unwrap();
+    fs::remove_file(storage.user_storage_path.join("vouchers.enc")).unwrap();
 
     // Das Laden sollte trotzdem erfolgreich sein und einen leeren Store zurückgeben
     let (loaded_wallet, _) = Wallet::load(&storage, &AuthMethod::Password(password))
@@ -150,14 +168,21 @@ fn test_load_with_missing_voucher_store() {
 #[test]
 fn test_load_from_corrupted_profile_file() {
     let temp_dir = tempdir().unwrap();
-    let mut storage = FileStorage::new(temp_dir.path());
     let password = "password123";
     let identity = &ACTORS.victim;
+    let folder_name = {
+        let secret_string = format!("{}{}{}", &identity.mnemonic, identity.passphrase.unwrap_or(""), identity.prefix.unwrap_or(""));
+        crypto_utils::get_hash(secret_string.as_bytes())
+    };
+    let user_storage_path = temp_dir.path().join(folder_name);
+    let mut storage = FileStorage::new(user_storage_path);
+
     let wallet = setup_in_memory_wallet(identity);
     wallet.save(&mut storage, identity, password).unwrap();
 
     // Beschädige die Profil-Datei
-    let profile_path = temp_dir.path().join("profile.enc");
+    // KORREKTUR: Pfad muss auf den User-Unterordner zeigen
+    let profile_path = storage.user_storage_path.join("profile.enc");
     let mut contents = fs::read(&profile_path).unwrap();
     contents.truncate(contents.len() / 2); // Schneide die Hälfte ab
     fs::write(&profile_path, contents).unwrap();
@@ -170,9 +195,15 @@ fn test_load_from_corrupted_profile_file() {
 #[test]
 fn test_empty_password_handling() {
     let temp_dir = tempdir().unwrap();
-    let mut storage = FileStorage::new(temp_dir.path());
     let empty_password = "";
     let identity = &ACTORS.test_user;
+    let folder_name = {
+        let secret_string = format!("{}{}{}", &identity.mnemonic, identity.passphrase.unwrap_or(""), identity.prefix.unwrap_or(""));
+        crypto_utils::get_hash(secret_string.as_bytes())
+    };
+    let user_storage_path = temp_dir.path().join(folder_name);
+    let mut storage = FileStorage::new(user_storage_path);
+
     let wallet = setup_in_memory_wallet(identity);
 
     // Speichern mit leerem Passwort sollte funktionieren
@@ -192,11 +223,17 @@ fn test_empty_password_handling() {
 fn test_save_and_load_with_bundle_history() {
     // 1. Setup
     let temp_dir = tempdir().expect("Failed to create temp dir");
-    let mut storage = FileStorage::new(temp_dir.path());
     let password = "strongpassword123";
 
     // Erstelle Sender (Alice) und Empfänger (Bob)
     let alice_identity = &ACTORS.alice;
+    let folder_name = {
+        let secret_string = format!("{}{}{}", &alice_identity.mnemonic, alice_identity.passphrase.unwrap_or(""), alice_identity.prefix.unwrap_or(""));
+        crypto_utils::get_hash(secret_string.as_bytes())
+    };
+    let user_storage_path = temp_dir.path().join(folder_name);
+    let mut storage = FileStorage::new(user_storage_path);
+
     let bob_identity = &ACTORS.bob;
     let mut alice_wallet = setup_in_memory_wallet(alice_identity);
 
@@ -235,7 +272,7 @@ fn test_save_and_load_with_bundle_history() {
         .expect("Failed to save wallet with history");
 
     // Überprüfe, ob die neue Metadaten-Datei erstellt wurde
-    assert!(temp_dir.path().join("bundles.meta.enc").exists());
+    assert!(storage.user_storage_path.join("bundles.meta.enc").exists());
 
     // 4. Laden und Verifizieren
     let (loaded_wallet, _) = Wallet::load(&storage, &AuthMethod::Password(password))
@@ -270,10 +307,16 @@ struct AppSettings {
 fn test_save_and_load_arbitrary_data() {
     // 1. Setup
     let temp_dir = tempdir().expect("Failed to create temp dir");
-    let mut storage = FileStorage::new(temp_dir.path());
-    println!("--> Test storage created in: {:?}", temp_dir.path());
     let password = "arbitrary-data-password";
     let identity = &ACTORS.alice;
+    let folder_name = {
+        let secret_string = format!("{}{}{}", &identity.mnemonic, identity.passphrase.unwrap_or(""), identity.prefix.unwrap_or(""));
+        crypto_utils::get_hash(secret_string.as_bytes())
+    };
+    let user_storage_path = temp_dir.path().join(folder_name);
+    let mut storage = FileStorage::new(user_storage_path);
+
+    println!("--> Test storage created in: {:?}", storage.user_storage_path);
     let wallet = setup_in_memory_wallet(identity);
 
     // WICHTIG: Zuerst das Wallet speichern, damit die Schlüssel-Infrastruktur
@@ -308,11 +351,9 @@ fn test_save_and_load_arbitrary_data() {
 
     // Überprüfe, ob die Dateien mit dem korrekten, benutzerspezifischen Namen erstellt wurden
     let user_hash = crypto_utils::get_hash(identity.user_id.as_bytes());
-    let expected_path1 = temp_dir
-        .path()
+    let expected_path1 = storage.user_storage_path
         .join(format!("generic_{}.{}.enc", blob_name1, user_hash));
-    let expected_path2 = temp_dir
-        .path()
+    let expected_path2 = storage.user_storage_path
         .join(format!("generic_{}.{}.enc", blob_name2, user_hash));
 
     println!("--> Verifying existence of file: {:?}", expected_path1);

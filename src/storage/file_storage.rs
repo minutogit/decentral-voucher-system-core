@@ -99,15 +99,22 @@ struct ProofStorageContainer {
 
 /// Eine Implementierung des `Storage`-Traits, die Daten in verschlüsselten Dateien speichert.
 pub struct FileStorage {
-    /// Der Pfad zum Verzeichnis, das die Wallet-Dateien enthält.
-    wallet_directory: PathBuf,
+    /// Der Pfad zum spezifischen, anonymen Unterordner des Benutzers.
+    pub user_storage_path: PathBuf,
 }
 
 impl FileStorage {
-    /// Erstellt eine neue `FileStorage`-Instanz für ein bestimmtes Verzeichnis.
-    pub fn new(path: impl Into<PathBuf>) -> Self {
+    /// Erstellt eine neue `FileStorage`-Instanz für ein spezifisches Benutzerverzeichnis.
+    ///
+    /// Diese Methode ist nun entkoppelt von der Logik zur Erzeugung des Pfadnamens
+    /// und nimmt den vollständigen Pfad zum Benutzerverzeichnis direkt entgegen.
+    ///
+    /// # Arguments
+    /// * `user_storage_path` - Der vollständige Pfad zum Verzeichnis, in dem die
+    ///   verschlüsselten Wallet-Dateien dieses Profils gespeichert sind oder werden sollen.
+    pub fn new(user_storage_path: impl Into<PathBuf>) -> Self {
         FileStorage {
-            wallet_directory: path.into(),
+            user_storage_path: user_storage_path.into(),
         }
     }
 
@@ -118,7 +125,7 @@ impl FileStorage {
 
     /// Lädt den `ProfileStorageContainer`, um an die Schlüssel-Metadaten zu gelangen.
     fn load_profile_container(&self) -> Result<ProfileStorageContainer, StorageError> {
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
         if !profile_path.exists() {
             return Err(StorageError::NotFound);
         }
@@ -138,7 +145,7 @@ impl FileStorage {
             &password_key,
             &profile_container.password_wrapped_key_with_nonce,
         )
-        .map_err(|_| StorageError::AuthenticationFailed)?;
+            .map_err(|_| StorageError::AuthenticationFailed)?;
 
         file_key_bytes
             .try_into()
@@ -159,15 +166,15 @@ impl FileStorage {
 
 impl Storage for FileStorage {
     fn profile_exists(&self) -> bool {
-        self.wallet_directory.join(PROFILE_FILE_NAME).exists()
+        self.user_storage_path.join(PROFILE_FILE_NAME).exists()
     }
 
     fn load_wallet(
         &self,
         auth: &AuthMethod,
     ) -> Result<(UserProfile, VoucherStore, UserIdentity), StorageError> {
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
-        let store_path = self.wallet_directory.join(VOUCHER_STORE_FILE_NAME);
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
+        let store_path = self.user_storage_path.join(VOUCHER_STORE_FILE_NAME);
 
         if !profile_path.exists() {
             return Err(StorageError::NotFound);
@@ -229,9 +236,9 @@ impl Storage for FileStorage {
         identity: &UserIdentity,
         password: &str,
     ) -> Result<(), StorageError> {
-        fs::create_dir_all(&self.wallet_directory)?;
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
-        let store_path = self.wallet_directory.join(VOUCHER_STORE_FILE_NAME);
+        fs::create_dir_all(&self.user_storage_path)?; // Erstellt den Ordner, falls nicht vorhanden
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
+        let store_path = self.user_storage_path.join(VOUCHER_STORE_FILE_NAME);
 
         let file_key: [u8; KEY_SIZE];
         let profile_container: ProfileStorageContainer;
@@ -302,8 +309,8 @@ impl Storage for FileStorage {
         };
 
         // Atomares Schreiben über temporäre Dateien.
-        let profile_tmp_path = self.wallet_directory.join(format!("{}.tmp", PROFILE_FILE_NAME));
-        let store_tmp_path = self.wallet_directory.join(format!("{}.tmp", VOUCHER_STORE_FILE_NAME));
+        let profile_tmp_path = self.user_storage_path.join(format!("{}.tmp", PROFILE_FILE_NAME));
+        let store_tmp_path = self.user_storage_path.join(format!("{}.tmp", VOUCHER_STORE_FILE_NAME));
 
         fs::write(&profile_tmp_path, serde_json::to_vec(&profile_container).unwrap())?;
         fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
@@ -319,7 +326,7 @@ impl Storage for FileStorage {
         identity: &UserIdentity,
         new_password: &str,
     ) -> Result<(), StorageError> {
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
         if !profile_path.exists() {
             return Err(StorageError::NotFound);
         }
@@ -344,7 +351,7 @@ impl Storage for FileStorage {
         container.password_kdf_salt = new_pw_salt;
         container.password_wrapped_key_with_nonce = new_pw_wrapped_key;
 
-        let profile_tmp_path = self.wallet_directory.join(format!("{}.tmp", PROFILE_FILE_NAME));
+        let profile_tmp_path = self.user_storage_path.join(format!("{}.tmp", PROFILE_FILE_NAME));
         fs::write(&profile_tmp_path, serde_json::to_vec(&container).unwrap())?;
         fs::rename(&profile_tmp_path, &profile_path)?;
 
@@ -352,8 +359,8 @@ impl Storage for FileStorage {
     }
 
     fn load_fingerprints(&self, _user_id: &str, auth: &AuthMethod) -> Result<FingerprintStore, StorageError> {
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
-        let fingerprint_path = self.wallet_directory.join(FINGERPRINT_STORE_FILE_NAME);
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
+        let fingerprint_path = self.user_storage_path.join(FINGERPRINT_STORE_FILE_NAME);
 
         if !profile_path.exists() {
             return Err(StorageError::NotFound);
@@ -391,8 +398,8 @@ impl Storage for FileStorage {
         password: &str,
         fingerprint_store: &FingerprintStore,
     ) -> Result<(), StorageError> {
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
-        let fingerprint_path = self.wallet_directory.join(FINGERPRINT_STORE_FILE_NAME);
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
+        let fingerprint_path = self.user_storage_path.join(FINGERPRINT_STORE_FILE_NAME);
 
         if !profile_path.exists() {
             return Err(StorageError::NotFound);
@@ -420,7 +427,7 @@ impl Storage for FileStorage {
             encrypted_store_payload: store_payload,
         };
 
-        let store_tmp_path = self.wallet_directory.join(format!("{}.tmp", FINGERPRINT_STORE_FILE_NAME));
+        let store_tmp_path = self.user_storage_path.join(format!("{}.tmp", FINGERPRINT_STORE_FILE_NAME));
         fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
         fs::rename(&store_tmp_path, &fingerprint_path)?;
 
@@ -432,8 +439,8 @@ impl Storage for FileStorage {
         _user_id: &str,
         auth: &AuthMethod,
     ) -> Result<BundleMetadataStore, StorageError> {
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
-        let meta_path = self.wallet_directory.join(BUNDLE_META_FILE_NAME);
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
+        let meta_path = self.user_storage_path.join(BUNDLE_META_FILE_NAME);
 
         if !profile_path.exists() {
             return Err(StorageError::NotFound);
@@ -471,8 +478,8 @@ impl Storage for FileStorage {
         password: &str,
         metadata: &BundleMetadataStore,
     ) -> Result<(), StorageError> {
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
-        let meta_path = self.wallet_directory.join(BUNDLE_META_FILE_NAME);
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
+        let meta_path = self.user_storage_path.join(BUNDLE_META_FILE_NAME);
 
         if !profile_path.exists() {
             return Err(StorageError::NotFound);
@@ -500,7 +507,7 @@ impl Storage for FileStorage {
             encrypted_store_payload: store_payload,
         };
 
-        let store_tmp_path = self.wallet_directory.join(format!("{}.tmp", BUNDLE_META_FILE_NAME));
+        let store_tmp_path = self.user_storage_path.join(format!("{}.tmp", BUNDLE_META_FILE_NAME));
         fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
         fs::rename(&store_tmp_path, &meta_path)?;
 
@@ -508,8 +515,8 @@ impl Storage for FileStorage {
     }
 
     fn load_proofs(&self, _user_id: &str, auth: &AuthMethod) -> Result<ProofStore, StorageError> {
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
-        let proof_path = self.wallet_directory.join(PROOF_STORE_FILE_NAME);
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
+        let proof_path = self.user_storage_path.join(PROOF_STORE_FILE_NAME);
 
         if !profile_path.exists() {
             return Err(StorageError::NotFound);
@@ -547,8 +554,8 @@ impl Storage for FileStorage {
         password: &str,
         proof_store: &ProofStore,
     ) -> Result<(), StorageError> {
-        let profile_path = self.wallet_directory.join(PROFILE_FILE_NAME);
-        let proof_path = self.wallet_directory.join(PROOF_STORE_FILE_NAME);
+        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
+        let proof_path = self.user_storage_path.join(PROOF_STORE_FILE_NAME);
 
         if !profile_path.exists() {
             return Err(StorageError::NotFound);
@@ -583,7 +590,7 @@ impl Storage for FileStorage {
             encrypted_store_payload: store_payload,
         };
 
-        let store_tmp_path = self.wallet_directory.join(format!("{}.tmp", PROOF_STORE_FILE_NAME));
+        let store_tmp_path = self.user_storage_path.join(format!("{}.tmp", PROOF_STORE_FILE_NAME));
         fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
         fs::rename(&store_tmp_path, &proof_path)?;
 
@@ -604,7 +611,7 @@ impl Storage for FileStorage {
         // 2. Erstelle einen sicheren, benutzerspezifischen Dateipfad.
         let user_hash = Self::get_user_hash(user_id);
         let path =
-            self.wallet_directory
+            self.user_storage_path
                 .join(format!("generic_{}.{}.enc", name, user_hash));
 
         // 3. Verschlüssele die Daten und speichere sie.
@@ -628,7 +635,7 @@ impl Storage for FileStorage {
         // 2. Konstruiere den Pfad, unter dem die Daten erwartet werden.
         let user_hash = Self::get_user_hash(user_id);
         let path =
-            self.wallet_directory
+            self.user_storage_path
                 .join(format!("generic_{}.{}.enc", name, user_hash));
 
         if !path.exists() {
