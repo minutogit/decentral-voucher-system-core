@@ -24,12 +24,12 @@ const BUNDLE_META_FILE_NAME: &str = "bundles.meta.enc";
 const FINGERPRINT_STORE_FILE_NAME: &str = "fingerprints.enc";
 const PROOF_STORE_FILE_NAME: &str = "proofs.enc";
 
-/// Privates Modul zur Kapselung der Serde-Logik für Base64-Kodierung.
+/// Privates Modul zur Kapselung der Serde-Logik für Base64-Kodierung von Vektoren.
 mod base64_serde {
     use super::*;
     use serde::{Deserializer, Serializer};
 
-    /// Serialisiert einen `Vec<u8>` als Base64-String.
+    /// Serialisiert einen `&[u8]`-Slice als Base64-String.
     pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -47,12 +47,42 @@ mod base64_serde {
     }
 }
 
+/// Privates Modul zur Kapselung der Serde-Logik für Base64-Kodierung von festen Arrays.
+mod base64_array_serde {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+    use std::convert::TryInto;
+
+    /// Serialisiert ein `&[u8; N]`-Array als Base64-String.
+    pub fn serialize<S, const N: usize>(array: &[u8; N], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&general_purpose::STANDARD.encode(array))
+    }
+
+    /// Deserialisiert einen Base64-String in ein `[u8; N]`-Array.
+    pub fn deserialize<'de, D, const N: usize>(deserializer: D) -> Result<[u8; N], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let bytes = general_purpose::STANDARD.decode(s).map_err(serde::de::Error::custom)?;
+        bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom(format!("Expected a byte array of length {}", N)))
+    }
+}
+
+
 /// Container für das verschlüsselte Nutzerprofil, inklusive Key-Wrapping-Informationen.
 #[derive(Serialize, Deserialize)]
 struct ProfileStorageContainer {
+    #[serde(with = "base64_array_serde")]
     password_kdf_salt: [u8; SALT_SIZE],
     #[serde(with = "base64_serde")]
     password_wrapped_key_with_nonce: Vec<u8>,
+    #[serde(with = "base64_array_serde")]
     mnemonic_kdf_salt: [u8; SALT_SIZE],
     #[serde(with = "base64_serde")]
     mnemonic_wrapped_key_with_nonce: Vec<u8>,
