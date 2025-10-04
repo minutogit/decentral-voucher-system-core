@@ -47,7 +47,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         profile: voucher_lib::models::profile::UserProfile { user_id: alice_identity.user_id.clone() },
         voucher_store: Default::default(),
         bundle_meta_store: Default::default(),
-        fingerprint_store: Default::default(),
+        known_fingerprints: Default::default(),
+        own_fingerprints: Default::default(),
         proof_store: Default::default(),
     };
     println!("✅ Leeres Wallet für Alice erstellt.");
@@ -96,8 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Dieser Fingerprint wurde automatisch von `create_transfer` erzeugt und in Alices Wallet gespeichert, um Double-Spending proaktiv zu verhindern.");
 
     // Den erzeugten Fingerprint aus dem Store des Wallets auslesen
-    let fingerprint = alice_wallet.fingerprint_store
-        .own_fingerprints
+    let fingerprint = alice_wallet.own_fingerprints
+        .history
         .values()
         .next() // Nimm den ersten (und einzigen) Vektor von Fingerprints
         .and_then(|fps| fps.first()) // Nimm den ersten (und einzigen) Fingerprint aus dem Vektor

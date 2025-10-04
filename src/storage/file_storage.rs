@@ -4,7 +4,7 @@
 //! Dateien im Dateisystem speichert.
 
 use super::{AuthMethod, Storage, StorageError};
-use crate::models::conflict::{FingerprintStore, ProofStore};
+use crate::models::conflict::{KnownFingerprints, OwnFingerprints, ProofStore};
 use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
 use crate::services::crypto_utils;
 use base64::{engine::general_purpose, Engine as _};
@@ -21,8 +21,9 @@ const KEY_SIZE: usize = 32;
 const PROFILE_FILE_NAME: &str = "profile.enc";
 const VOUCHER_STORE_FILE_NAME: &str = "vouchers.enc";
 const BUNDLE_META_FILE_NAME: &str = "bundles.meta.enc";
-const FINGERPRINT_STORE_FILE_NAME: &str = "fingerprints.enc";
+const KNOWN_FINGERPRINTS_FILE_NAME: &str = "known_fingerprints.enc";
 const PROOF_STORE_FILE_NAME: &str = "proofs.enc";
+const OWN_FINGERPRINTS_FILE_NAME: &str = "own_fingerprints.enc";
 
 /// Privates Modul zur Kapselung der Serde-Logik für Base64-Kodierung von Vektoren.
 mod base64_serde {
@@ -111,9 +112,16 @@ struct BundleMetadataContainer {
     encrypted_store_payload: Vec<u8>,
 }
 
-/// Container für den verschlüsselten Fingerprint-Store.
+/// Container für den `KnownFingerprints`-Store.
 #[derive(Serialize, Deserialize)]
-struct FingerprintStorageContainer {
+struct KnownFingerprintsContainer {
+    #[serde(with = "base64_serde")]
+    encrypted_store_payload: Vec<u8>,
+}
+
+/// Container für den `OwnFingerprints`-Store.
+#[derive(Serialize, Deserialize)]
+struct OwnFingerprintsContainer {
     #[serde(with = "base64_serde")]
     encrypted_store_payload: Vec<u8>,
 }
@@ -388,76 +396,86 @@ impl Storage for FileStorage {
         Ok(())
     }
 
-    fn load_fingerprints(&self, _user_id: &str, auth: &AuthMethod) -> Result<FingerprintStore, StorageError> {
-        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
-        let fingerprint_path = self.user_storage_path.join(FINGERPRINT_STORE_FILE_NAME);
-
-        if !profile_path.exists() {
-            return Err(StorageError::NotFound);
-        }
-
+    fn load_known_fingerprints(&self, _user_id: &str, auth: &AuthMethod) -> Result<KnownFingerprints, StorageError> {
+        let fingerprint_path = self.user_storage_path.join(KNOWN_FINGERPRINTS_FILE_NAME);
         if !fingerprint_path.exists() {
-            return Ok(FingerprintStore::default());
+            return Ok(KnownFingerprints::default());
         }
 
-        let profile_container_bytes = fs::read(&profile_path)?;
-        let profile_container: ProfileStorageContainer =
-            serde_json::from_slice(&profile_container_bytes)
-                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
-
-        let file_key_bytes = get_file_key(auth, &profile_container)?;
-        let file_key: [u8; KEY_SIZE] = file_key_bytes
-            .try_into()
-            .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
+        let file_key = self.get_master_key_from_auth(auth)?;
 
         let fingerprint_container_bytes = fs::read(fingerprint_path)?;
-        let fingerprint_container: FingerprintStorageContainer =
+        let fingerprint_container: KnownFingerprintsContainer =
             serde_json::from_slice(&fingerprint_container_bytes)
                 .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
 
         let store_bytes = crypto_utils::decrypt_data(&file_key, &fingerprint_container.encrypted_store_payload)
-            .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt fingerprint store: {}", e)))?;
+            .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt known fingerprints: {}", e)))?;
 
         serde_json::from_slice(&store_bytes)
             .map_err(|e| StorageError::InvalidFormat(e.to_string()))
     }
 
-    fn save_fingerprints(
+    fn save_known_fingerprints(
         &mut self,
         _user_id: &str,
         password: &str,
-        fingerprint_store: &FingerprintStore,
+        fingerprints: &KnownFingerprints,
     ) -> Result<(), StorageError> {
-        let profile_path = self.user_storage_path.join(PROFILE_FILE_NAME);
-        let fingerprint_path = self.user_storage_path.join(FINGERPRINT_STORE_FILE_NAME);
+        let fingerprint_path = self.user_storage_path.join(KNOWN_FINGERPRINTS_FILE_NAME);
 
-        if !profile_path.exists() {
-            return Err(StorageError::NotFound);
-        }
+        let file_key = self.get_master_key(password)?;
 
-        let profile_container_bytes = fs::read(profile_path)?;
-        let profile_container: ProfileStorageContainer =
-            serde_json::from_slice(&profile_container_bytes)
-                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
-
-        let password_key =
-            derive_key_from_password(password, &profile_container.password_kdf_salt)?;
-        let file_key_bytes = crypto_utils::decrypt_data(
-            &password_key,
-            &profile_container.password_wrapped_key_with_nonce,
-        ).map_err(|_| StorageError::AuthenticationFailed)?;
-
-        let file_key: [u8; KEY_SIZE] = file_key_bytes
-            .try_into()
-            .map_err(|_| StorageError::InvalidFormat("Invalid file key length".to_string()))?;
-
-        let store_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(fingerprint_store).unwrap())
+        let store_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(fingerprints).unwrap())
             .map_err(|e| StorageError::Generic(e.to_string()))?;
-        let store_container = FingerprintStorageContainer {
+        let store_container = KnownFingerprintsContainer {
             encrypted_store_payload: store_payload,
         };
 
-        let store_tmp_path = self.user_storage_path.join(format!("{}.tmp", FINGERPRINT_STORE_FILE_NAME));
+        let store_tmp_path = self.user_storage_path.join(format!("{}.tmp", KNOWN_FINGERPRINTS_FILE_NAME));
+        fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
+        fs::rename(&store_tmp_path, &fingerprint_path)?;
+
+        Ok(())
+    }
+
+    fn load_own_fingerprints(&self, _user_id: &str, auth: &AuthMethod) -> Result<OwnFingerprints, StorageError> {
+        let fingerprint_path = self.user_storage_path.join(OWN_FINGERPRINTS_FILE_NAME);
+        if !fingerprint_path.exists() {
+            return Ok(OwnFingerprints::default());
+        }
+
+        let file_key = self.get_master_key_from_auth(auth)?;
+
+        let fingerprint_container_bytes = fs::read(fingerprint_path)?;
+        let fingerprint_container: OwnFingerprintsContainer =
+            serde_json::from_slice(&fingerprint_container_bytes)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+
+        let store_bytes = crypto_utils::decrypt_data(&file_key, &fingerprint_container.encrypted_store_payload)
+            .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt own fingerprints: {}", e)))?;
+
+        serde_json::from_slice(&store_bytes)
+            .map_err(|e| StorageError::InvalidFormat(e.to_string()))
+    }
+
+    fn save_own_fingerprints(
+        &mut self,
+        _user_id: &str,
+        password: &str,
+        fingerprints: &OwnFingerprints,
+    ) -> Result<(), StorageError> {
+        let fingerprint_path = self.user_storage_path.join(OWN_FINGERPRINTS_FILE_NAME);
+
+        let file_key = self.get_master_key(password)?;
+
+        let store_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(fingerprints).unwrap())
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+        let store_container = OwnFingerprintsContainer {
+            encrypted_store_payload: store_payload,
+        };
+
+        let store_tmp_path = self.user_storage_path.join(format!("{}.tmp", OWN_FINGERPRINTS_FILE_NAME));
         fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
         fs::rename(&store_tmp_path, &fingerprint_path)?;
 

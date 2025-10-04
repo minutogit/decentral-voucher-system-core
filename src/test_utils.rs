@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 // HINWEIS: Alle `voucher_lib` Imports wurden zu `crate` geändert.
 use crate::models::{
-    conflict::{FingerprintStore, ProofStore},
+    conflict::{KnownFingerprints, OwnFingerprints, ProofStore},
     profile::{BundleMetadataStore, UserProfile, VoucherStore},
     signature::DetachedSignature,
     voucher::{
@@ -338,7 +338,8 @@ pub fn setup_in_memory_wallet(identity: &UserIdentity) -> Wallet {
         profile,
         voucher_store: VoucherStore::default(),
         bundle_meta_store: BundleMetadataStore::default(),
-        fingerprint_store: FingerprintStore::default(),
+        known_fingerprints: KnownFingerprints::default(),
+        own_fingerprints: OwnFingerprints::default(),
         proof_store: ProofStore::default(),
     }
 }
@@ -364,7 +365,8 @@ pub fn create_test_wallet(
         profile,
         voucher_store: VoucherStore::default(),
         bundle_meta_store: BundleMetadataStore::default(),
-        fingerprint_store: FingerprintStore::default(),
+        known_fingerprints: KnownFingerprints::default(),
+        own_fingerprints: OwnFingerprints::default(),
         proof_store: ProofStore::default(),
     };
 

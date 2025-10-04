@@ -8,7 +8,8 @@ use std::collections::HashMap;
 
 use crate::error::VoucherCoreError;
 use crate::models::conflict::{
-    FingerprintStore, ProofOfDoubleSpend, ResolutionEndorsement, TransactionFingerprint,
+    KnownFingerprints, OwnFingerprints, ProofOfDoubleSpend, ResolutionEndorsement,
+    TransactionFingerprint,
 };
 use crate::models::profile::{UserIdentity, VoucherStore};
 use crate::models::voucher::{Transaction, Voucher};
@@ -56,52 +57,107 @@ pub fn create_fingerprint_for_transaction(
     })
 }
 
-/// Durchsucht alle Gutscheine eines Nutzers und aktualisiert den `own_fingerprints`-Store.
-/// Diese Funktion sollte nach dem Empfang neuer Gutscheine aufgerufen werden.
-pub fn scan_and_update_own_fingerprints(
+/// Durchsucht den `VoucherStore` und erstellt die aktuellen Fingerprint-Sammlungen.
+/// Diese Funktion partitioniert die Fingerprints korrekt in die kritischen "eigenen"
+/// und die allgemeine "bekannte" Historie.
+pub fn scan_and_rebuild_fingerprints(
     voucher_store: &VoucherStore,
-    fingerprint_store: &mut FingerprintStore,
-) -> Result<(), VoucherCoreError> {
-    fingerprint_store.own_fingerprints.clear();
+    user_id: &str,
+) -> Result<(OwnFingerprints, KnownFingerprints), VoucherCoreError> {
+    let mut own = OwnFingerprints::default();
+    let mut known = KnownFingerprints::default();
 
     for instance in voucher_store.vouchers.values() {
         for tx in &instance.voucher.transactions {
             let fingerprint = create_fingerprint_for_transaction(tx, &instance.voucher)?;
 
-            fingerprint_store
-                .own_fingerprints
+            // Jede Transaktion wird zur allgemeinen lokalen Historie hinzugefügt.
+            known
+                .local_history
                 .entry(fingerprint.prvhash_senderid_hash.clone())
                 .or_default()
-                .push(fingerprint);
+                .push(fingerprint.clone());
+
+            // Nur wenn der Nutzer der Sender war, wird der Fingerprint auch zu den
+            // kritischen "eigenen" Fingerprints hinzugefügt.
+            if tx.sender_id == user_id {
+                own.history
+                   .entry(fingerprint.prvhash_senderid_hash.clone())
+                   .or_default()
+                   .push(fingerprint.clone());
+
+                // Wenn der Gutschein zusätzlich noch aktiv ist, kommt er in die "Hot-List".
+                if matches!(instance.status, crate::wallet::instance::VoucherStatus::Active) {
+                    own.active_fingerprints
+                       .entry(fingerprint.prvhash_senderid_hash.clone())
+                       .or_default()
+                       .push(fingerprint);
+                }
+            }
         }
     }
-    Ok(())
+    Ok((own, known))
 }
 
 /// Führt eine vollständige Double-Spend-Prüfung durch, indem eigene und fremde
 /// Fingerprints kombiniert und auf Kollisionen geprüft werden.
-pub fn check_for_double_spend(fingerprint_store: &FingerprintStore) -> DoubleSpendCheckResult {
+pub fn check_for_double_spend(
+    own_fingerprints: &OwnFingerprints,
+    known_fingerprints: &KnownFingerprints,
+) -> DoubleSpendCheckResult {
+    println!("\n[DEBUG CONFLICT_MANAGER] --- Starte check_for_double_spend ---");
     let mut result = DoubleSpendCheckResult::default();
-    let mut all_fingerprints: HashMap<String, Vec<TransactionFingerprint>> =
-        fingerprint_store.own_fingerprints.clone();
 
-    for (hash, fps) in &fingerprint_store.foreign_fingerprints {
-        all_fingerprints
-            .entry(hash.clone())
-            .or_default()
-            .extend_from_slice(fps);
+    // 1. Alle bekannten Fingerprints aus allen Quellen dedupliziert zusammenführen.
+    // Wir verwenden ein HashSet, um Duplikate (z.B. zwischen history und current_own)
+    // automatisch zu eliminieren.
+    let mut all_fingerprints_map: HashMap<String, std::collections::HashSet<TransactionFingerprint>> = HashMap::new();
+
+    println!("[DEBUG CONFLICT_MANAGER] Quellen werden zusammengeführt...");
+    let sources = [
+        &own_fingerprints.history,
+        &known_fingerprints.local_history,
+        &known_fingerprints.foreign_fingerprints,
+    ];
+
+    for (i, source) in sources.iter().enumerate() {
+        for (hash, fps) in *source {
+            println!(
+                "[DEBUG CONFLICT_MANAGER] Quelle[{}]: Hash '{}' mit {} Fingerprints gefunden.",
+                i,
+                hash,
+                fps.len()
+            );
+            let entry = all_fingerprints_map.entry(hash.clone()).or_default();
+            for fp in fps {
+                entry.insert(fp.clone());
+            }
+        }
     }
 
-    for (hash, fps) in all_fingerprints {
-        let unique_t_ids = fps
+    // 2. Jede Gruppe von Fingerprints auf Konflikte prüfen (mehr als eine eindeutige t_id).
+    println!("[DEBUG CONFLICT_MANAGER] Prüfe {} eindeutige Hashes auf Konflikte...", all_fingerprints_map.len());
+    for (hash, fps_set) in all_fingerprints_map {
+        let fps_vec: Vec<TransactionFingerprint> = fps_set.into_iter().collect();
+        let unique_t_ids = fps_vec
             .iter()
             .map(|fp| &fp.t_id)
             .collect::<std::collections::HashSet<_>>();
+
+        println!("[DEBUG CONFLICT_MANAGER] Hash '{}' hat {} eindeutige t_ids.", hash, unique_t_ids.len());
         if unique_t_ids.len() > 1 {
-            if fingerprint_store.own_fingerprints.contains_key(&hash) {
-                result.verifiable_conflicts.insert(hash.clone(), fps);
+            println!("[DEBUG CONFLICT_MANAGER] -> KONFLIKT für Hash '{}' entdeckt!", hash);
+            // 3. Einen Konflikt als "verifizierbar" einstufen, wenn der Wallet-Besitzer
+            // mindestens eine der beteiligten Transaktionen selbst kennt (aus seiner Historie).
+            let is_verifiable = known_fingerprints.local_history.contains_key(&hash);
+            println!(
+                "[DEBUG CONFLICT_MANAGER] -> Klassifizierung: Ist verifizierbar? (local_history enthält den Hash) -> {}",
+                is_verifiable
+            );
+            if is_verifiable {
+                result.verifiable_conflicts.insert(hash.clone(), fps_vec);
             } else {
-                result.unverifiable_warnings.insert(hash.clone(), fps);
+                result.unverifiable_warnings.insert(hash.clone(), fps_vec);
             }
         }
     }
@@ -192,37 +248,66 @@ pub fn create_and_sign_resolution_endorsement(
     })
 }
 
-/// Entfernt alle abgelaufenen Fingerprints aus dem Speicher.
-pub fn cleanup_expired_fingerprints(fingerprint_store: &mut FingerprintStore) {
+/// Entfernt alle abgelaufenen Fingerprints aus den nicht-kritischen Speichern.
+pub fn cleanup_known_fingerprints(known_fingerprints: &mut KnownFingerprints) {
     let now = get_current_timestamp();
-    fingerprint_store.own_fingerprints.retain(|_, fps| {
-        fps.retain(|fp| fp.valid_until > now);
-        !fps.is_empty()
-    });
-    fingerprint_store.foreign_fingerprints.retain(|_, fps| {
+    known_fingerprints.foreign_fingerprints.retain(|_, fps| {
         fps.retain(|fp| fp.valid_until > now);
         !fps.is_empty()
     });
 }
 
-/// Serialisiert die eigenen Fingerprints für den Export.
+/// Bereinigt die persistente Fingerprint-History basierend auf einer längeren Aufbewahrungsfrist.
+pub fn cleanup_expired_histories(
+    own_fingerprints: &mut OwnFingerprints,
+    known_fingerprints: &mut KnownFingerprints,
+    now: &DateTime<chrono::Utc>,
+    grace_period: &chrono::Duration,
+) {
+    own_fingerprints.history.retain(|_, fps| {
+        fps.retain(|fp| {
+            if let Ok(valid_until) =
+                DateTime::parse_from_rfc3339(&fp.valid_until).map(|dt| dt.with_timezone(&chrono::Utc))
+            {
+                let purge_date = valid_until + *grace_period;
+                return *now < purge_date;
+            }
+            true // Bei Parse-Fehler vorsichtshalber behalten
+        });
+        !fps.is_empty()
+    });
+    known_fingerprints.local_history.retain(|_, fps| {
+        fps.retain(|fp| {
+            if let Ok(valid_until) =
+                DateTime::parse_from_rfc3339(&fp.valid_until).map(|dt| dt.with_timezone(&chrono::Utc))
+            {
+                let purge_date = valid_until + *grace_period;
+                return *now < purge_date;
+            }
+            true // Bei Parse-Fehler vorsichtshalber behalten
+        });
+        !fps.is_empty()
+    });
+}
+
+/// Serialisiert die Historie der eigenen gesendeten Transaktionen für den Export.
 pub fn export_own_fingerprints(
-    fingerprint_store: &FingerprintStore,
+    own_fingerprints: &OwnFingerprints,
 ) -> Result<Vec<u8>, VoucherCoreError> {
-    Ok(serde_json::to_vec(
-        &fingerprint_store.own_fingerprints,
-    )?)
+    // HINWEIS: Exportiert wird die gesamte bekannte Historie, da dies die wertvollste
+    // Information für den Abgleich mit Peers ist.
+    Ok(serde_json::to_vec(&own_fingerprints.history)?)
 }
 
 /// Importiert und merged fremde Fingerprints in den Speicher.
 pub fn import_foreign_fingerprints(
-    fingerprint_store: &mut FingerprintStore,
+    known_fingerprints: &mut KnownFingerprints,
     data: &[u8],
 ) -> Result<usize, VoucherCoreError> {
     let incoming: HashMap<String, Vec<TransactionFingerprint>> = serde_json::from_slice(data)?;
     let mut new_count = 0;
     for (hash, fps) in incoming {
-        let entry = fingerprint_store
+        let entry = known_fingerprints
             .foreign_fingerprints
             .entry(hash)
             .or_default();
@@ -235,7 +320,6 @@ pub fn import_foreign_fingerprints(
     }
     Ok(new_count)
 }
-
 
 /// Verschlüsselt den Zeitstempel einer Transaktion für die Verwendung in einem L2-Kontext.
 ///

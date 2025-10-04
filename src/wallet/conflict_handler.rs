@@ -15,26 +15,36 @@ use crate::wallet::ProofOfDoubleSpendSummary;
 /// Methoden zur Verwaltung des Fingerprint-Speichers und der Double-Spending-Logik.
 impl Wallet {
     /// Durchsucht alle eigenen Gutscheine und aktualisiert den `own_fingerprints`-Store.
-    pub fn scan_and_update_own_fingerprints(&mut self) -> Result<(), VoucherCoreError> {
-        conflict_manager::scan_and_update_own_fingerprints(
+    /// WICHTIG: Diese Funktion bewahrt die bereits importierten `foreign_fingerprints`.
+    pub fn scan_and_rebuild_fingerprints(&mut self) -> Result<(), VoucherCoreError> {
+        let (own, mut known) = conflict_manager::scan_and_rebuild_fingerprints(
             &self.voucher_store,
-            &mut self.fingerprint_store,
-        )
+            &self.profile.user_id,
+        )?;
+        // Bewahre die existierenden `foreign_fingerprints`, da diese nicht aus dem
+        // lokalen `voucher_store` rekonstruiert werden können.
+        known.foreign_fingerprints = std::mem::take(&mut self.known_fingerprints.foreign_fingerprints);
+        self.own_fingerprints = own;
+        self.known_fingerprints = known;
+        Ok(())
     }
 
     /// Führt eine vollständige Double-Spend-Prüfung durch.
     pub fn check_for_double_spend(&self) -> DoubleSpendCheckResult {
-        conflict_manager::check_for_double_spend(&self.fingerprint_store)
+        conflict_manager::check_for_double_spend(
+            &self.own_fingerprints,
+            &self.known_fingerprints,
+        )
     }
 
     /// Entfernt alle abgelaufenen Fingerprints aus dem Speicher.
     pub fn cleanup_expired_fingerprints(&mut self) {
-        conflict_manager::cleanup_expired_fingerprints(&mut self.fingerprint_store);
+        conflict_manager::cleanup_known_fingerprints(&mut self.known_fingerprints)
     }
 
     /// Serialisiert die eigenen Fingerprints für den Export.
     pub fn export_own_fingerprints(&self) -> Result<Vec<u8>, VoucherCoreError> {
-        conflict_manager::export_own_fingerprints(&self.fingerprint_store)
+        conflict_manager::export_own_fingerprints(&self.own_fingerprints)
     }
 
     /// Importiert und merged fremde Fingerprints in den Speicher.
@@ -42,7 +52,7 @@ impl Wallet {
         &mut self,
         data: &[u8],
     ) -> Result<usize, VoucherCoreError> {
-        conflict_manager::import_foreign_fingerprints(&mut self.fingerprint_store, data)
+        conflict_manager::import_foreign_fingerprints(&mut self.known_fingerprints, data)
     }
 
     /// Gibt eine Liste von Zusammenfassungen aller bekannten Double-Spend-Konflikte zurück.

@@ -3,7 +3,7 @@
 //! Definiert die Abstraktion für die persistente Speicherung von Wallet-Daten.
 //! Dies ermöglicht es, die Kernlogik von der konkreten Speichermethode zu entkoppeln.
 
-use crate::models::conflict::{FingerprintStore, ProofStore};
+use crate::models::conflict::{KnownFingerprints, OwnFingerprints, ProofStore};
 use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
 pub mod file_storage;
 use thiserror::Error;
@@ -76,15 +76,26 @@ pub trait Storage {
     /// Prüft, ob bereits ein Profil am Speicherort existiert.
     fn profile_exists(&self) -> bool;
 
-    /// Lädt und entschlüsselt den FingerprintStore.
-    fn load_fingerprints(&self, user_id: &str, auth: &AuthMethod) -> Result<FingerprintStore, StorageError>;
+    /// Lädt und entschlüsselt den `KnownFingerprints`-Store.
+    fn load_known_fingerprints(&self, user_id: &str, auth: &AuthMethod) -> Result<KnownFingerprints, StorageError>;
 
-    /// Speichert und verschlüsselt den FingerprintStore.
-    fn save_fingerprints(
+    /// Speichert und verschlüsselt den `KnownFingerprints`-Store.
+    fn save_known_fingerprints(
         &mut self,
         user_id: &str,
         password: &str,
-        fingerprint_store: &FingerprintStore,
+        fingerprints: &KnownFingerprints,
+    ) -> Result<(), StorageError>;
+
+    /// Lädt und entschlüsselt den kritischen `OwnFingerprints`-Store.
+    fn load_own_fingerprints(&self, user_id: &str, auth: &AuthMethod) -> Result<OwnFingerprints, StorageError>;
+
+    /// Speichert und verschlüsselt den kritischen `OwnFingerprints`-Store.
+    fn save_own_fingerprints(
+        &mut self,
+        user_id: &str,
+        password: &str,
+        fingerprints: &OwnFingerprints,
     ) -> Result<(), StorageError>;
 
     /// Lädt und entschlüsselt die Metadaten der Transaktionsbündel.

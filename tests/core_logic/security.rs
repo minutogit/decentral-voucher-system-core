@@ -111,14 +111,14 @@ mod local_double_spend_detection {
         wallet.add_voucher_instance(local_id, voucher.clone(), VoucherStatus::Active);
 
         // Aktion
-        wallet.scan_and_update_own_fingerprints().unwrap();
+        wallet.scan_and_rebuild_fingerprints().unwrap();
 
         // Assertions
-        assert_eq!(wallet.fingerprint_store.own_fingerprints.values().map(|v| v.len()).sum::<usize>(), 2, "Es sollten Fingerprints für 2 Transaktionen existieren.");
+        assert_eq!(wallet.own_fingerprints.history.values().map(|v| v.len()).sum::<usize>(), 2, "Es sollten Fingerprints für 2 Transaktionen existieren.");
 
         let tx1 = &voucher.transactions[0];
         let expected_hash1 = crypto_utils::get_hash(format!("{}{}", tx1.prev_hash, tx1.sender_id));
-        assert!(wallet.fingerprint_store.own_fingerprints.contains_key(&expected_hash1), "Fingerprint für die init-Transaktion fehlt.");
+        assert!(wallet.own_fingerprints.history.contains_key(&expected_hash1), "Fingerprint für die init-Transaktion fehlt.");
 
         // Berechne den erwarteten, auf das Monatsende gerundeten `valid_until`-Wert.
         let expected_rounded_valid_until = {
@@ -135,7 +135,7 @@ mod local_double_spend_detection {
             end_of_month_dt.to_rfc3339_opts(SecondsFormat::Micros, true)
         };
 
-        assert_eq!(wallet.fingerprint_store.own_fingerprints.get(&expected_hash1).unwrap()[0].valid_until, expected_rounded_valid_until, "Der valid_until-Wert im Fingerprint muss dem auf das Monatsende gerundeten Wert entsprechen.");
+        assert_eq!(wallet.own_fingerprints.history.get(&expected_hash1).unwrap()[0].valid_until, expected_rounded_valid_until, "Der valid_until-Wert im Fingerprint muss dem auf das Monatsende gerundeten Wert entsprechen.");
     }
 
     #[test]
@@ -146,7 +146,7 @@ mod local_double_spend_detection {
         // Setup: Erzeuge Fingerprints im Sender-Wallet
         let mut fp1 = new_dummy_fingerprint("t1");
         fp1.prvhash_senderid_hash = "hash1".to_string();
-        sender_wallet.fingerprint_store.own_fingerprints.insert("hash1".to_string(), vec![fp1]);
+        sender_wallet.own_fingerprints.history.insert("hash1".to_string(), vec![fp1]);
 
         // Aktion
         let exported_data = sender_wallet.export_own_fingerprints().unwrap();
@@ -156,8 +156,8 @@ mod local_double_spend_detection {
         // Assertions
         assert_eq!(import_count1, 1, "Der erste Import sollte einen neuen Fingerprint hinzufügen.");
         assert_eq!(import_count2, 0, "Der zweite Import sollte keinen neuen Fingerprint hinzufügen.");
-        assert!(receiver_wallet.fingerprint_store.own_fingerprints.is_empty(), "Die eigenen Fingerprints des Empfängers sollten leer sein.");
-        assert_eq!(receiver_wallet.fingerprint_store.foreign_fingerprints.len(), 1, "Die fremden Fingerprints des Empfängers sollten einen Eintrag enthalten.");
+        assert!(receiver_wallet.own_fingerprints.history.is_empty(), "Die eigenen Fingerprints des Empfängers sollten leer sein.");
+        assert_eq!(receiver_wallet.known_fingerprints.foreign_fingerprints.len(), 1, "Die fremden Fingerprints des Empfängers sollten einen Eintrag enthalten.");
     }
 
     #[test]
@@ -169,16 +169,19 @@ mod local_double_spend_detection {
         let fp2 = new_dummy_fingerprint("t_id_2");
 
         // Fall A: Verifizierbarer Konflikt
-        wallet.fingerprint_store.own_fingerprints.insert(conflict_hash.clone(), vec![fp1.clone()]);
-        wallet.fingerprint_store.foreign_fingerprints.insert(conflict_hash.clone(), vec![fp2.clone()]);
+        // Um einen Konflikt als verifizierbar zu klassifizieren, muss der Hash in der
+        // `local_history` vorhanden sein. Dies simuliert, dass der Nutzer den Gutschein
+        // besitzt oder besessen hat.
+        wallet.known_fingerprints.local_history.insert(conflict_hash.clone(), vec![fp1.clone()]);
+        wallet.known_fingerprints.foreign_fingerprints.insert(conflict_hash.clone(), vec![fp2.clone()]);
 
         let result_a = wallet.check_for_double_spend();
         assert_eq!(result_a.verifiable_conflicts.len(), 1, "Fall A: Ein verifizierbarer Konflikt muss erkannt werden.");
         assert!(result_a.unverifiable_warnings.is_empty(), "Fall A: Es sollte keine unverifizierbaren Warnungen geben.");
 
         // Fall B: Nicht verifizierbarer Konflikt
-        wallet.fingerprint_store.own_fingerprints.clear();
-        wallet.fingerprint_store.foreign_fingerprints.insert(conflict_hash.clone(), vec![fp1, fp2]);
+        wallet.known_fingerprints.local_history.clear();
+        wallet.known_fingerprints.foreign_fingerprints.insert(conflict_hash.clone(), vec![fp1, fp2]);
 
         let result_b = wallet.check_for_double_spend();
         assert_eq!(result_b.unverifiable_warnings.len(), 1, "Fall B: Eine unverifizierbare Warnung muss erkannt werden.");
@@ -189,20 +192,31 @@ mod local_double_spend_detection {
     fn test_cleanup_expired_fingerprints() {
         let mut wallet = setup_in_memory_wallet(&ACTORS.test_user);
 
-        let mut expired_fp = new_dummy_fingerprint("t1");
-        expired_fp.valid_until = "2020-01-01T00:00:00Z".to_string();
-        let valid_fp = new_dummy_fingerprint("t2");
+        let mut expired_fp_hist = new_dummy_fingerprint("t_hist_expired");
+        expired_fp_hist.valid_until = "2020-01-01T00:00:00Z".to_string();
+        let valid_fp_hist = new_dummy_fingerprint("t_hist_valid");
 
-        wallet.fingerprint_store.own_fingerprints.insert("expired".to_string(), vec![expired_fp]);
-        wallet.fingerprint_store.own_fingerprints.insert("valid".to_string(), vec![valid_fp]);
+        let mut expired_fp_foreign = new_dummy_fingerprint("t_foreign_expired");
+        expired_fp_foreign.valid_until = "2020-01-01T00:00:00Z".to_string();
+        let valid_fp_foreign = new_dummy_fingerprint("t_foreign_valid");
 
-        // Aktion
-        wallet.cleanup_expired_fingerprints();
+        // Füge Fingerprints zu beiden Speichern hinzu
+        wallet.own_fingerprints.history.insert("hist_expired".to_string(), vec![expired_fp_hist]);
+        wallet.own_fingerprints.history.insert("hist_valid".to_string(), vec![valid_fp_hist]);
+        wallet.known_fingerprints.foreign_fingerprints.insert("foreign_expired".to_string(), vec![expired_fp_foreign]);
+        wallet.known_fingerprints.foreign_fingerprints.insert("foreign_valid".to_string(), vec![valid_fp_foreign]);
 
-        // Assertions
-        assert!(!wallet.fingerprint_store.own_fingerprints.contains_key("expired"), "Der abgelaufene Fingerprint sollte entfernt werden.");
-        assert!(wallet.fingerprint_store.own_fingerprints.contains_key("valid"), "Der gültige Fingerprint sollte erhalten bleiben.");
-        assert_eq!(wallet.fingerprint_store.own_fingerprints.len(), 1);
+        // Aktion: Rufe die zentrale Aufräumfunktion mit einer Frist von 0 Jahren auf,
+        // was eine sofortige Bereinigung aller abgelaufenen Einträge auslösen sollte.
+        wallet.cleanup_storage(0);
+
+        // Assertions für den flüchtigen Speicher (sollte bereinigt werden)
+        assert!(!wallet.known_fingerprints.foreign_fingerprints.contains_key("foreign_expired"), "Abgelaufener fremder Fingerprint sollte entfernt werden.");
+        assert!(wallet.known_fingerprints.foreign_fingerprints.contains_key("foreign_valid"), "Gültiger fremder Fingerprint sollte erhalten bleiben.");
+
+        // Assertions für den History-Speicher (sollte jetzt auch bereinigt werden)
+        assert!(!wallet.own_fingerprints.history.contains_key("hist_expired"), "Abgelaufener History-Fingerprint sollte mit 0 Jahren Frist entfernt werden.");
+        assert!(wallet.own_fingerprints.history.contains_key("hist_valid"), "Gültiger History-Fingerprint muss erhalten bleiben.");
     }
 
     // ===================================================================================
@@ -243,7 +257,7 @@ mod local_double_spend_detection {
             None,
         );
         assert!(transfer1_result.is_ok(), "Die erste Transaktion sollte erfolgreich sein.");
-        assert_eq!(sender_wallet.fingerprint_store.own_fingerprints.len(), 1, "Ein Fingerprint sollte nach der ersten Transaktion existieren.");
+        assert_eq!(sender_wallet.own_fingerprints.history.len(), 1, "Ein Fingerprint sollte nach der ersten Transaktion existieren.");
 
         // ### Akt 2: Manuelle Manipulation für einen Betrugsversuch ###
         // Wir simulieren, dass der Sender versucht, denselben ursprünglichen Gutschein-Zustand erneut auszugeben.
@@ -1244,13 +1258,27 @@ mod security_vulnerabilities {
         bob_wallet.process_encrypted_transaction_bundle(&b_identity, &bundle_to_bob, None).unwrap();
 
         // 3. Akt 2 (Austausch)
-        alice_wallet.scan_and_update_own_fingerprints().unwrap();
-        let alice_fingerprints = alice_wallet.export_own_fingerprints().unwrap();
-        bob_wallet.import_foreign_fingerprints(&alice_fingerprints).unwrap();
+        println!("\n[DEBUG TEST] --- Phase 2: Austausch ---");
+        alice_wallet.scan_and_rebuild_fingerprints().unwrap();
+        // KORREKTUR: Für die kollaborative Betrugserkennung muss Alice ihre gesamte lokale
+        // Historie teilen, nicht nur die Fingerprints von Transaktionen, die sie gesendet hat.
+        println!("[DEBUG TEST] Alice's local_history nach Scan: {:#?}", alice_wallet.known_fingerprints.local_history);
+
+        // KORREKTUR: Für die kollaborative Betrugserkennung muss Alice ihre gesamte lokale
+        // Historie teilen, nicht nur die Fingerprints von Transaktionen, die sie gesendet hat.
+        let alice_fingerprints = serde_json::to_vec(&alice_wallet.known_fingerprints.local_history).unwrap();
+        println!("[DEBUG TEST] Alice's exportierte Fingerprints (JSON): {}", String::from_utf8_lossy(&alice_fingerprints));
+
+        let import_count = bob_wallet.import_foreign_fingerprints(&alice_fingerprints).unwrap();
+        println!("[DEBUG TEST] Bob hat {} neue Fingerprints importiert.", import_count);
+        println!("[DEBUG TEST] Bob's foreign_fingerprints nach Import: {:#?}", bob_wallet.known_fingerprints.foreign_fingerprints);
 
         // 4. Akt 3 (Aufdeckung)
-        bob_wallet.scan_and_update_own_fingerprints().unwrap();
+        println!("\n[DEBUG TEST] --- Phase 3: Aufdeckung ---");
+        bob_wallet.scan_and_rebuild_fingerprints().unwrap();
+        println!("[DEBUG TEST] Bob's local_history nach Scan: {:#?}", bob_wallet.known_fingerprints.local_history);
         let check_result = bob_wallet.check_for_double_spend();
+        println!("[DEBUG TEST] Ergebnis von Bob's check_for_double_spend: {:#?}", check_result);
 
         // 5. Verifizierung
         assert!(check_result.unverifiable_warnings.is_empty(), "There should be no unverifiable warnings.");

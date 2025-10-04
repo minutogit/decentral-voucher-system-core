@@ -39,22 +39,37 @@ pub struct TransactionFingerprint {
     pub valid_until: String,
 }
 
-/// Dient als Speichercontainer für alle gesammelten Transaktions-Fingerprints.
-/// Trennt zwischen Fingerprints aus eigenen Transaktionen und solchen, die von
-/// externen Quellen (Peers, Server) empfangen wurden.
+/// Dient als Speichercontainer für alle bekannten Transaktions-Fingerprints, die
+/// nicht kritisch für die Verhinderung eines eigenen Double-Spends sind.
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct FingerprintStore {
-    /// Eine Sammlung von Fingerprints, die aus den Transaktionen der Gutscheine
-    /// im eigenen `VoucherStore` generiert wurden.
-    /// Der Key ist der `prvhash_senderid_hash`. Der Vec enthält alle zugehörigen
-    /// Fingerprints (ein Vec mit >1 Elementen ist ein Konflikt).
+pub struct KnownFingerprints {
+    /// **Historie (persistent):** Eine vollständige Historie aller Fingerprints von
+    /// Transaktionen, die jemals auf Gutscheinen im Besitz des Nutzers stattfanden.
+    /// Dies ist die umfassende Datenbasis zur Erkennung von Betrugsversuchen im Netzwerk.
     #[serde(default)]
-    pub own_fingerprints: HashMap<String, Vec<TransactionFingerprint>>,
+    pub local_history: HashMap<String, Vec<TransactionFingerprint>>,
 
-    /// Eine Sammlung von Fingerprints, die von anderen Teilnehmern im Netzwerk
-    /// empfangen wurden. Dient als Indizien-Datenbank.
+    /// **Fremddaten (flüchtig):** Eine Sammlung von Fingerprints, die von anderen
+    /// Teilnehmern im Netzwerk empfangen wurden. Dient als "Sperrliste" und
+    /// zur Erkennung von Double Spends, an denen man nicht direkt beteiligt war.
     #[serde(default)]
     pub foreign_fingerprints: HashMap<String, Vec<TransactionFingerprint>>,
+}
+
+/// Dient als kritischer, persistenter Speicher für alle Fingerprints von Transaktionen,
+/// bei denen der Wallet-Besitzer der **Sender** war. Diese kleine, separate Datei ist
+/// essenziell, um versehentliches Double-Spending sicher zu verhindern.
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct OwnFingerprints {
+    /// **Aktiv (flüchtig):** Fingerprints von ausgebbareren Transaktionen. Dient der
+    /// schnellen In-Memory-Prüfung vor dem Erstellen einer neuen Transaktion.
+    #[serde(default)]
+    pub active_fingerprints: HashMap<String, Vec<TransactionFingerprint>>,
+    /// **Historie (persistent):** Eine vollständige und unveränderliche Historie
+    /// aller Fingerprints von Transaktionen, bei denen der Nutzer der Sender war.
+    /// Dies ist die kritische Komponente für Backups und zur Konfliktverifizierung.
+    #[serde(default)]
+    pub history: HashMap<String, Vec<TransactionFingerprint>>,
 }
 
 

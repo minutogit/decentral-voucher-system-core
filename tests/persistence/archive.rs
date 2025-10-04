@@ -27,7 +27,8 @@ fn test_voucher_archiving_on_full_spend() {
         profile: UserProfile { user_id: alice_identity.user_id.clone() },
         voucher_store: Default::default(),
         bundle_meta_store: Default::default(),
-        fingerprint_store: Default::default(),
+        known_fingerprints: Default::default(),
+        own_fingerprints: Default::default(),
         proof_store: Default::default(),
     };
 

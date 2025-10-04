@@ -19,7 +19,7 @@ mod tests;
 use crate::archive::VoucherArchive;
 use crate::error::{ValidationError, VoucherCoreError};
 use crate::wallet::instance::{ValidationFailureReason, VoucherInstance, VoucherStatus};
-use crate::models::conflict::{FingerprintStore, ProofStore, TransactionFingerprint};
+use crate::models::conflict::{KnownFingerprints, OwnFingerprints, ProofStore, TransactionFingerprint};
 use crate::models::profile::{
     BundleMetadataStore, TransactionBundleHeader, TransactionDirection, UserIdentity, UserProfile, VoucherStore,
 };
@@ -46,8 +46,10 @@ pub struct Wallet {
     pub voucher_store: VoucherStore,
     /// Die Historie der Transaktions-Metadaten.
     pub bundle_meta_store: BundleMetadataStore,
-    /// Der Speicher für Transaktions-Fingerprints zur Double-Spending-Erkennung.
-    pub fingerprint_store: FingerprintStore,
+    /// Der Speicher für alle bekannten (eigenen und fremden) Transaktions-Fingerprints.
+    pub known_fingerprints: KnownFingerprints,
+    /// Die kritische, persistente Historie der eigenen **gesendeten** Transaktionen.
+    pub own_fingerprints: OwnFingerprints,
     /// Der Speicher für kryptographisch bewiesene Double-Spend-Konflikte.
     pub proof_store: ProofStore,
 }
@@ -168,14 +170,16 @@ impl Wallet {
 
         let voucher_store = VoucherStore::default();
         let bundle_meta_store = BundleMetadataStore::default();
-        let fingerprint_store = FingerprintStore::default();
+        let known_fingerprints = KnownFingerprints::default();
+        let own_fingerprints = OwnFingerprints::default();
         let proof_store = ProofStore::default();
 
         let wallet = Wallet {
             profile,
             voucher_store,
             bundle_meta_store,
-            fingerprint_store,
+            known_fingerprints,
+            own_fingerprints,
             proof_store,
         };
 
@@ -195,7 +199,9 @@ impl Wallet {
         }
 
         let bundle_meta_store = storage.load_bundle_metadata(&identity.user_id, auth)?;
-        let fingerprint_store = storage.load_fingerprints(&identity.user_id, auth)?;
+        let known_fingerprints = storage.load_known_fingerprints(&identity.user_id, auth)?;
+        let own_fingerprints = storage.load_own_fingerprints(&identity.user_id, auth)?;
+        // .unwrap_or_default(); // Bleibt bei Fehler leer
         let proof_store = storage.load_proofs(&identity.user_id, auth)?;
 
         // Sicherheitsüberprüfung, um sicherzustellen, dass die entschlüsselte Identität
@@ -208,7 +214,8 @@ impl Wallet {
             profile,
             voucher_store,
             bundle_meta_store,
-            fingerprint_store,
+            known_fingerprints,
+            own_fingerprints,
             proof_store,
         };
         Ok((wallet, identity))
@@ -223,7 +230,8 @@ impl Wallet {
     ) -> Result<(), StorageError> {
         storage.save_wallet(&self.profile, &self.voucher_store, identity, password)?;
         storage.save_bundle_metadata(&identity.user_id, password, &self.bundle_meta_store)?;
-        storage.save_fingerprints(&identity.user_id, password, &self.fingerprint_store)?;
+        storage.save_known_fingerprints(&identity.user_id, password, &self.known_fingerprints)?;
+        storage.save_own_fingerprints(&identity.user_id, password, &self.own_fingerprints)?;
         storage.save_proofs(&identity.user_id, password, &self.proof_store)?;
         Ok(())
     }
@@ -293,10 +301,10 @@ impl Wallet {
             .history
             .insert(header.bundle_id.clone(), header.clone());
 
-        conflict_manager::scan_and_update_own_fingerprints(
-            &self.voucher_store,
-            &mut self.fingerprint_store,
-        )?;
+        // Die Fingerprint-Stores werden bei jeder Änderung neu aus dem VoucherStore aufgebaut.
+        let (own, known) = conflict_manager::scan_and_rebuild_fingerprints(&self.voucher_store, &identity.user_id)?;
+        self.own_fingerprints = own;
+        self.known_fingerprints = known;
 
         // Wenn eine Signatur empfangen wird, muss der Status des Gutscheins aktualisiert werden
         if let Ok(deserialized_container) = serde_json::from_slice::<SecureContainer>(container_bytes)
@@ -309,7 +317,10 @@ impl Wallet {
                 return Ok(ProcessBundleResult::default());
             }
         }
-        let check_result = conflict_manager::check_for_double_spend(&self.fingerprint_store);
+        let check_result = conflict_manager::check_for_double_spend(
+            &self.own_fingerprints,
+            &self.known_fingerprints,
+        );
 
         for (_conflict_hash, fingerprints) in &check_result.verifiable_conflicts {
             if let Some(archive_backend) = archive {
@@ -504,13 +515,13 @@ impl Wallet {
                 VoucherCoreError::Generic("Cannot spend voucher with no transactions.".to_string())
             })?;
         let prev_hash = get_hash(to_canonical_json(last_tx)?);
-        let fingerprint_hash = get_hash(format!("{}{}", prev_hash, identity.user_id));
 
-        if self
-            .fingerprint_store
-            .own_fingerprints
-            .contains_key(&fingerprint_hash)
-        {
+        // PRÜFUNG GEGEN ALLE BEKANNTEN FINGERPRINTS:
+        // Wir prüfen sowohl gegen die aktuell aktiven als auch gegen die gesamte
+        // bekannte Historie, um einen Double Spend sicher auszuschließen.
+        let new_fingerprint_hash = get_hash(format!("{}{}", prev_hash, identity.user_id));
+        if self.own_fingerprints.active_fingerprints.contains_key(&new_fingerprint_hash)
+            || self.own_fingerprints.history.contains_key(&new_fingerprint_hash) {
             return Err(VoucherCoreError::DoubleSpendAttemptBlocked);
         }
 
@@ -565,11 +576,23 @@ impl Wallet {
         let fingerprint =
             conflict_manager::create_fingerprint_for_transaction(created_tx, &new_voucher_state)?;
 
-        self.fingerprint_store
-            .own_fingerprints
+        // Füge Fingerprint zum flüchtigen Speicher der aktiven eigenen Transaktionen hinzu.
+        let active_entry = self.own_fingerprints
+            .active_fingerprints
             .entry(fingerprint.prvhash_senderid_hash.clone())
-            .or_default()
-            .push(fingerprint);
+            .or_default();
+        if !active_entry.contains(&fingerprint) {
+            active_entry.push(fingerprint.clone());
+        }
+
+        // Füge Fingerprint zum persistenten, kritischen Verlaufsspeicher hinzu.
+        let history_entry = self.own_fingerprints
+            .history
+            .entry(fingerprint.prvhash_senderid_hash.clone())
+            .or_default();
+        if !history_entry.contains(&fingerprint) {
+            history_entry.push(fingerprint.clone());
+        }
 
         Ok((container_bytes, new_voucher_state))
     }
@@ -633,11 +656,16 @@ impl Wallet {
 
     /// Führt Wartungsarbeiten am Wallet-Speicher durch, um veraltete Daten zu entfernen.
     pub fn cleanup_storage(&mut self, archive_grace_period_years: i64) {
-        self.cleanup_expired_fingerprints();
+        // Schritt 1: Bereinige flüchtige Speicher sofort (ohne Frist).
+        conflict_manager::cleanup_known_fingerprints(&mut self.known_fingerprints);
 
         let now = Utc::now();
         let grace_period = Duration::days(archive_grace_period_years * 365);
 
+        // Schritt 2: Bereinige die persistente History mit der längeren Frist.
+        conflict_manager::cleanup_expired_histories(&mut self.own_fingerprints, &mut self.known_fingerprints, &now, &grace_period);
+
+        // Schritt 3: Bereinige Gutschein-Instanzen im Archiv mit derselben Frist.
         self.voucher_store
             .vouchers
             .retain(|_, instance| {
@@ -651,6 +679,7 @@ impl Wallet {
                 true
             });
 
+        // Schritt 4: Bereinige alte Double-Spend-Beweise mit derselben Frist.
         self.proof_store.proofs.retain(|_, proof| {
             if let Ok(valid_until) = DateTime::parse_from_rfc3339(&proof.voucher_valid_until) {
                 let purge_date = valid_until.with_timezone(&Utc) + grace_period;
