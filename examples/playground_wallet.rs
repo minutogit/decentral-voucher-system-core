@@ -9,6 +9,7 @@
 //!    anonymen Transaktions-Fingerprint im Terminal aus.
 
 use voucher_lib::models::profile::UserIdentity;
+use voucher_lib::models::conflict::CanonicalMetadataStore;
 use voucher_lib::models::voucher::{Address, Collateral, Creator, NominalValue};
 use voucher_lib::services::crypto_utils;
 use voucher_lib::{to_json, NewVoucherData, verify_and_parse_standard, VoucherStatus};
@@ -50,6 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         known_fingerprints: Default::default(),
         own_fingerprints: Default::default(),
         proof_store: Default::default(),
+        fingerprint_metadata: CanonicalMetadataStore::default(),
     };
     println!("✅ Leeres Wallet für Alice erstellt.");
 

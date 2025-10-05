@@ -342,7 +342,7 @@ fn api_app_service_full_signature_workflow() {
         .unwrap();
 
     let (voucher_to_sign, sender_id) = {
-        service_guarantor.login(&profile_guarantor.folder_name, password).unwrap();
+        service_guarantor.login(&profile_guarantor.folder_name, password, false).unwrap();
         let guarantor_identity = service_guarantor.get_unlocked_mut_for_test().1;
         debug_open_container(&request_bytes, guarantor_identity).unwrap()
     };

@@ -44,7 +44,7 @@
 //! let profile_to_load = profiles.first().unwrap();
 //!
 //! // 6. Erneut anmelden mit dem Ordnernamen des Profils und dem Passwort.
-//! app.login(&profile_to_load.folder_name, "sicheres-passwort-123")
+//! app.login(&profile_to_load.folder_name, "sicheres-passwort-123", false)
 //!    .expect("Login fehlgeschlagen.");
 //!
 //! // 7. Die User-ID abrufen.
@@ -216,7 +216,29 @@ impl AppService {
 }
 
 // --- Interne Hilfsmethoden für Tests ---
-impl AppService {
+impl AppService {    /// Gibt eine schreibgeschützte Referenz auf das interne Wallet zurück.
+    /// NUR FÜR TESTS.
+    #[cfg(test)]
+    pub fn get_wallet_for_test(&self) -> Option<&crate::wallet::Wallet> {
+        if let AppState::Unlocked { wallet, .. } = &self.state {
+            Some(wallet)
+        } else {
+            None
+        }
+    }
+
+    /// Gibt eine mutable Referenz auf das interne Wallet zurück.
+    /// NUR FÜR TESTS.
+    #[cfg(test)]
+    pub fn get_wallet_mut(&mut self) -> Option<&mut crate::wallet::Wallet> {
+        if let AppState::Unlocked { wallet, .. } = &mut self.state {
+            Some(wallet)
+        } else {
+            None
+        }
+    }
+
+
     /// Eine Hilfsmethode nur für Tests, um Zugriff auf die interne Identität zu bekommen.
     #[doc(hidden)]
     pub fn get_unlocked_mut_for_test(&mut self) -> (&mut Wallet, &UserIdentity) {

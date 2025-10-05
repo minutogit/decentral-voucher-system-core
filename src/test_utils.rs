@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 // HINWEIS: Alle `voucher_lib` Imports wurden zu `crate` geändert.
 use crate::models::{
-    conflict::{KnownFingerprints, OwnFingerprints, ProofStore},
+    conflict::{CanonicalMetadataStore, KnownFingerprints, OwnFingerprints, ProofStore},
     profile::{BundleMetadataStore, UserProfile, VoucherStore},
     signature::DetachedSignature,
     voucher::{
@@ -341,6 +341,7 @@ pub fn setup_in_memory_wallet(identity: &UserIdentity) -> Wallet {
         known_fingerprints: KnownFingerprints::default(),
         own_fingerprints: OwnFingerprints::default(),
         proof_store: ProofStore::default(),
+        fingerprint_metadata: CanonicalMetadataStore::default(),
     }
 }
 
@@ -368,6 +369,7 @@ pub fn create_test_wallet(
         known_fingerprints: KnownFingerprints::default(),
         own_fingerprints: OwnFingerprints::default(),
         proof_store: ProofStore::default(),
+        fingerprint_metadata: CanonicalMetadataStore::default(),
     };
 
     Ok((wallet, identity))
@@ -736,6 +738,9 @@ pub fn create_test_bundle(
         vouchers,
         recipient_id,
         message.map(|s| s.to_string()),
+        // HINZUGEFÜGT: Fehlende Argumente mit Standardwerten, um alte Tests nicht zu brechen
+        Vec::new(),
+        std::collections::HashMap::new(),
     )?;
     Ok(result.0)
 }

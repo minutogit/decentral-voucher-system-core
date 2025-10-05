@@ -70,13 +70,22 @@ pub fn scan_and_rebuild_fingerprints(
     for instance in voucher_store.vouchers.values() {
         for tx in &instance.voucher.transactions {
             let fingerprint = create_fingerprint_for_transaction(tx, &instance.voucher)?;
+            // DEBUG: Log the components of the hash being generated
+            println!(
+                "[Debug CM Rebuild] Gen FP for t_id: '{}'. Using prev_hash: '{}', sender_id: '{}'. Resulting prvhash_senderid_hash: '{}'",
+                tx.t_id, tx.prev_hash, tx.sender_id, fingerprint.prvhash_senderid_hash
+            );
 
             // Jede Transaktion wird zur allgemeinen lokalen Historie hinzugefügt.
-            known
+            // KORREKTUR: Duplikate verhindern. Ein Vec wird verwendet, um die Reihenfolge
+            // zu bewahren, aber wir prüfen vor dem Hinzufügen auf Eindeutigkeit.
+            let known_entry = known
                 .local_history
                 .entry(fingerprint.prvhash_senderid_hash.clone())
-                .or_default()
-                .push(fingerprint.clone());
+                .or_default();
+            if !known_entry.contains(&fingerprint) {
+                known_entry.push(fingerprint.clone());
+            }
 
             // Nur wenn der Nutzer der Sender war, wird der Fingerprint auch zu den
             // kritischen "eigenen" Fingerprints hinzugefügt.
@@ -84,14 +93,16 @@ pub fn scan_and_rebuild_fingerprints(
                 own.history
                    .entry(fingerprint.prvhash_senderid_hash.clone())
                    .or_default()
-                   .push(fingerprint.clone());
+                   .push(fingerprint.clone()); // Duplikate hier sind unwahrscheinlich, aber zur Sicherheit
 
                 // Wenn der Gutschein zusätzlich noch aktiv ist, kommt er in die "Hot-List".
                 if matches!(instance.status, crate::wallet::instance::VoucherStatus::Active) {
-                    own.active_fingerprints
+                    let active_entry = own.active_fingerprints
                        .entry(fingerprint.prvhash_senderid_hash.clone())
-                       .or_default()
-                       .push(fingerprint);
+                       .or_default();
+                    if !active_entry.contains(&fingerprint) {
+                        active_entry.push(fingerprint);
+                    }
                 }
             }
         }

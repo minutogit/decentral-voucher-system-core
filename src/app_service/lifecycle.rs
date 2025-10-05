@@ -137,16 +137,24 @@ impl AppService {
         &mut self,
         folder_name: &str,
         password: &str,
+        cleanup_on_login: bool,
     ) -> Result<(), String> {
         let profile_path = self.base_storage_path.join(folder_name);
         if !profile_path.exists() {
             return Err("Profile directory not found.".to_string());
         }
 
-        let storage = FileStorage::new(profile_path);
+        let mut storage = FileStorage::new(profile_path);
 
-        let (wallet, identity) = Wallet::load(&storage, &AuthMethod::Password(password))
+        let (mut wallet, identity) = Wallet::load(&storage, &AuthMethod::Password(password))
             .map_err(|e| format!("Login failed (check password): {}", e))?;
+
+        if cleanup_on_login {
+            wallet.run_storage_cleanup(None)
+                  .map_err(|e| format!("Storage cleanup on login failed: {}", e))?;
+            wallet.save(&mut storage, &identity, password)
+                  .map_err(|e| format!("Failed to save wallet after cleanup: {}", e))?;
+        }
 
         self.state = AppState::Unlocked { storage, wallet, identity };
         Ok(())

@@ -274,6 +274,8 @@ pub enum VoucherCoreError {
     InvalidPayloadType,
     #[error("Action aborted: The voucher is quarantined due to a detected double-spend conflict.")]
     VoucherInQuarantine,
+    #[error("Operation failed because the wallet is locked.")]
+    WalletLocked,
     #[error("Feature not implemented yet: {0}")]
     NotImplemented(String),
     #[error("Voucher with local instance ID '{0}' not found in wallet.")]

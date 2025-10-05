@@ -4,7 +4,11 @@
 //! Ursprünglich in `tests/test_archive.rs`.
 
 use voucher_lib::{
-    archive::file_archive::FileVoucherArchive, models::profile::UserProfile,
+    archive::file_archive::FileVoucherArchive,
+    models::{
+        conflict::{CanonicalMetadataStore},
+        profile::UserProfile,
+    },
     models::voucher::{Creator, NominalValue}, services::voucher_manager, wallet::Wallet, VoucherStatus
 };
 use std::fs;
@@ -30,6 +34,7 @@ fn test_voucher_archiving_on_full_spend() {
         known_fingerprints: Default::default(),
         own_fingerprints: Default::default(),
         proof_store: Default::default(),
+        fingerprint_metadata: CanonicalMetadataStore::default(),
     };
 
     // Erstelle Alices Archiv im temporären Verzeichnis.

@@ -4,6 +4,7 @@
 //! Double-Spend-Konflikten beziehen.
 
 use super::{AppState, AppService};
+use crate::{error::VoucherCoreError, wallet::CleanupReport};
 use crate::models::conflict::{ProofOfDoubleSpend, ResolutionEndorsement};
 use crate::wallet::ProofOfDoubleSpendSummary;
 
@@ -50,6 +51,30 @@ impl AppService {
                 .create_resolution_endorsement(identity, proof_id, notes)
                 .map_err(|e| e.to_string()),
             AppState::Locked => Err("Wallet is locked.".to_string()),
+        }
+    }
+
+    /// Führt die Speicherbereinigung für Fingerprints und deren Metadaten durch.
+    ///
+    /// Diese Methode implementiert die in der Architektur-Spezifikation definierte
+    /// Logik:
+    /// 1. Löschen aller abgelaufenen Fingerprints.
+    /// 2. Wenn das Speicherlimit (`MAX_FINGERPRINTS`) immer noch überschritten ist,
+    ///    werden die Fingerprints mit der höchsten `depth` (und ältestem `t_time`)
+    ///    gelöscht, bis das Limit wieder unterschritten ist.
+    ///
+    /// # Returns
+    /// Ein `Result` mit einem `CleanupReport`, der Details über die Bereinigung
+    /// enthält, oder einen Fehler, falls der Prozess fehlschlägt.
+    pub fn run_storage_cleanup(&mut self) -> Result<CleanupReport, VoucherCoreError> {
+        if let AppState::Unlocked { wallet, .. } = &mut self.state {
+            let report = wallet.run_storage_cleanup(None)?;
+            // Hinweis: Das Speichern des Wallets nach dem Cleanup wird dem Aufrufer
+            // überlassen (z.B. am Ende einer Operation), um mehrfaches Schreiben
+            // zu vermeiden.
+            Ok(report)
+        } else {
+            Err(VoucherCoreError::WalletLocked)
         }
     }
 }

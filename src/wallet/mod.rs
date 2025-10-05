@@ -16,10 +16,13 @@ mod signature_handler;
 #[cfg(test)]
 mod tests;
 
+use crate::wallet::instance::{ValidationFailureReason, VoucherInstance, VoucherStatus};
 use crate::archive::VoucherArchive;
 use crate::error::{ValidationError, VoucherCoreError};
-use crate::wallet::instance::{ValidationFailureReason, VoucherInstance, VoucherStatus};
-use crate::models::conflict::{KnownFingerprints, OwnFingerprints, ProofStore, TransactionFingerprint};
+use crate::models::conflict::{
+    CanonicalMetadataStore, FingerprintMetadata, KnownFingerprints, OwnFingerprints, ProofStore,
+    TransactionFingerprint,
+};
 use crate::models::profile::{
     BundleMetadataStore, TransactionBundleHeader, TransactionDirection, UserIdentity, UserProfile, VoucherStore,
 };
@@ -31,10 +34,10 @@ use crate::services::utils::to_canonical_json;
 use crate::services::{bundle_processor, conflict_manager, voucher_manager, voucher_validation};
 use crate::storage::{AuthMethod, Storage, StorageError};
 use chrono::{DateTime, Duration, Utc};
-use ed25519_dalek::Signature;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::services::voucher_manager::NewVoucherData;
+use ed25519_dalek::Signature;
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
 /// Die zentrale Verwaltungsstruktur für ein Nutzer-Wallet.
 /// Hält den In-Memory-Zustand und interagiert mit dem Speichersystem.
@@ -52,6 +55,9 @@ pub struct Wallet {
     pub own_fingerprints: OwnFingerprints,
     /// Der Speicher für kryptographisch bewiesene Double-Spend-Konflikte.
     pub proof_store: ProofStore,
+    /// NEU: Zentraler, kanonischer Speicher für dynamische Metadaten.
+    /// Enthält Metadaten für ALLE Fingerprints in den anderen Stores.
+    pub fingerprint_metadata: CanonicalMetadataStore,
 }
 
 /// Das Ergebnis der Verarbeitung eines eingehenden Transaktionsbündels.
@@ -68,8 +74,15 @@ pub struct DoubleSpendCheckResult {
     pub unverifiable_warnings: HashMap<String, Vec<crate::models::conflict::TransactionFingerprint>>,
 }
 
+/// Ein Bericht, der die Ergebnisse der Speicherbereinigung zusammenfasst.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CleanupReport {
+    pub expired_fingerprints_removed: u32,
+    pub limit_based_fingerprints_removed: u32,
+}
+
 /// Repräsentiert ein aggregiertes Guthaben für einen bestimmten Gutschein-Standard und eine Währungseinheit.
-/// Wird verwendet, um eine zusammenfassende Dashboard-Ansicht der Guthaben zu erstellen.
+/// Wird verwendet, um eine zusammenfassende Dashboard-Ansicht der Guthaben zu erstellen. use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AggregatedBalance {
     /// Der Name des Gutschein-Standards (z.B. "Minuto-Gutschein").
@@ -153,9 +166,6 @@ impl Wallet {
         user_prefix: Option<&str>,
     ) -> Result<(Self, UserIdentity), VoucherCoreError> {
         let (public_key, signing_key) = crate::services::crypto_utils::derive_ed25519_keypair(mnemonic_phrase, passphrase)?;
-        println!("\n[Debug Wallet::new] Derived keypair from mnemonic.\n  - Mnemonic Hint: '...' (len: {})\n  - Passphrase used: {}\n",
-            mnemonic_phrase.len(), passphrase.is_some()
-        );
 
         let user_id = create_user_id(&public_key, user_prefix)
             .map_err(|e| VoucherCoreError::Crypto(e.to_string()))?;
@@ -173,6 +183,7 @@ impl Wallet {
         let known_fingerprints = KnownFingerprints::default();
         let own_fingerprints = OwnFingerprints::default();
         let proof_store = ProofStore::default();
+        let fingerprint_metadata = CanonicalMetadataStore::default();
 
         let wallet = Wallet {
             profile,
@@ -181,6 +192,7 @@ impl Wallet {
             known_fingerprints,
             own_fingerprints,
             proof_store,
+            fingerprint_metadata,
         };
 
         Ok((wallet, identity))
@@ -195,14 +207,14 @@ impl Wallet {
         let (profile, voucher_store, identity) = storage.load_wallet(auth)?;
 
         if let AuthMethod::Mnemonic(..) = auth {
-             println!("[Debug Wallet::load] Recovery successful! Decrypted identity with Mnemonic. User ID: {}", identity.user_id);
+            println!("[Debug Wallet::load] Recovery successful! Decrypted identity with Mnemonic. User ID: {}", identity.user_id);
         }
 
         let bundle_meta_store = storage.load_bundle_metadata(&identity.user_id, auth)?;
         let known_fingerprints = storage.load_known_fingerprints(&identity.user_id, auth)?;
         let own_fingerprints = storage.load_own_fingerprints(&identity.user_id, auth)?;
-        // .unwrap_or_default(); // Bleibt bei Fehler leer
         let proof_store = storage.load_proofs(&identity.user_id, auth)?;
+        let fingerprint_metadata = storage.load_fingerprint_metadata(&identity.user_id, auth)?;
 
         // Sicherheitsüberprüfung, um sicherzustellen, dass die entschlüsselte Identität
         // mit den Profildaten übereinstimmt.
@@ -210,14 +222,17 @@ impl Wallet {
             return Err(StorageError::AuthenticationFailed.into());
         }
 
-        let wallet = Wallet {
+        let mut wallet = Wallet {
             profile,
             voucher_store,
             bundle_meta_store,
             known_fingerprints,
             own_fingerprints,
             proof_store,
+            fingerprint_metadata,
         };
+
+        wallet.rebuild_derived_stores()?;
         Ok((wallet, identity))
     }
 
@@ -233,6 +248,7 @@ impl Wallet {
         storage.save_known_fingerprints(&identity.user_id, password, &self.known_fingerprints)?;
         storage.save_own_fingerprints(&identity.user_id, password, &self.own_fingerprints)?;
         storage.save_proofs(&identity.user_id, password, &self.proof_store)?;
+        storage.save_fingerprint_metadata(&identity.user_id, password, &self.fingerprint_metadata)?;
         Ok(())
     }
 
@@ -245,6 +261,107 @@ impl Wallet {
         storage.reset_password(identity, new_password)
     }
 
+    /// Führt die Speicherbereinigung für Fingerprints und deren Metadaten durch.
+    ///
+    /// Diese Funktion implementiert eine Zwei-Phasen-Bereinigung, um die Gesamtanzahl
+    /// der gespeicherten Fingerprints zu verwalten und die Systemleistung zu gewährleisten.
+    ///
+    /// **Phase 1: Ablage abgelaufener Einträge**
+    /// Zuerst werden alle Fingerprints aus `own_fingerprints`, `known_fingerprints` und
+    /// die zugehörigen Metadaten aus `fingerprint_metadata` entfernt, deren `valid_until`
+    /// Datum in der Vergangenheit liegt. Dies ist die primäre Wartungsroutine.
+    ///
+    /// **Phase 2: Selektive, limitbasierte Bereinigung**
+    /// Wenn nach Phase 1 die Gesamtzahl der Fingerprints immer noch ein hartes Limit
+    /// (`MAX_FINGERPRINTS`) überschreitet, wird eine prozentuale Reduzierung
+    /// (`CLEANUP_PERCENTAGE`) durchgeführt. Die zu löschenden Fingerprints werden
+    /// nach folgender Heuristik ausgewählt:
+    /// 1.  **Höchste `depth` zuerst:** Fingerprints, die am weitesten im Netzwerk
+    ///     verbreitet sind (höchster `depth`), werden als am wenigsten kritisch angesehen.
+    /// 2.  **Älteste `t_time` als Tie-Breaker:** Innerhalb einer `depth`-Ebene werden
+    ///     die ältesten Transaktionen zuerst entfernt.
+    ///
+    /// # Arguments
+    /// * `max_fingerprints_override` - Ein optionaler Wert, um die `MAX_FINGERPRINTS`-Konstante
+    ///                                 speziell für Test-Szenarien zu überschreiben.
+    /// # Returns
+    /// Ein `CleanupReport`, der die Anzahl der in beiden Phasen entfernten Einträge zusammenfasst.
+    pub fn run_storage_cleanup(&mut self, max_fingerprints_override: Option<usize>) -> Result<CleanupReport, VoucherCoreError> {
+        const MAX_FINGERPRINTS_CONST: usize = 20_000;
+        const CLEANUP_PERCENTAGE: f32 = 0.10;
+
+        let mut report = CleanupReport::default();
+        let now = Utc::now();
+
+        // --- Phase 1: Löschen abgelaufener Einträge ---
+        let mut expired_keys = std::collections::HashSet::new();
+
+        // Sammle alle abgelaufenen Schlüssel aus allen relevanten Stores
+        for fp in self.own_fingerprints.history.values().flatten()
+            .chain(self.known_fingerprints.local_history.values().flatten())
+            .chain(self.known_fingerprints.foreign_fingerprints.values().flatten()) {
+            if let Ok(valid_until) = DateTime::parse_from_rfc3339(&fp.valid_until) {
+                if valid_until.with_timezone(&Utc) < now {
+                    expired_keys.insert(fp.prvhash_senderid_hash.clone());
+                }
+            }
+        }
+
+        if !expired_keys.is_empty() {
+            report.expired_fingerprints_removed = expired_keys.len() as u32;
+
+            // Entferne die abgelaufenen Einträge aus allen Stores
+            self.own_fingerprints.history.retain(|k, _| !expired_keys.contains(k));
+            self.known_fingerprints.local_history.retain(|k, _| !expired_keys.contains(k));
+            self.known_fingerprints.foreign_fingerprints.retain(|k, _| !expired_keys.contains(k));
+            self.fingerprint_metadata.retain(|k, _| !expired_keys.contains(k));
+        }
+
+        // --- Phase 2: Selektive Löschung nach Tiefe und Rezenz ---
+        let current_total_count = self.own_fingerprints.history.len()
+            + self.known_fingerprints.local_history.len()
+            + self.known_fingerprints.foreign_fingerprints.len();
+
+        let max_fingerprints = max_fingerprints_override.unwrap_or(MAX_FINGERPRINTS_CONST);
+        if current_total_count > max_fingerprints {
+            let target_removal_count = (current_total_count as f32 * CLEANUP_PERCENTAGE).ceil() as usize;
+
+            // Sammle alle Fingerprints mit Metadaten zur Sortierung
+            let mut candidates_for_removal = Vec::new();
+            let all_fingerprints = self.own_fingerprints.history.values().flatten()
+                .chain(self.known_fingerprints.local_history.values().flatten())
+                .chain(self.known_fingerprints.foreign_fingerprints.values().flatten());
+
+            for fp in all_fingerprints {
+                if let Some(meta) = self.fingerprint_metadata.get(&fp.prvhash_senderid_hash) {
+                    // Wir verwenden die `t_id` als deterministischen Tie-Breaker anstelle des
+                    // nicht verfügbaren `t_time`, um eine ineffiziente Entschlüsselung zu vermeiden.
+                    candidates_for_removal
+                        .push((meta.depth, fp.t_id.clone(), fp.prvhash_senderid_hash.clone()));
+                }
+            }
+
+            // Sortiere: Höchste 'depth' zuerst, dann älteste 't_time' zuerst
+            candidates_for_removal.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+            let keys_to_remove: std::collections::HashSet<String> = candidates_for_removal
+                .into_iter()
+                .take(target_removal_count)
+                .map(|(_, _, key)| key)
+                .collect();
+
+            report.limit_based_fingerprints_removed = keys_to_remove.len() as u32;
+
+            // Entferne die ausgewählten Einträge aus allen Stores
+            self.own_fingerprints.history.retain(|k, _| !keys_to_remove.contains(k));
+            self.known_fingerprints.local_history.retain(|k, _| !keys_to_remove.contains(k));
+            self.known_fingerprints.foreign_fingerprints.retain(|k, _| !keys_to_remove.contains(k));
+            self.fingerprint_metadata.retain(|k, _| !keys_to_remove.contains(k));
+        }
+
+        Ok(report)
+    }
+
     /// Erstellt ein `TransactionBundle`, verpackt es und aktualisiert den Wallet-Zustand.
     /// Dies ist nun eine private Hilfsmethode.
     pub fn create_and_encrypt_transaction_bundle(
@@ -253,7 +370,15 @@ impl Wallet {
         vouchers: Vec<Voucher>,
         recipient_id: &str,
         notes: Option<String>,
+        forwarded_fingerprints: Vec<TransactionFingerprint>,
+        fingerprint_depths: HashMap<String, u8>,
     ) -> Result<Vec<u8>, VoucherCoreError> {
+        // DEBUG: Log sender and recipient to trace the NotAnIntendedRecipient error.
+        println!(
+            "[Debug Wallet::create_and_encrypt] Sender: {}, Recipient: {}",
+            identity.user_id, recipient_id
+        );
+
         for v in &vouchers {
             let local_id = Self::calculate_local_instance_id(v, &identity.user_id)?;
             if let Some(instance) = self.voucher_store.vouchers.get(&local_id) {
@@ -263,8 +388,14 @@ impl Wallet {
             }
         }
 
-        let (container_bytes, bundle) =
-            bundle_processor::create_and_encrypt_bundle(identity, vouchers.clone(), recipient_id, notes)?;
+        let (container_bytes, bundle) = bundle_processor::create_and_encrypt_bundle(
+            identity,
+            vouchers.clone(),
+            recipient_id,
+            notes,
+            forwarded_fingerprints,
+            fingerprint_depths,
+        )?;
 
         let header = bundle.to_header(TransactionDirection::Sent);
         self.bundle_meta_store
@@ -283,16 +414,29 @@ impl Wallet {
     ) -> Result<ProcessBundleResult, VoucherCoreError> {
         let bundle = bundle_processor::open_and_verify_bundle(identity, container_bytes)?;
 
+        // Kopiere die Daten, bevor 'bundle' verschoben wird
+        let forwarded_fingerprints = bundle.forwarded_fingerprints.clone();
+        let fingerprint_depths = bundle.fingerprint_depths.clone();
+        let received_vouchers = bundle.vouchers.clone();
+
+        // --- NEUES DEBUGGING: Zustand des Voucher Stores VOR der Verarbeitung ---
+        println!("\n[Debug Wallet Process] === Zustand VOR Verarbeitung des Bundles ===");
+        for (id, instance) in &self.voucher_store.vouchers {
+            println!("[Debug Wallet Process]   -> Vorhanden: local_id={}, voucher_id={}, status={:?}, tx_count={}", id, instance.voucher.voucher_id, instance.status, instance.voucher.transactions.len());
+        }
+        println!("[Debug Wallet Process] ===============================================");
+
         for voucher in bundle.vouchers.clone() {
-            // KORREKTUR: Für jeden empfangenen Gutschein muss die korrekte, deterministische
-            // lokale ID berechnet werden. Die `voucher_id` als Schlüssel zu verwenden ist falsch
-            // und führt dazu, dass konfliktierende Instanzen sich gegenseitig überschreiben.
+            // KORREKTUR: Die `retain`-Logik wurde entfernt. Sie war die Ursache für die
+            // fehlgeschlagene Double-Spend-Erkennung, da sie eine der beiden
+            // widersprüchlichen Gutschein-Instanzen fälschlicherweise gelöscht hat.
             let local_id = Self::calculate_local_instance_id(&voucher, &identity.user_id)?;
-            println!(
-                "\n[Debug Wallet] Verarbeite empfangenen Gutschein: ID={}, Tx-Anzahl={}",
-                voucher.voucher_id,
-                voucher.transactions.len()
-            );
+            // --- NEUES DEBUGGING: Detaillierte Prüfung für jeden eingehenden Gutschein ---
+            if let Some(existing_instance) = self.voucher_store.vouchers.values().find(|v| v.voucher.voucher_id == voucher.voucher_id) {
+                println!("[Debug Wallet Process] >>> ACHTUNG: Instanz für voucher_id '{}' existiert bereits.", voucher.voucher_id);
+                println!("[Debug Wallet Process]     Alte tx_count: {}, Neue tx_count: {}", existing_instance.voucher.transactions.len(), voucher.transactions.len());
+            }
+            println!("[Debug Wallet Process] Füge Instanz hinzu: local_id={}, voucher_id={}, tx_count={}", local_id, voucher.voucher_id, voucher.transactions.len());
             self.add_voucher_instance(local_id, voucher, VoucherStatus::Active);
         }
 
@@ -300,6 +444,20 @@ impl Wallet {
         self.bundle_meta_store
             .history
             .insert(header.bundle_id.clone(), header.clone());
+
+        // NEU: Verarbeite alle empfangenen Fingerprints (aktiv und implizit)
+        self.process_received_fingerprints(
+            &header,
+            &received_vouchers,
+            &forwarded_fingerprints,
+            &fingerprint_depths)?;
+
+        // --- NEUES DEBUGGING: Zustand des Voucher Stores NACH der Verarbeitung ---
+        println!("[Debug Wallet Process] === Zustand NACH Verarbeitung des Bundles ===");
+        for (id, instance) in &self.voucher_store.vouchers {
+            println!("[Debug Wallet Process]   -> Vorhanden: local_id={}, voucher_id={}, status={:?}, tx_count={}", id, instance.voucher.voucher_id, instance.status, instance.voucher.transactions.len());
+        }
+        println!("[Debug Wallet Process] ===============================================");
 
         // Die Fingerprint-Stores werden bei jeder Änderung neu aus dem VoucherStore aufgebaut.
         let (own, known) = conflict_manager::scan_and_rebuild_fingerprints(&self.voucher_store, &identity.user_id)?;
@@ -317,6 +475,7 @@ impl Wallet {
                 return Ok(ProcessBundleResult::default());
             }
         }
+
         let check_result = conflict_manager::check_for_double_spend(
             &self.own_fingerprints,
             &self.known_fingerprints,
@@ -564,12 +723,21 @@ impl Wallet {
             archive_backend.archive_voucher(&new_voucher_state, &identity.user_id, standard_definition)?;
         }
 
+        // NEU: Fingerprints für das Bundle auswählen
+        let (fingerprints_to_send, depths_to_send) = self.select_fingerprints_for_bundle(
+            recipient_id,
+            &[new_voucher_state.clone()]
+        )?;
+
         let vouchers_for_bundle = vec![new_voucher_state.clone()];
         let container_bytes = self.create_and_encrypt_transaction_bundle(
             identity,
             vouchers_for_bundle.clone(),
             recipient_id,
             notes,
+            // NEU: Zusätzliche Argumente
+            fingerprints_to_send,
+            depths_to_send,
         )?;
 
         let created_tx = new_voucher_state.transactions.last().unwrap();
@@ -651,6 +819,9 @@ impl Wallet {
         // 3. Füge die Instanz mit der korrekten ID und dem korrekten Status hinzu.
         self.add_voucher_instance(local_id, new_voucher.clone(), initial_status);
 
+        // 4. WICHTIG: Baue die abgeleiteten Stores (Fingerprints, Metadaten) neu auf.
+        self.rebuild_derived_stores()?;
+
         Ok(new_voucher)
     }
 
@@ -727,11 +898,203 @@ impl Wallet {
     }
 
     /// Findet die lokale ID und den Status eines Gutscheins anhand einer enthaltenen Transaktions-ID.
-    fn find_local_voucher_by_tx_id(&self, tx_id: &str) -> Option<&VoucherInstance>{
+    fn find_local_voucher_by_tx_id(&self, tx_id: &str) -> Option<&VoucherInstance> {
         self.voucher_store
             .vouchers
             .values()
-            .find(|instance| instance.voucher.transactions.iter().any(|tx| tx.t_id == tx_id) )
+            .find(|instance| instance.voucher.transactions.iter().any(|tx| tx.t_id == tx_id))
+    }
+
+    /// Wählt Fingerprints für die Weiterleitung in einem Bundle aus, basierend auf der Heuristik.
+    ///
+    /// # Logic
+    /// 1. Markiert alle Fingerprints des zu sendenden Gutscheins als implizit bekannt für den Empfänger.
+    /// 2. Iteriert von `depth = 0` aufwärts durch alle bekannten Fingerprints.
+    /// 3. Wählt bis zu `MAX_FINGERPRINTS_TO_SEND` Kandidaten aus, die:
+    ///    - die aktuelle `depth` haben.
+    ///    - dem Empfänger noch nicht bekannt sind.
+    /// 4. Aktualisiert die Metadaten (`known_by_peers`) für jeden ausgewählten Fingerprint.
+    ///
+    /// # Returns
+    /// Ein Tupel aus (`Vec<TransactionFingerprint>`, `HashMap<String, u8>`) für das Bundle.
+    pub fn select_fingerprints_for_bundle(
+        &mut self,
+        recipient_id: &str,
+        vouchers_in_bundle: &[Voucher],
+    ) -> Result<(Vec<TransactionFingerprint>, HashMap<String, u8>), VoucherCoreError> {
+        const MAX_FINGERPRINTS_TO_SEND: usize = 150;
+        let recipient_id_str = recipient_id.to_string();
+
+        let mut selected_fingerprints = Vec::new();
+        let mut selected_depths = HashMap::new();
+
+        // Schritt 1: Implizit bekannte Fingerprints des aktuellen Transfers markieren
+        for voucher in vouchers_in_bundle {
+            for tx in &voucher.transactions {
+                let fingerprint =
+                    conflict_manager::create_fingerprint_for_transaction(tx, voucher)?;
+                if let Some(meta) = self
+                    .fingerprint_metadata
+                    .get_mut(&fingerprint.prvhash_senderid_hash)
+                {
+                    meta.known_by_peers.insert(recipient_id_str.clone());
+                }
+            }
+        }
+
+        // Schritt 2: Heuristik zur Auswahl weiterer Fingerprints anwenden
+        let mut all_known_fingerprints: Vec<TransactionFingerprint> = self
+            .own_fingerprints.history.values().flatten()
+            .chain(self.known_fingerprints.local_history.values().flatten())
+            .chain(self.known_fingerprints.foreign_fingerprints.values().flatten())
+            .cloned()
+            .collect();
+
+        // Um eine deterministische (wenngleich nicht perfekt zufällige) Auswahl zu gewährleisten, sortieren wir.
+        all_known_fingerprints
+            .sort_by(|a, b| a.prvhash_senderid_hash.cmp(&b.prvhash_senderid_hash));
+
+        let mut current_depth = 0;
+        while selected_fingerprints.len() < MAX_FINGERPRINTS_TO_SEND {
+            let mut candidates_at_depth: Vec<_> = all_known_fingerprints
+                .iter()
+                .filter(|fp| {
+                    if let Some(meta) = self.fingerprint_metadata.get(&fp.prvhash_senderid_hash) {
+                        // Kriterien: Korrekte Tiefe UND Empfänger kennt ihn noch nicht
+                        meta.depth == current_depth && !meta.known_by_peers.contains(&recipient_id_str)
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+
+            if candidates_at_depth.is_empty() && current_depth > 20 {
+                // Abbruchbedingung
+                break;
+            }
+
+            let space_left = MAX_FINGERPRINTS_TO_SEND - selected_fingerprints.len();
+            candidates_at_depth.truncate(space_left);
+
+            for fp in candidates_at_depth {
+                // Metadaten aktualisieren: Empfänger als "wissend" markieren
+                if let Some(meta) = self.fingerprint_metadata.get_mut(&fp.prvhash_senderid_hash) {
+                    meta.known_by_peers.insert(recipient_id_str.clone());
+                    selected_fingerprints.push(fp.clone());
+                    selected_depths.insert(fp.prvhash_senderid_hash.clone(), meta.depth);
+                }
+            }
+            current_depth += 1;
+        }
+
+        Ok((selected_fingerprints, selected_depths))
+    }
+
+    /// Verarbeitet empfangene Fingerprints (aktiv und implizit) und aktualisiert die Metadaten.
+    fn process_received_fingerprints(
+        &mut self,
+        bundle_header: &TransactionBundleHeader,
+        vouchers: &[Voucher],
+        forwarded_fingerprints: &[TransactionFingerprint],
+        fingerprint_depths: &HashMap<String, u8>,
+    ) -> Result<(), VoucherCoreError> {
+        let sender_id_str = bundle_header.sender_id.to_string();
+
+        // Phase 1: Aktiver Austausch (aus dem Bundle) - Min-Merge-Regel
+        for fp in forwarded_fingerprints {
+            let received_depth = fingerprint_depths.get(&fp.prvhash_senderid_hash).cloned().unwrap_or(u8::MAX);
+            let new_depth = received_depth.saturating_add(1);
+
+            let meta = self.fingerprint_metadata.entry(fp.prvhash_senderid_hash.clone()).or_default();
+
+            // Min-Merge: Behalte den kleineren (besseren) depth-Wert
+            if new_depth < meta.depth || meta.depth == 0 { // 0 ist der Default-Wert
+                meta.depth = new_depth;
+            }
+            meta.known_by_peers.insert(sender_id_str.clone());
+        }
+
+        // Phase 2: Implizite Bestätigung (aus der Gutscheinkette)
+        for voucher in vouchers {
+            let tx_count = voucher.transactions.len();
+            for (i, tx) in voucher.transactions.iter().enumerate() {
+                let fingerprint = conflict_manager::create_fingerprint_for_transaction(tx, voucher)?;
+
+                // Kettentiefe initialisieren: neueste = 0, vorletzte = 1, etc.
+                let depth_in_chain = (tx_count - 1 - i) as u8;
+
+                let meta = self.fingerprint_metadata.entry(fingerprint.prvhash_senderid_hash.clone()).or_insert_with(FingerprintMetadata::default);
+
+                // Nur initialisieren, wenn der Wert noch nicht durch aktiven Austausch gesetzt wurde
+                // KORREKTUR: Die Tiefe aus der Kette ist immer die aktuellste Information und sollte bestehende Werte überschreiben.
+                meta.depth = depth_in_chain;
+                meta.known_by_peers.insert(sender_id_str.clone());
+            }
+        }
+        Ok(())
+    }
+    /// Baut alle abgeleiteten Speicher (`fingerprints`, `metadata`) aus dem `VoucherStore` neu auf.
+    ///
+    /// Diese Methode dient als Kern der Wiederherstellungslogik. Sie stellt sicher, dass der
+    /// Zustand der Fingerprints und ihrer Metadaten immer konsistent mit der "Source of Truth"
+    /// (den im Wallet gespeicherten Gutscheinen) ist.
+    ///
+    /// # Prozess
+    /// 1. Leert die existierenden `own_fingerprints`, `known_fingerprints` und `fingerprint_metadata` Stores.
+    /// 2. Iteriert über jeden Gutschein und jede Transaktion im `voucher_store`.
+    /// 3. Generiert für jede Transaktion einen Fingerprint.
+    /// 4. Kategorisiert den Fingerprint als "eigen" oder "bekannt" und speichert ihn.
+    /// 5. Initialisiert die Metadaten (`depth`, `known_by_peers`) für jeden Fingerprint neu.
+    pub fn rebuild_derived_stores(&mut self) -> Result<(), VoucherCoreError> {
+        // Schritt 1: Bestehende abgeleitete Stores leeren
+        self.own_fingerprints = OwnFingerprints::default();
+        self.known_fingerprints = KnownFingerprints::default();
+        self.fingerprint_metadata = CanonicalMetadataStore::default();
+
+        // Schritt 2: Iteriere über ALLE Instanzen, um keine Fingerprints zu verlieren.
+        // Die korrekte Depth wird durch die "min(depth) gewinnt"-Regel ermittelt.
+        for instance in self.voucher_store.vouchers.values() {
+            let tx_count = instance.voucher.transactions.len();
+            for (i, tx) in instance.voucher.transactions.iter().enumerate() {
+                // Schritt 3 & 4: Fingerprint generieren und kategorisieren
+                let fingerprint =
+                    conflict_manager::create_fingerprint_for_transaction(tx, &instance.voucher)?;
+
+                if tx.sender_id == self.profile.user_id {
+                    let entry = self.own_fingerprints
+                        .history
+                        .entry(fingerprint.prvhash_senderid_hash.clone())
+                        .or_default();
+                    if !entry.contains(&fingerprint) {
+                        entry.push(fingerprint.clone());
+                    }
+                } else {
+                    let entry = self.known_fingerprints
+                        .local_history
+                        .entry(fingerprint.prvhash_senderid_hash.clone())
+                        .or_default();
+                    if !entry.contains(&fingerprint) {
+                        entry.push(fingerprint.clone());
+                    }
+                }
+
+                // Schritt 5: Metadaten initialisieren oder mit "min gewinnt"-Regel aktualisieren
+                let depth_in_chain = (tx_count - 1 - i) as u8;
+                let meta = self
+                    .fingerprint_metadata
+                    .entry(fingerprint.prvhash_senderid_hash)
+                    .or_insert_with(FingerprintMetadata::default);
+
+                // Wende die "geringste depth gewinnt"-Regel an. Ein kleinerer Wert bedeutet
+                // einen kürzeren, relevanteren Pfad im Netzwerk. Der Wert 0 ist der
+                // initiale Default und wird immer überschrieben.
+                if depth_in_chain < meta.depth || meta.depth == 0 {
+                    meta.depth = depth_in_chain;
+                }
+                meta.known_by_peers = std::collections::HashSet::new(); // `known_by_peers` wird zurückgesetzt
+            }
+        }
+        Ok(())
     }
 }
 

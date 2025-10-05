@@ -134,7 +134,7 @@ mod tests {
         service.logout();
 
         // 2. Login mit falschem Passwort versuchen
-        let result = service.login(&profile_info.folder_name, WRONG_PASSWORD);
+        let result = service.login(&profile_info.folder_name, WRONG_PASSWORD, false);
 
         // 3. Assert: Login muss fehlschlagen
         assert!(result.is_err());

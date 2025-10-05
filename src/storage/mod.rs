@@ -3,7 +3,7 @@
 //! Definiert die Abstraktion für die persistente Speicherung von Wallet-Daten.
 //! Dies ermöglicht es, die Kernlogik von der konkreten Speichermethode zu entkoppeln.
 
-use crate::models::conflict::{KnownFingerprints, OwnFingerprints, ProofStore};
+use crate::models::conflict::{CanonicalMetadataStore, KnownFingerprints, OwnFingerprints, ProofStore};
 use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
 pub mod file_storage;
 use thiserror::Error;
@@ -123,6 +123,22 @@ pub trait Storage {
         user_id: &str,
         password: &str,
         proof_store: &ProofStore,
+    ) -> Result<(), StorageError>;
+
+
+    /// Lädt den kanonischen Speicher für Fingerprint-Metadaten.
+    fn load_fingerprint_metadata(
+        &self,
+        user_id: &str,
+        auth: &AuthMethod,
+    ) -> Result<CanonicalMetadataStore, StorageError>;
+
+    /// Speichert den kanonischen Speicher für Fingerprint-Metadaten.
+    fn save_fingerprint_metadata(
+        &mut self,
+        user_id: &str,
+        password: &str,
+        metadata: &CanonicalMetadataStore,
     ) -> Result<(), StorageError>;
 
     /// Speichert einen beliebigen, benannten Datenblock verschlüsselt.

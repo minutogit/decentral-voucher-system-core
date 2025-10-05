@@ -1,12 +1,10 @@
-// In: src/models/conflict.rs
-
 //! # src/models/conflict.rs
 //!
 //! Definiert die Datenstrukturen für die Erkennung, den Beweis und die
 //! Lösung von Double-Spending-Konflikten.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::models::voucher::Transaction;
 
 //==============================================================================
@@ -74,7 +72,32 @@ pub struct OwnFingerprints {
 
 
 //==============================================================================
-// TEIL 2: STRUKTUREN ZUM BEWEIS UND ZUR LÖSUNG VON KONFLIKTEN
+// TEIL 2: KANONISCHE METADATEN-SCHICHT (NEU)
+//==============================================================================
+
+/// Speichert die dynamischen, veränderlichen Metadaten für einen einzelnen
+/// `TransactionFingerprint`. Diese Struktur wird von der kryptographischen
+/// Fingerprint-Struktur entkoppelt, um Redundanz zu vermeiden.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct FingerprintMetadata {
+    /// Die Verbreitungstiefe des Fingerprints im Netzwerk (Anzahl der Hops).
+    /// Ein niedrigerer Wert bedeutet eine aktuellere, relevantere Information.
+    pub depth: u8,
+
+    /// Ein Set von Hash-Suffixen der Peer-IDs, die diesen Fingerprint bereits
+    /// kennen. Dient als effizienter Redundanzfilter beim Senden von Bundles.
+    #[serde(default)]
+    pub known_by_peers: HashSet<String>,
+}
+
+/// Der zentrale, kanonische Speicher für alle dynamischen Fingerprint-Metadaten.
+/// Der Schlüssel ist die eindeutige ID des `TransactionFingerprint`
+/// (`prvhash_senderid_hash`), um eine 1:1-Beziehung sicherzustellen.
+pub type CanonicalMetadataStore = HashMap<String, FingerprintMetadata>;
+
+
+//==============================================================================
+// TEIL 3: STRUKTUREN ZUM BEWEIS UND ZUR LÖSUNG VON KONFLIKTEN
 //==============================================================================
 
 /// Repräsentiert einen kryptographisch verifizierbaren Beweis für einen
@@ -148,7 +171,7 @@ pub struct ResolutionEndorsement {
 }
 
 //==============================================================================
-// TEIL 3: SPEICHER-CONTAINER FÜR KONFLIKTBEWEISE
+// TEIL 4: SPEICHER-CONTAINER FÜR KONFLIKTBEWEISE
 //==============================================================================
 
 /// Dient als Speichercontainer für alle kryptographisch bewiesenen Double-Spend-Konflikte.
@@ -172,4 +195,3 @@ pub struct Layer2Verdict {
     /// Die Signatur des Servers über dem Hash dieses Verdict-Objekts, um es fälschungssicher zu machen.
     pub server_signature: String,
 }
-

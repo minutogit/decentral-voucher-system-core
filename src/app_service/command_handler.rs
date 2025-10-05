@@ -61,20 +61,29 @@ impl AppService {
                                         let mut temp_wallet = wallet.clone();
                                         let local_id = crate::wallet::Wallet::calculate_local_instance_id(&new_voucher, &identity.user_id).unwrap();
                                         temp_wallet.add_voucher_instance(local_id, new_voucher.clone(), initial_status);
-
-                                        // 2. Versuche, die Kopie zu speichern. Dies ist der "Commit"-Punkt.
-                                        match temp_wallet.save(&mut storage, &identity, password) {
-                                            Ok(_) => (
-                                                // 3a. Erfolg: Gib die modifizierte Kopie als neuen Zustand zurück.
-                                                Ok(new_voucher),
-                                                AppState::Unlocked { storage, wallet: temp_wallet, identity },
-                                            ),
+                                        
+                                        // 2. Aktualisiere die abgeleiteten Stores (Fingerprints, Metadaten).
+                                        // Dies ist der entscheidende Fix für die fehlenden Daten.
+                                        match temp_wallet.rebuild_derived_stores() {
+                                            Ok(_) => {
+                                                // 3. Versuche, die Kopie zu speichern. Dies ist der "Commit"-Punkt.
+                                                match temp_wallet.save(&mut storage, &identity, password) {
+                                                    Ok(_) => (
+                                                        // 4a. Erfolg: Gib die modifizierte Kopie als neuen Zustand zurück.
+                                                        Ok(new_voucher),
+                                                        AppState::Unlocked { storage, wallet: temp_wallet, identity },
+                                                    ),
+                                                    Err(e) => (
+                                                        // 4b. Speicherfehler: Verwirf die Kopie.
+                                                        Err(e.to_string()),
+                                                        AppState::Unlocked { storage, wallet, identity },
+                                                    ),
+                                                }
+                                            }
                                             Err(e) => (
-                                                // 3b. Fehler: Verwirf die Kopie und gib den originalen,
-                                                // unberührten Zustand zurück.
                                                 Err(e.to_string()),
-                                                AppState::Unlocked { storage, wallet, identity },
-                                            ),
+                                                AppState::Unlocked { storage, wallet, identity }
+                                            )
                                         }
                                     }
                                 }

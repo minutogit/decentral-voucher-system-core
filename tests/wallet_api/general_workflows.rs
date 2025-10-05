@@ -64,7 +64,7 @@ fn api_app_service_full_lifecycle() {
     service_alice.logout();
     assert!(service_alice.get_user_id().is_err(), "Service should be locked after logout");
     service_alice
-        .login(&profile_info_alice.folder_name, password)
+        .login(&profile_info_alice.folder_name, password, false)
         .expect("Login with correct password should succeed");
     assert_eq!(service_alice.get_user_id().unwrap(), id_alice);
 
@@ -243,11 +243,11 @@ fn api_app_service_password_recovery() {
 
     service.logout();
     assert!(
-        service.login(&profile_info.folder_name, initial_password).is_err(),
+        service.login(&profile_info.folder_name, initial_password, false).is_err(),
         "Login with old password should fail after recovery"
     );
     assert!(
-        service.login(&profile_info.folder_name, new_password).is_ok(),
+        service.login(&profile_info.folder_name, new_password, false).is_ok(),
         "Login with new password should succeed after recovery"
     );
 }
@@ -284,8 +284,8 @@ fn api_app_service_password_recovery_with_passphrase() {
 
     // 4. Verifizierung
     service.logout();
-    // Erneutes Login nach der Wiederherstellung
-    let login_result = service.login(&profile_info.folder_name, new_password);
+    // Erneutes Login nach der Wiederherstellung, false für cleanup
+    let login_result = service.login(&profile_info.folder_name, new_password, false);
     assert!(
         login_result.is_ok(),
         "Login with new password should succeed. Error: {:?}", login_result.err()
@@ -733,6 +733,8 @@ fn api_wallet_rejects_invalid_bundle() {
             vec![voucher.clone()],
             &bob.identity.user_id,
             None,
+            Vec::new(),
+            std::collections::HashMap::new(),
         )
         .unwrap();
 

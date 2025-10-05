@@ -349,13 +349,13 @@ mod local_double_spend_detection {
         let losing_tx_id = voucher_for_david.transactions.last().unwrap().t_id.clone();
 
         // Er verpackt und sendet die erste betrügerische Version an Charlie. Hierfür nutzt er die alte Methode.
-        let bundle_to_charlie = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_charlie.clone()], &charlie_identity.user_id, None).unwrap();
+        let bundle_to_charlie = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_charlie.clone()], &charlie_identity.user_id, None, Vec::new(), std::collections::HashMap::new()).unwrap();
         charlie_wallet.process_encrypted_transaction_bundle(charlie_identity, &bundle_to_charlie, Some(&archive)).unwrap();
 
         // Um den zweiten Betrug zu ermöglichen, setzt er den Zustand seines Wallets künstlich zurück.
         let local_id_bob = Wallet::calculate_local_instance_id(&voucher_from_bob, &bob_identity.user_id).unwrap();
         bob_wallet.add_voucher_instance(local_id_bob, voucher_from_bob, VoucherStatus::Active);
-        let bundle_to_david = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_david.clone()], &david_identity.user_id, None).unwrap();
+        let bundle_to_david = bob_wallet.create_and_encrypt_transaction_bundle(bob_identity, vec![voucher_for_david.clone()], &david_identity.user_id, None, Vec::new(), std::collections::HashMap::new()).unwrap();
         david_wallet.process_encrypted_transaction_bundle(david_identity, &bundle_to_david, Some(&archive)).unwrap();
 
         assert_eq!(charlie_wallet.voucher_store.vouchers.len(), 1);
@@ -640,6 +640,8 @@ mod security_vulnerabilities {
             timestamp: get_current_timestamp(),
             notes: Some("Hacked".to_string()),
             sender_signature: "".to_string(),
+            forwarded_fingerprints: Vec::new(),
+            fingerprint_depths: std::collections::HashMap::new(),
         };
         let bundle_json_for_id = to_canonical_json(&bundle).unwrap();
         bundle.bundle_id = get_hash(bundle_json_for_id);
@@ -1251,8 +1253,8 @@ mod security_vulnerabilities {
         let voucher_for_bob = create_transaction(&initial_voucher, standard, &eve_identity.user_id, &eve_identity.signing_key, &b_identity.user_id, "100").unwrap();
 
         // Eve verpackt und sendet die Gutscheine
-        let bundle_to_alice = eve_wallet.create_and_encrypt_transaction_bundle(&eve_identity, vec![voucher_for_alice], &a_identity.user_id, None).unwrap();
-        let bundle_to_bob = eve_wallet.create_and_encrypt_transaction_bundle(&eve_identity, vec![voucher_for_bob], &b_identity.user_id, None).unwrap();
+        let bundle_to_alice = eve_wallet.create_and_encrypt_transaction_bundle(&eve_identity, vec![voucher_for_alice], &a_identity.user_id, None, Vec::new(), std::collections::HashMap::new()).unwrap();
+        let bundle_to_bob = eve_wallet.create_and_encrypt_transaction_bundle(&eve_identity, vec![voucher_for_bob], &b_identity.user_id, None, Vec::new(), std::collections::HashMap::new()).unwrap();
 
         alice_wallet.process_encrypted_transaction_bundle(&a_identity, &bundle_to_alice, None).unwrap();
         bob_wallet.process_encrypted_transaction_bundle(&b_identity, &bundle_to_bob, None).unwrap();

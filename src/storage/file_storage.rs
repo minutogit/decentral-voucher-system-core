@@ -3,7 +3,7 @@
 //! Eine Implementierung des `Storage`-Traits, die Daten in mehreren verschlüsselten
 //! Dateien im Dateisystem speichert.
 
-use super::{AuthMethod, Storage, StorageError};
+use crate::models::conflict::CanonicalMetadataStore;
 use crate::models::conflict::{KnownFingerprints, OwnFingerprints, ProofStore};
 use crate::models::profile::{BundleMetadataStore, UserIdentity, UserProfile, VoucherStore};
 use crate::services::crypto_utils;
@@ -13,6 +13,7 @@ use ed25519_dalek::SigningKey;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
+use super::{AuthMethod, Storage, StorageError};
 
 // --- Interne Konstanten und Strukturen ---
 
@@ -24,6 +25,7 @@ const BUNDLE_META_FILE_NAME: &str = "bundles.meta.enc";
 const KNOWN_FINGERPRINTS_FILE_NAME: &str = "known_fingerprints.enc";
 const PROOF_STORE_FILE_NAME: &str = "proofs.enc";
 const OWN_FINGERPRINTS_FILE_NAME: &str = "own_fingerprints.enc";
+const FINGERPRINT_METADATA_FILE_NAME: &str = "fingerprint_metadata.enc";
 
 /// Privates Modul zur Kapselung der Serde-Logik für Base64-Kodierung von Vektoren.
 mod base64_serde {
@@ -129,6 +131,13 @@ struct OwnFingerprintsContainer {
 /// Container für den verschlüsselten Proof-Store.
 #[derive(Serialize, Deserialize)]
 struct ProofStorageContainer {
+    #[serde(with = "base64_serde")]
+    encrypted_store_payload: Vec<u8>,
+}
+
+/// Container für den `CanonicalMetadataStore`.
+#[derive(Serialize, Deserialize)]
+struct FingerprintMetadataContainer {
     #[serde(with = "base64_serde")]
     encrypted_store_payload: Vec<u8>,
 }
@@ -641,6 +650,62 @@ impl Storage for FileStorage {
         let store_tmp_path = self.user_storage_path.join(format!("{}.tmp", PROOF_STORE_FILE_NAME));
         fs::write(&store_tmp_path, serde_json::to_vec(&store_container).unwrap())?;
         fs::rename(&store_tmp_path, &proof_path)?;
+
+        Ok(())
+    }
+
+    fn load_fingerprint_metadata(&self, _user_id: &str, auth: &AuthMethod) -> Result<CanonicalMetadataStore, StorageError> {
+        let metadata_path = self.user_storage_path.join(FINGERPRINT_METADATA_FILE_NAME);
+        if !metadata_path.exists() {
+            return Ok(CanonicalMetadataStore::default());
+        }
+
+        let file_key = self.get_master_key_from_auth(auth)?;
+
+        let metadata_container_bytes = fs::read(metadata_path)?;
+        let metadata_container: FingerprintMetadataContainer =
+            serde_json::from_slice(&metadata_container_bytes)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+
+        let store_bytes = crypto_utils::decrypt_data(&file_key, &metadata_container.encrypted_store_payload)
+            .map_err(|e| StorageError::InvalidFormat(format!("Failed to decrypt fingerprint metadata: {}", e)))?;
+
+        serde_json::from_slice(&store_bytes)
+            .map_err(|e| StorageError::InvalidFormat(e.to_string()))
+    }
+
+    fn save_fingerprint_metadata(
+        &mut self,
+        _user_id: &str,
+        password: &str,
+        metadata: &CanonicalMetadataStore,
+    ) -> Result<(), StorageError> {
+        let metadata_path = self.user_storage_path.join(FINGERPRINT_METADATA_FILE_NAME);
+
+        let file_key = self.get_master_key(password)?;
+
+        // Wenn der Store leer ist, löschen wir die Datei, falls sie existiert.
+        if metadata.is_empty() {
+            if metadata_path.exists() {
+                fs::remove_file(metadata_path)?;
+            }
+            return Ok(());
+        }
+
+        let store_payload = crypto_utils::encrypt_data(&file_key, &serde_json::to_vec(metadata).unwrap())
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+        let store_container = FingerprintMetadataContainer {
+            encrypted_store_payload: store_payload,
+        };
+
+        let store_tmp_path = self
+            .user_storage_path
+            .join(format!("{}.tmp", FINGERPRINT_METADATA_FILE_NAME));
+        fs::write(
+            &store_tmp_path,
+            serde_json::to_vec(&store_container).unwrap(),
+        )?;
+        fs::rename(&store_tmp_path, &metadata_path)?;
 
         Ok(())
     }

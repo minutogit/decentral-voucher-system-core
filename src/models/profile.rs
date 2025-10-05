@@ -5,6 +5,7 @@
 //! Diese Strukturen sind für die Verwaltung der "Wallet" eines Nutzers zuständig.
 
 use crate::models::voucher::Voucher;
+use crate::models::conflict::TransactionFingerprint;
 use crate::wallet::instance::VoucherInstance;
 use ed25519_dalek::{SigningKey, VerifyingKey as EdPublicKey};
 use serde::{Deserialize, Serialize};
@@ -83,6 +84,15 @@ pub struct TransactionBundle {
     /// Die digitale Signatur des Senders, die die `bundle_id` unterzeichnet und somit das
     /// gesamte Bündel fälschungssicher macht.
     pub sender_signature: String,
+
+    /// NEU: Die Liste der weitergeleiteten Fingerprints zur Unterstützung der Double-Spend-Erkennung.
+    #[serde(default)]
+    pub forwarded_fingerprints: Vec<TransactionFingerprint>,
+
+    /// NEU: Die zugehörigen 'depth'-Werte für die weitergeleiteten Fingerprints.
+    /// Key: prvhash_senderid_hash des Fingerprints.
+    #[serde(default)]
+    pub fingerprint_depths: HashMap<String, u8>,
 }
 
 impl TransactionBundle {
